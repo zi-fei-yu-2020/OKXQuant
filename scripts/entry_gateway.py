@@ -13,9 +13,25 @@ def reconcile_intents(env):
     pending=evidence.unresolved(env.identity)
     if len(pending)>20: raise risk.RiskRejected('Too many unresolved order intents')
     for client_id,plan in pending:
-        try: rows=_request('GET','/api/v5/trade/order',{'instId':plan['instId'],'clOrdId':client_id},env)
-        except Exception: raise risk.RiskRejected('Prior entry outcome unknown; read reconciliation required') from None
-        if len(rows)!=1: raise risk.RiskRejected('Prior entry not located; no blind resend')
+        try:
+            rows=_request('GET','/api/v5/trade/order',{'instId':plan['instId'],'clOrdId':client_id},env)
+        except Exception:
+            raise risk.RiskRejected('Prior entry outcome unknown; read reconciliation required') from None
+        # The live-order endpoint returns [] after an order leaves the open-order set.
+        # Search order history before retaining an UNKNOWN reservation forever.
+        if not rows:
+            try:
+                rows=_request('GET','/api/v5/trade/orders-history',
+                              {'instId':plan['instId'],'clOrdId':client_id,'limit':'100'},env)
+            except Exception:
+                raise risk.RiskRejected('Prior entry outcome unknown; history reconciliation required') from None
+        if not rows:
+            age=time.time()-float(plan.get('intent_created_at') or 0)
+            if age >= 120:
+                evidence.finish_intent(client_id,'not_found',{'reconciliation':'live_and_history_empty','reconciled_at':time.time()})
+                continue
+            raise risk.RiskRejected('Prior entry not located yet; bounded reconciliation required')
+        if len(rows)!=1: raise risk.RiskRejected('Prior entry reconciliation returned multiple matches')
         order=rows[0]; status=str(order.get('state'))
         evidence.best_effort(env.identity,'exchange_order',order,event_id='order:'+env.identity+':'+client_id+':'+str(order.get('uTime',time.time_ns())))
         if status in {'filled','canceled','mmp_canceled'}: evidence.finish_intent(client_id,status,order)

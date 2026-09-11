@@ -88,9 +88,12 @@ def begin_intent(scope, decision_id, inst_id, payload):
     """Commit before sending exposure. Duplicate/uncertain decisions cannot be resent."""
     if not decision_id: raise ValueError('New exposure requires a durable decision ID')
     identity = 'okxquant' + uuid.uuid4().hex[:28]
+    created_at = time.time()
+    intent_payload = dict(payload or {})
+    intent_payload.setdefault('intent_created_at', created_at)
     with connection() as db:
         db.execute('INSERT INTO intents VALUES (?,?,?,?,?,?,?)',
-                   (identity,scope,decision_id,inst_id,'unknown',time.time(),canonical(_scrub(payload))))
+                   (identity,scope,decision_id,inst_id,'unknown',created_at,canonical(_scrub(intent_payload))))
     return identity
 
 def finish_intent(identity, state, result=None):
