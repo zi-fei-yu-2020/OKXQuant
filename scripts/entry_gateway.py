@@ -20,7 +20,7 @@ def reconcile_intents(env):
         if legacy_reconciled:
             try:
                 history=_request('GET','/api/v5/trade/orders-history',
-                                 {'instId':plan['instId'],'limit':'100'},env)
+                                 {'instType':'SWAP','instId':plan['instId'],'limit':'100'},env)
             except Exception:
                 raise risk.RiskRejected('Prior entry outcome unknown; read reconciliation required') from None
             rows=[row for row in history if str(row.get('clOrdId') or '') == client_id]
@@ -32,13 +32,13 @@ def reconcile_intents(env):
                 raise risk.RiskRejected('Prior entry not located yet; bounded reconciliation required')
         else:
             try:
-                rows=_request('GET','/api/v5/trade/order',{'instId':plan['instId'],'clOrdId':client_id},env)
+                rows=_request('GET','/api/v5/trade/order',{'instType':'SWAP','instId':plan['instId'],'clOrdId':client_id},env)
             except Exception:
                 raise risk.RiskRejected('Prior entry outcome unknown; read reconciliation required') from None
         if not rows and not legacy_reconciled:
             try:
                 rows=_request('GET','/api/v5/trade/orders-history',
-                              {'instId':plan['instId'],'clOrdId':client_id,'limit':'100'},env)
+                              {'instType':'SWAP','instId':plan['instId'],'clOrdId':client_id,'limit':'100'},env)
             except Exception:
                 raise risk.RiskRejected('Prior entry outcome unknown; read reconciliation required') from None
         if not rows:
