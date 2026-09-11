@@ -87,7 +87,8 @@ def record_decisions(scope, cache, packages, model, prompt_hash, as_of, news_sna
 def begin_intent(scope, decision_id, inst_id, payload):
     """Commit before sending exposure. Duplicate/uncertain decisions cannot be resent."""
     if not decision_id: raise ValueError('New exposure requires a durable decision ID')
-    identity = 'okxquant' + uuid.uuid4().hex[:28]
+    # OKX clOrdId is capped at 32 characters; 8+24 keeps the durable ID valid.
+    identity = 'okxquant' + uuid.uuid4().hex[:24]
     created_at = time.time()
     intent_payload = dict(payload or {})
     intent_payload.setdefault('intent_created_at', created_at)
@@ -105,8 +106,13 @@ def finish_intent(identity, state, result=None):
 
 def unresolved(scope):
     with connection() as db:
-        rows = db.execute("SELECT id,payload FROM intents WHERE scope=? AND state IN ('unknown','acknowledged') ORDER BY at",(scope,)).fetchall()
-    return [(key,json.loads(payload)) for key,payload in rows]
+        rows = db.execute("SELECT id,payload,at FROM intents WHERE scope=? AND state IN ('unknown','acknowledged') ORDER BY at",(scope,)).fetchall()
+    result=[]
+    for key,payload,created_at in rows:
+        item=json.loads(payload)
+        item.setdefault('intent_created_at', created_at)
+        result.append((key,item))
+    return result
 
 def export_events(scope, kind=None):
     with connection() as db:

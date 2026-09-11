@@ -13,18 +13,34 @@ def reconcile_intents(env):
     pending=evidence.unresolved(env.identity)
     if len(pending)>20: raise risk.RiskRejected('Too many unresolved order intents')
     for client_id,plan in pending:
-        try:
-            rows=_request('GET','/api/v5/trade/order',{'instId':plan['instId'],'clOrdId':client_id},env)
-        except Exception:
-            raise risk.RiskRejected('Prior entry outcome unknown; read reconciliation required') from None
-        # The live-order endpoint returns [] after an order leaves the open-order set.
-        # Search order history before retaining an UNKNOWN reservation forever.
-        if not rows:
+        # IDs longer than OKX's 32-character limit could never have been accepted.
+        # Reconcile those legacy reservations by scanning history without sending the
+        # invalid clOrdId query, then retire only an exact-match absence.
+        legacy_reconciled = len(client_id) > 32
+        if legacy_reconciled:
+            try:
+                history=_request('GET','/api/v5/trade/orders-history',
+                                 {'instId':plan['instId'],'limit':'100'},env)
+            except Exception:
+                raise risk.RiskRejected('Prior entry outcome unknown; read reconciliation required') from None
+            rows=[row for row in history if str(row.get('clOrdId') or '') == client_id]
+            if not rows:
+                age=time.time()-float(plan.get('intent_created_at') or 0)
+                if age >= 120:
+                    evidence.finish_intent(client_id,'not_found',{'reconciliation':'invalid_clordid_exact_history_miss','reconciled_at':time.time()})
+                    continue
+                raise risk.RiskRejected('Prior entry not located yet; bounded reconciliation required')
+        else:
+            try:
+                rows=_request('GET','/api/v5/trade/order',{'instId':plan['instId'],'clOrdId':client_id},env)
+            except Exception:
+                raise risk.RiskRejected('Prior entry outcome unknown; read reconciliation required') from None
+        if not rows and not legacy_reconciled:
             try:
                 rows=_request('GET','/api/v5/trade/orders-history',
                               {'instId':plan['instId'],'clOrdId':client_id,'limit':'100'},env)
             except Exception:
-                raise risk.RiskRejected('Prior entry outcome unknown; history reconciliation required') from None
+                raise risk.RiskRejected('Prior entry outcome unknown; read reconciliation required') from None
         if not rows:
             age=time.time()-float(plan.get('intent_created_at') or 0)
             if age >= 120:
