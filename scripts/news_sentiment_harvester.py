@@ -90,11 +90,28 @@ def fetch_and_analyze_news_sentiment():
         if active: payload['macro_sentiment']='避险熔断中'
         from okxquant_backend import account_connections
         with account_connections.registry_guard():
-            bindings=account_connections.load();current=bindings['bindings'].get('news')
+            bindings=account_connections.load(); current=bindings['bindings'].get('news')
             generation=bindings['connections'].get(current,{}).get('generation',0)
-            if payload.get('connection_id') and (current!=payload['connection_id'] or generation!=payload.get('connection_generation',0)):
+            if payload.get('connection_id') and (current != payload['connection_id'] or generation != payload.get('connection_generation',0)):
                 return {'connection_status':'binding_changed','updated_at':None}
             public_market.atomic_json(NEWS_CACHE_FILE,payload)
+            news_scope = 'news:' + str(payload.get('connection_id') or 'unbound')
+        # Archive after releasing the registry lock. The archive scope is the news binding,
+        # not an arbitrary trading account, because news credentials are independently bound.
+        try:
+            from scripts import strategy_evidence
+            event_id = 'news-' + str(payload.get('connection_id') or 'unbound') + '-' + str(payload.get('last_success_at') or payload.get('last_attempt_at'))
+            strategy_evidence.best_effort(news_scope, 'news_snapshot', {
+                'schema': 1, 'updated_at': payload.get('updated_at'),
+                'last_success_at': payload.get('last_success_at'),
+                'connection_status': payload.get('connection_status'),
+                'macro_sentiment': payload.get('macro_sentiment'),
+                'latest_news': payload.get('latest_news', []),
+                'coins_sentiment': payload.get('coins_sentiment', {}),
+            }, event_id=event_id)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning('News snapshot archive failed: %s', type(exc).__name__)
         return payload
 
 

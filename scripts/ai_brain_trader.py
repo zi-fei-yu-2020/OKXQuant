@@ -554,21 +554,18 @@ def construct_full_market_prompt(packages: List[Dict[str, Any]], pos_summary: st
         legacy_paths={'md':AI_MEMORY_MD_FILE,'json':AI_MEMORY_FILE})
     memory_lessons=memory_state['prompt_text']
 
-    # Harvest Latest Live News & Multi-Coin Sentiment
-    news_briefs = []
-    macro_env = "UNKNOWN（无可核验宏观输入）"
-    if os.path.exists(NEWS_SENTIMENT_FILE):
-        try:
-            with open(NEWS_SENTIMENT_FILE, "r", encoding="utf-8") as f:
-                from scripts.news_connection import for_strategy
-                ns_data = for_strategy(json.load(f)) or {}
-                macro_env = ns_data.get("macro_sentiment") or "UNKNOWN（资讯过期、缺失或未验证）"
-                for n in ns_data.get("latest_news", [])[:6]:
-                    news_briefs.append(f"- [{n.get('time', '')}] {n.get('title', '')} ({n.get('summary', '')[:80]}...)")
-        except Exception:
-            pass
-
-    news_text = "\n".join(news_briefs) if news_briefs else "无可验证新闻输入；不得据此推断市场平稳或不存在事件风险"
+    # Freeze once before inference: rendering, validation and evidence share this exact input.
+    try:
+        from scripts.news_connection import load_strategy_snapshot, render_strategy_snapshot
+        news_snapshot = load_strategy_snapshot(NEWS_SENTIMENT_FILE,
+            [p['instId'].split('-')[0] for p in packages])
+        news_text = render_strategy_snapshot(news_snapshot)
+    except Exception:
+        news_snapshot = {'schema': 1, 'connection_status': 'unavailable', 'macro_sentiment': 'UNKNOWN',
+                         'sentiment_fresh': False, 'items': [], 'coins_sentiment': {}, 'section_freshness': {}}
+        news_text = '市场情报当前不可用；不得据此推断市场平稳或不存在事件风险'
+    for package in packages:
+        package['news_snapshot'] = news_snapshot
 
     avail_balance_str = f"{usdt_available:.2f} USDT" if usdt_available > 0 else "0 USDT；不得假设存在可用资金"
 
@@ -583,7 +580,7 @@ def construct_full_market_prompt(packages: List[Dict[str, Any]], pos_summary: st
         "account_balance": f"【交易所账户可用资金】: {avail_balance_str}" + (f"；策略资金池上限={capital_context.get('configured_cap', 'UNKNOWN')} USDT，风险净值={capital_context.get('risk_equity', '待初始化')}；不是额外现金，不能借用池外权益放大建议。" if capital_context.get("enabled") else ""),
         "account_positions": f"【账户持仓概况】: {pos_summary}\n【当前活动在途持仓明细】:\n{active_pos_text}",
         "pending_orders": f"【当前在途挂单列表】:\n{pending_orders_text}",
-        "news_intelligence": f"【宏观环境基调】: {macro_env}\n【最新核心资讯要闻】:\n{news_text}",
+        "news_intelligence": news_text,
         "trading_memory": memory_lessons.strip(),
         "market_matrix": all_market_str,
     }
@@ -1063,8 +1060,10 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
             }
 
         import hashlib
+        # Use the immutable prompt-time snapshot for attribution.
+        news_snapshot = dict(prompt_bundle.manifest.get('news_snapshot') or {})
         strategy_evidence.record_decisions(market._selected().identity, standard_cache, packages, model_name,
-            hashlib.sha256(effective_system_prompt.encode()).hexdigest(), time.time())
+            hashlib.sha256(effective_system_prompt.encode()).hexdigest(), time.time(), news_snapshot=news_snapshot)
         try:
             audit_status = wait_audit.commit(market._selected().identity, standard_cache, packages,
                 active_positions_detail, frame_id=time_str)
@@ -1092,6 +1091,7 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
             "macro_assessment": macro_summary,
             "prompt_composition": prompt_bundle.manifest,
             "output_validation": brain_output["validation"],
+            "news_snapshot": news_snapshot,
             "ai_last_prompt": full_prompt_text,
             "position_management": pos_mgmt_list,
             "council_transcript": brain_output.get("council_transcript") if isinstance(brain_output, dict) else None,

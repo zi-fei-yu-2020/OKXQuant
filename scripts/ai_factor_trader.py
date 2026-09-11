@@ -1151,13 +1151,25 @@ def fetch_single_instrument_data(item, all_positions, usdt_available):
     # 4. Load Real-time News Sentiment
     if os.path.exists(NEWS_SENTIMENT_FILE):
         try:
-            with open(NEWS_SENTIMENT_FILE, "r", encoding="utf-8") as f_news:
-                n_data = json.load(f_news)
-                coins_s = n_data.get("coins_sentiment", {})
-                if name in coins_s:
-                    f["sentiment_score"] = float(coins_s[name].get("sentiment_factor_score", 0.0) or 0.0)
+            from scripts.news_connection import load_strategy_snapshot
+            coin = name.split('-')[0]
+            snapshot = load_strategy_snapshot(NEWS_SENTIMENT_FILE, [coin])
+            f['news_context'] = {
+                'fresh': bool(snapshot and snapshot.get('connection_status') in {'fresh', 'partial'}),
+                'macro_sentiment': (snapshot or {}).get('macro_sentiment', 'UNKNOWN'),
+                'updated_at': (snapshot or {}).get('captured_at'),
+                'sentiment_fresh': bool((snapshot or {}).get('sentiment_fresh')),
+                'article_count': len((snapshot or {}).get('items') or []),
+                'digest': (snapshot or {}).get('digest'),
+            }
+            row = ((snapshot or {}).get('coins_sentiment') or {}).get(coin) or {}
+            if row.get('available') is True and snapshot.get('sentiment_fresh'):
+                f['sentiment_score'] = float(row.get('sentiment_factor_score'))
+            else:
+                f.pop('sentiment_score', None)
         except Exception:
-            pass
+            f['news_context'] = {'fresh': False, 'macro_sentiment': 'UNKNOWN', 'sentiment_fresh': False}
+            f.pop('sentiment_score', None)
 
     # 5. Causal Multi-Timeframe Calculus Dynamics
     f["calculus"] = {"valid": False, "regime": "RANGE_LOW_VELOCITY", "velocity": 0.0, "acceleration": 0.0, "impulse": 0.0, "max_abs_jerk": 0.0, "quality": 0.0}

@@ -72,7 +72,7 @@ entry_candidates 是程序按本轮已收盘K线、可见历史区间目标和�
 自行构造、未选择 candidate_id 的开仓方案仍须给出 supporting_evidence、counter_evidence、counter_evidence_status、uncertainty、invalidation、valid_for_seconds。
 引用格式：{"ref":"/macro_4h","value":"输入中原值","interpretation":"该观测的意义"}。
 有反证时 counter_evidence_status=observed，每条还需 why_not_fatal；未观察到时用 none_observed，列表为空，不编造反证。
-开仓 supporting_evidence 至少两个审计组，并至少包含 structure/momentum/flow 之一。
+开仓 supporting_evidence 至少两个非新闻审计组，并至少包含 structure/momentum/flow 之一。新闻引用 /news/ 只证明来源报道及观察到的 24h 情绪，不证明未来价格，也不能替代原有候选和风险校验。
 invalidation={"price":与止损相同,"timeframe":"15M|1H|4H","condition":"可检查的失效条件"}。
 有效期 valid_for_seconds 为 1~300 的整数；程序会进一步受数据时效限制。
 非 HOLD 持仓管理和 CANCEL 挂单管理必须给出 evidence 引用列表及 reason。无法引用时保留 HOLD/KEEP。
@@ -214,6 +214,18 @@ def facts_for(package,position=None):
                 add('/calculus/timeframes/'+tf+'/'+key,data.get(key),'momentum')
             for subsection,keys in [('definite_integrals',('energy_integral','deviation_area_integral','volume_action_integral')),('probability_theory',('continuation_prob_pct','breakdown_prob_pct','var_95_pct','cvar_95_pct','skewness','kurtosis'))]:
                 for key in keys:add('/calculus/timeframes/'+tf+'/'+subsection+'/'+key,(data.get(subsection) or {}).get(key),'risk' if subsection=='probability_theory' else 'momentum')
+    news=package.get('news_snapshot') or {}
+    if news.get('schema') == 1:
+        coin=package.get('instId', '').split('-')[0]
+        if news.get('sentiment_fresh'):
+            sentiment=(news.get('coins_sentiment') or {}).get(coin) or {}
+            if sentiment.get('available') is True:
+                for key in ('sentiment_factor_score', 'mentions'):
+                    add('/news/sentiment/'+key, sentiment.get(key), 'news')
+        for index, item in enumerate(news.get('items') or []):
+            # These refs attest what a source REPORTED, not that the report is true.
+            for key in ('id', 'title', 'source_at', 'importance'):
+                add('/news/articles/'+str(index)+'/'+key, item.get(key), 'news')
     smart=package.get('smart_money') or {}
     # Only this cycle's explicitly verified observations may be cited.
     if isinstance(smart,dict) and smart.get('valid') is True:
@@ -258,10 +270,12 @@ def compose(profile,runtime,packages,*,override='',positions=None,pending=None,r
     user=json.dumps({'user_preferences':layers,'runtime_data':runtime,'facts':facts,'entry_candidates':entry_plans,'wait_constraints':wait_constraints,
                     'position_ids':list(position_map),'pending_order_ids':[{'instId':p.get('instId'),'ordId':p.get('ordId')} for p in pending]},
                     ensure_ascii=False,allow_nan=False,separators=(',',':'))+'\n\n【推演与决策任务】\n'+TASK+'\n【输出字段定义】\n'+canonical(output_schema())
+    news_snapshot=copy.deepcopy(packages[0].get('news_snapshot') or {}) if packages else {}
     manifest={'contract_version':VERSION,'profile_id':profile.get('id',''),'profile_hash':fingerprint(canonical(profile)),
               'layers':['base_system','style_preset','user_preferences','runtime_data','output_validation'],
               'system_hash':fingerprint(system),'user_hash':fingerprint(user),'allow_open':allow,'warnings':warnings,
-              'wait_audit_version':wait_audit.VERSION,'fact_counts':{k:len(v) for k,v in facts.items()}}
+              'wait_audit_version':wait_audit.VERSION,'fact_counts':{k:len(v) for k,v in facts.items()},
+              'news_snapshot':news_snapshot}
     return PromptBundle(system,user,manifest,allow,runtime.get('previous_wait_reviews',{}),constraints)
 
 
@@ -367,7 +381,8 @@ def candidate(package,raw,catalog,*,allow_open=True,previous_wait_review=None,ri
         result['confidence']=numeric(raw.get('confidence'))
         if not 0<=result['confidence']<=100:raise ContractError('Score outside range')
         groups=check_refs(raw.get('supporting_evidence'),catalog,minimum=2)
-        if len(groups)<2 or not groups & {'structure','momentum','flow'}:raise ContractError('Insufficient evidence groups')
+        market_groups=groups-{'news'}  # News cannot replace the original two market-evidence groups.
+        if len(market_groups)<2 or not market_groups & {'structure','momentum','flow'}:raise ContractError('Insufficient evidence groups')
         counter=raw.get('counter_evidence');status=raw.get('counter_evidence_status')
         if status=='observed':check_refs(counter,catalog,counter=True)
         elif status!='none_observed' or counter!=[]:raise ContractError('Explicit counter-evidence assessment required')

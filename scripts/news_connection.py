@@ -111,20 +111,124 @@ def collect(coins, previous=None, *, now=None, reader=None, connection=None):
             'macro_sentiment':macro,'message':'资讯连接独立于交易环境；更新时间表示全部资讯分区最近一次成功读取。'}
 
 
+def _recent(section, now):
+    at = section.get('last_success_at')
+    return (section.get('status') == 'fresh' and isinstance(at, (int, float))
+            and not isinstance(at, bool) and math.isfinite(at) and 0 <= now-at <= MAX_AGE)
+
+
 def for_strategy(payload, *, now=None):
-    now=time.time() if now is None else now
-    if payload.get('schema')!=2 or payload.get('connection_status') not in {'fresh','partial'}: return None
-    recent=[]
-    for name in ('latest','important'):
-        section=payload.get('sections',{}).get(name,{})
-        at=section.get('last_success_at')
-        if section.get('status')=='fresh' and isinstance(at,(int,float)) and 0<=now-at<=MAX_AGE:
-            recent.extend(section.get('data',[]))
-    if not recent: return None
-    filtered=copy.deepcopy(payload)
-    ids={str(r.get('id')) for r in recent}
-    filtered['latest_news']=[r for r in payload.get('latest_news',[]) if str(r.get('id')) in ids and 0<=now-r.get('source_at',0)<=86400]
-    sentiment=payload.get('sections',{}).get('sentiment',{})
-    if sentiment.get('status')!='fresh' or not 0<=now-sentiment.get('last_success_at',0)<=MAX_AGE:
-        filtered['macro_sentiment']='UNKNOWN（情绪数据过期）'
+    """Read only fresh sections; display caches must not masquerade as strategy inputs."""
+    now = time.time() if now is None else now
+    if not isinstance(payload, dict) or payload.get('schema') != 2 or payload.get('connection_status') not in {'fresh', 'partial'}:
+        return None
+    sections = payload.get('sections') or {}
+    news = []; seen = set()
+    for name in ('important', 'latest'):
+        section = sections.get(name) or {}
+        if not _recent(section, now):
+            continue
+        for row in section.get('data') or []:
+            try:
+                at = float(row.get('cTime') or 0) / 1000
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(at) or not 0 <= now-at <= 86400:
+                continue
+            identity = str(row.get('id') or '')
+            if not identity or identity in seen:
+                continue
+            seen.add(identity)
+            news.append({'id': identity, 'time': stamp(at), 'source_at': at,
+                         'title': str(row.get('title') or '')[:300], 'summary': str(row.get('summary') or '')[:1000],
+                         'coins': row.get('ccyList') if isinstance(row.get('ccyList'), list) else [],
+                         'importance': 'high' if name == 'important' else row.get('importance', 'unknown'),
+                         'url': row.get('sourceUrl', '')})
+    sentiment = sections.get('sentiment') or {}
+    fresh_sentiment = _recent(sentiment, now)
+    if not news and not fresh_sentiment:
+        return None
+    filtered = copy.deepcopy(payload)
+    filtered['latest_news'] = sorted(news, key=lambda r: r['source_at'], reverse=True)
+    # Clearing the stale score is essential: UNKNOWN macro text alone does not stop factor use.
+    filtered['coins_sentiment'] = copy.deepcopy(sentiment.get('data') or {}) if fresh_sentiment else {}
+    filtered['sentiment_fresh'] = fresh_sentiment
+    filtered['sentiment_period'] = '24h'
+    if not fresh_sentiment:
+        filtered['macro_sentiment'] = 'UNKNOWN（情绪数据过期或不可用）'
     return filtered
+
+
+def strategy_snapshot(payload, coins, *, now=None, limit=6):
+    """Freeze bounded untrusted news context, selected from ALL fresh feed sections."""
+    import hashlib
+    import json
+    import re
+    now = time.time() if now is None else now
+    filtered = for_strategy(payload, now=now) or {}
+    targets = {str(c).upper() for c in coins}
+    sections = filtered.get('sections') or {}
+    def relevance(item):
+        tagged = {str(c).upper() for c in item.get('coins', [])}
+        title = item.get('title', '').upper()
+        return bool(targets & tagged or any(re.search(r'(?<![A-Z0-9])' + re.escape(c) + r'(?![A-Z0-9])', title) for c in targets)
+                    or re.search(r'比特币|以太坊|美联储|CPI|利率|非农|通胀|ETF|联储|FED|FOMC', title))
+    def rank(item):
+        # Keep relevance/importance, without letting yesterday's important item crowd out today's event.
+        recent = int((now - item['source_at']) <= 7200)
+        return (recent, int(relevance(item)) + int(item.get('importance') == 'high'), item['source_at'])
+    selected = []; titles = set()
+    for item in sorted(filtered.get('latest_news') or [], key=rank, reverse=True):
+        normalized = re.sub(r'[\W_]+', '', item['title']).casefold()
+        # Exact normalized-title dedup only: do not merge conflicting interpretations heuristically.
+        if not normalized or normalized in titles:
+            continue
+        titles.add(normalized)
+        selected.append({**item, 'summary': item['summary'][:400]})
+        if len(selected) >= max(1, min(limit, 12)):
+            break
+    score_rows = {}
+    for coin, row in (filtered.get('coins_sentiment') or {}).items():
+        score = row.get('sentiment_factor_score')
+        if coin in targets and row.get('available') is True and isinstance(score, (int, float)) and not isinstance(score, bool) and math.isfinite(score):
+            score_rows[coin] = {k: row.get(k) for k in ('available', 'label', 'bullish_ratio', 'bearish_ratio', 'mentions', 'sentiment_factor_score')}
+    stable_capture = filtered.get('last_success_at') or max((item.get('source_at', 0) for item in selected), default=0) or None
+    snapshot = {'schema': 1, 'captured_at': stable_capture, 'source': 'okx_official_news',
+                'connection_id': filtered.get('connection_id'), 'connection_generation': filtered.get('connection_generation'),
+                'connection_status': filtered.get('connection_status', 'unavailable'),
+                'macro_sentiment': filtered.get('macro_sentiment') or 'UNKNOWN',
+                'sentiment_period': '24h', 'sentiment_fresh': bool(filtered.get('sentiment_fresh')),
+                'section_freshness': {k: {'usable': _recent(sections.get(k) or {}, now),
+                    'last_success_at': (sections.get(k) or {}).get('last_success_at')} for k in ('latest', 'important', 'sentiment')},
+                'items': selected, 'coins_sentiment': score_rows,
+                'selection': 'recent_relevant_important_then_time_exact_title_dedup_v1'}
+    snapshot['digest'] = hashlib.sha256(json.dumps(snapshot, ensure_ascii=False, sort_keys=True, allow_nan=False).encode()).hexdigest()
+    return snapshot
+
+
+def load_strategy_snapshot(path, coins, *, now=None):
+    """Read once and reject a cache belonging to a previous news connection binding."""
+    import json
+    import logging
+    try:
+        with open(path, encoding='utf8') as handle:
+            payload = json.load(handle)
+        connection = account_connections.news_connection()
+        if (payload.get('connection_id') != connection['id'] or
+                payload.get('connection_generation', 0) != connection.get('generation', 0)):
+            payload = {}
+        return strategy_snapshot(payload, coins, now=now)
+    except (OSError, ValueError, TypeError, KeyError, account_connections.AccountChangeError) as exc:
+        logging.getLogger(__name__).warning('News context unavailable: %s', type(exc).__name__)
+        return strategy_snapshot({}, coins, now=now)
+
+
+def render_strategy_snapshot(snapshot):
+    """Reported claims are USER data, not instructions or independently verified facts."""
+    import json
+    if not snapshot or (not snapshot.get('items') and not snapshot.get('sentiment_fresh')):
+        return '无可验证新闻输入；不得据此推断市场平稳或不存在事件风险'
+    return ('市场情报仅作上下文：24h 情绪标签不是当前小时涨跌预测，也不是开仓指令。'
+            '新闻为来源报道，可能重复、矛盾或不准确；不得替代价格结构、成交量及风险校验。'
+            '没有可用新闻不代表没有事件风险。\n' +
+            json.dumps(snapshot, ensure_ascii=False, allow_nan=False, separators=(',', ':')))

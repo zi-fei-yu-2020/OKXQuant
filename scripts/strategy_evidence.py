@@ -69,13 +69,13 @@ def best_effort(scope, kind, payload, event_id=None):
         logging.getLogger(__name__).error('Evidence unavailable for %s; no write retry added',kind)
         return None
 
-def record_decisions(scope, cache, packages, model, prompt_hash, as_of):
+def record_decisions(scope, cache, packages, model, prompt_hash, as_of, news_snapshot=None):
     """Retain features and final decisions, not credentials/raw provider responses."""
     by_id = {p['instId']:p for p in packages}
     for inst, row in cache.items():
         payload = {'schema':1,'model':model,'prompt_hash':prompt_hash,'as_of_ms':int(row.get('data_as_of',as_of)*1000),'generated_at_ms':int(as_of*1000),
                    'instrument':inst,'position_basis':row.get('position_basis',{}),'decision':row.get('decision',{}),'features':by_id.get(inst,{}),
-                   'strategy_version':os.getenv('OKXQUANT_BUILD_COMMIT','local-risk-v2'),'counterfactual':False}
+                   'strategy_version':os.getenv('OKXQUANT_BUILD_COMMIT','local-risk-v2'),'counterfactual':False,'news_snapshot':news_snapshot or {}}
         from scripts.execution_profiles import runtime as execution_runtime
         payload['execution_profile_signature']=row.get('execution_profile_signature') or execution_runtime()['signature']
         from scripts.okx_runtime import selected_environment
