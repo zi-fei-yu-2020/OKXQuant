@@ -12,7 +12,7 @@ ALLOWED_ENVIRONMENTS = {"demo", "live"}
 
 def _load_dotenv() -> dict[str, str]:
     values: dict[str, str] = {}
-    configured = os.getenv("R20_ENV_FILE", "").strip()
+    configured = os.getenv("OKXQUANT_ENV_FILE", "").strip()
     path = Path(configured).expanduser() if configured else ROOT / ".env"
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -20,7 +20,7 @@ def _load_dotenv() -> dict[str, str]:
             if not line or line.startswith("#") or "=" not in line: continue
             key, value = line.split("=", 1); values[key.strip()] = value.strip().strip('"').strip("'")
     try:
-        from r20_gateway.secrets import load_secrets
+        from okxquant_gateway.secrets import load_secrets
         values.update(load_secrets())
     except Exception:
         pass
@@ -60,7 +60,7 @@ class OKXEnvironment:
         if self.configured:
             env.update({"OKX_API_KEY": self.api_key, "OKX_SECRET_KEY": self.secret_key, "OKX_PASSPHRASE": self.passphrase})
         env["OKX_DEMO"] = "1" if self.simulated else "0"
-        env["R20_OKX_ENV"] = self.mode
+        env["OKXQUANT_OKX_ENV"] = self.mode
         return env
 
     def cli_prefix(self) -> str:
@@ -71,7 +71,7 @@ class OKXEnvironment:
 def legacy_environment(values: Mapping[str, str] | None = None, *, mode=None) -> OKXEnvironment:
     env = dict(values or _load_dotenv())
     legacy_simulated = str(env.get("OKX_IS_SIMULATED", "1")).lower() in {"1", "true", "yes"}
-    mode = mode or str(env.get("R20_OKX_ENV") or ("demo" if legacy_simulated else "live")).lower()
+    mode = mode or str(env.get("OKXQUANT_OKX_ENV") or ("demo" if legacy_simulated else "live")).lower()
     if mode not in ALLOWED_ENVIRONMENTS: mode = "demo"
     prefix = "OKX_DEMO" if mode == "demo" else "OKX_LIVE"
     api_key = str(env.get(f"{prefix}_API_KEY") or env.get("OKX_API_KEY") or "")
@@ -84,7 +84,7 @@ def legacy_environment(values: Mapping[str, str] | None = None, *, mode=None) ->
 
 def selected_environment(values: Mapping[str, str] | None = None) -> OKXEnvironment:
     if values is None:
-        from r20_backend.account_connections import resolve_environment
+        from okxquant_backend.account_connections import resolve_environment
         managed = resolve_environment()
         if managed is not None: return managed
     return legacy_environment(values)
@@ -115,7 +115,7 @@ def replace_cli_prefix(command: str, values: Mapping[str, str] | None = None) ->
     if selected.configured:
         os.environ.update({"OKX_API_KEY": selected.api_key, "OKX_SECRET_KEY": selected.secret_key, "OKX_PASSPHRASE": selected.passphrase})
     os.environ["OKX_DEMO"] = "1" if selected.simulated else "0"
-    os.environ["R20_OKX_ENV"] = selected.mode
+    os.environ["OKXQUANT_OKX_ENV"] = selected.mode
     stripped = command.strip()
     for prefix in ("okx --demo ", "okx --live ", "okx "):
         if stripped.startswith(prefix):

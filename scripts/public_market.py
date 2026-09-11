@@ -1,4 +1,4 @@
-"""Bounded, credential-free public OKX reads shared by all R20 processes.
+"""Bounded, credential-free public OKX reads shared by all OKXQuant processes.
 
 The sole POST allowed here computes indicators; orders/account endpoints cannot
 enter this transport. The separately named Smart Money reader keeps its existing
@@ -218,7 +218,7 @@ def _wire(path, params, body, deadline, *, simulated=False):
         raise ValueError("Only the read-only indicator POST is permitted")
     method = "POST" if body is not None else "GET"
     url = BASE_URL + path + (("?" + urlencode(sorted(params.items()))) if params else "")
-    headers = {"User-Agent": "R20-Public-Market/1.0", "Content-Type": "application/json"}
+    headers = {"User-Agent": "OKXQuant-Public-Market/1.0", "Content-Type": "application/json"}
     if simulated:
         headers["x-simulated-trading"] = "1"  # Public data source, not an auth header.
     request = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None,
@@ -374,7 +374,7 @@ def smart_money_overview(ccys):
         ccys = sorted(set(ccys))
         if not ccys or any(not re.fullmatch(r"[A-Z0-9]{1,20}", c) for c in ccys):
             raise ValueError("Invalid Smart Money universe")
-        from r20_backend import account_connections, connection_transport
+        from okxquant_backend import account_connections, connection_transport
         if account_connections.load().get("managed"):
             return _smart_money_news(ccys, account_connections, connection_transport)
         # Legacy unmanaged installations retain their explicit CLI environment.

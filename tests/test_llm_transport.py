@@ -4,8 +4,8 @@ import ssl
 import unittest
 import urllib.error
 from unittest.mock import MagicMock, patch
-from r20_backend.llm_transport import LLMRequestError, request_json, retry_delay
-from r20_backend.llm_manager import test_llm_connection as connection_probe
+from okxquant_backend.llm_transport import LLMRequestError, request_json, retry_delay
+from okxquant_backend.llm_manager import test_llm_connection as connection_probe
 
 
 class LLMTransportTests(unittest.TestCase):
@@ -24,7 +24,7 @@ class LLMTransportTests(unittest.TestCase):
         return response
 
     def test_transient_errors_retry_exact_payload_and_preserve_high(self):
-        with patch('urllib.request.urlopen', side_effect=[self.error(503), self.error(502), self.response()]) as send, patch('r20_backend.llm_transport.time.sleep') as sleep:
+        with patch('urllib.request.urlopen', side_effect=[self.error(503), self.error(502), self.response()]) as send, patch('okxquant_backend.llm_transport.time.sleep') as sleep:
             data, status, latency, attempts = request_json(self.endpoint, {'Authorization': 'Bearer secret'}, self.payload, 50)
         self.assertEqual(status, 200)
         self.assertEqual(attempts, 3)
@@ -38,7 +38,7 @@ class LLMTransportTests(unittest.TestCase):
 
     def test_auth_and_parameter_errors_never_retry_or_downgrade(self):
         for code in (400, 401, 403, 404):
-            with patch('urllib.request.urlopen', side_effect=self.error(code)) as send, patch('r20_backend.llm_transport.time.sleep') as sleep:
+            with patch('urllib.request.urlopen', side_effect=self.error(code)) as send, patch('okxquant_backend.llm_transport.time.sleep') as sleep:
                 with self.assertRaises(LLMRequestError) as caught:
                     request_json(self.endpoint, {}, self.payload, 50)
             self.assertEqual(caught.exception.status_code, code)
@@ -47,21 +47,21 @@ class LLMTransportTests(unittest.TestCase):
             self.assertNotIn('PRIVATE-ERROR-BODY', str(caught.exception))
 
     def test_exhaustion_is_bounded_and_exposes_attempt_count(self):
-        with patch('urllib.request.urlopen', side_effect=[self.error(503) for _ in range(3)]), patch('r20_backend.llm_transport.time.sleep'):
+        with patch('urllib.request.urlopen', side_effect=[self.error(503) for _ in range(3)]), patch('okxquant_backend.llm_transport.time.sleep'):
             with self.assertRaises(LLMRequestError) as caught:
                 request_json(self.endpoint, {}, self.payload, 50)
         self.assertEqual(caught.exception.attempts, 3)
         self.assertEqual(caught.exception.status_code, 503)
 
     def test_retry_after_larger_than_budget_does_not_retry_early(self):
-        with patch('urllib.request.urlopen', side_effect=self.error(429, {'Retry-After': '60'})) as send, patch('r20_backend.llm_transport.time.sleep') as sleep:
+        with patch('urllib.request.urlopen', side_effect=self.error(429, {'Retry-After': '60'})) as send, patch('okxquant_backend.llm_transport.time.sleep') as sleep:
             with self.assertRaises(LLMRequestError):
                 request_json(self.endpoint, {}, self.payload, 5)
         self.assertEqual(send.call_count, 1)
         sleep.assert_not_called()
 
     def test_network_timeout_retries_but_certificate_errors_do_not(self):
-        with patch('urllib.request.urlopen', side_effect=[urllib.error.URLError(TimeoutError()), self.response()]), patch('r20_backend.llm_transport.time.sleep'):
+        with patch('urllib.request.urlopen', side_effect=[urllib.error.URLError(TimeoutError()), self.response()]), patch('okxquant_backend.llm_transport.time.sleep'):
             self.assertEqual(request_json(self.endpoint, {}, self.payload, 50)[3], 2)
         with patch('urllib.request.urlopen', side_effect=urllib.error.URLError(ssl.SSLCertVerificationError('certificate'))) as send:
             with self.assertRaises(LLMRequestError):
@@ -88,16 +88,16 @@ class LLMTransportTests(unittest.TestCase):
 
     def test_load_shedding_waits_for_new_sample_without_changing_payload(self):
         errors = [self.provider_error('system_cpu_overloaded') for _ in range(2)]
-        with patch('urllib.request.urlopen', side_effect=[*errors, self.response()]) as send, patch('r20_backend.llm_transport.time.sleep') as sleep:
+        with patch('urllib.request.urlopen', side_effect=[*errors, self.response()]) as send, patch('okxquant_backend.llm_transport.time.sleep') as sleep:
             self.assertEqual(request_json(self.endpoint, {}, self.payload, 50)[3], 3)
         self.assertEqual([c.args[0] for c in sleep.call_args_list], [6.0, 12.0])
         self.assertTrue(all(json.loads(c.args[0].data) == self.payload for c in send.call_args_list))
 
     def test_load_shedding_respects_retry_after_and_remaining_budget(self):
-        with patch('urllib.request.urlopen', side_effect=[self.provider_error('system_cpu_overloaded', {'Retry-After': '20'}), self.response()]), patch('r20_backend.llm_transport.time.sleep') as sleep:
+        with patch('urllib.request.urlopen', side_effect=[self.provider_error('system_cpu_overloaded', {'Retry-After': '20'}), self.response()]), patch('okxquant_backend.llm_transport.time.sleep') as sleep:
             request_json(self.endpoint, {}, self.payload, 50)
             sleep.assert_called_once_with(20)
-        with patch('urllib.request.urlopen', side_effect=self.provider_error('system_memory_overloaded')) as send, patch('r20_backend.llm_transport.time.sleep') as sleep:
+        with patch('urllib.request.urlopen', side_effect=self.provider_error('system_memory_overloaded')) as send, patch('okxquant_backend.llm_transport.time.sleep') as sleep:
             with self.assertRaises(LLMRequestError) as caught:
                 request_json(self.endpoint, {}, self.payload, 5)
         self.assertEqual(send.call_count, 1)
@@ -107,7 +107,7 @@ class LLMTransportTests(unittest.TestCase):
     def test_known_error_and_request_id_are_retained_without_body(self):
         request_id = '202609052300190809979208268d9d6FvHwDHBK'
         with patch('urllib.request.urlopen', side_effect=self.provider_error('system_cpu_overloaded', {'X-Oneapi-Request-Id': request_id})):
-            with self.assertLogs('r20_backend.llm_transport', level='WARNING') as logs:
+            with self.assertLogs('okxquant_backend.llm_transport', level='WARNING') as logs:
                 with self.assertRaises(LLMRequestError) as caught:
                     request_json(self.endpoint, {}, self.payload, 50, max_attempts=1)
         self.assertEqual(caught.exception.request_id, request_id)
@@ -117,8 +117,8 @@ class LLMTransportTests(unittest.TestCase):
         self.assertNotIn('PRIVATE-ERROR-BODY', str(caught.exception) + '\n'.join(logs.output))
 
     def test_untrusted_metadata_is_not_logged_or_used_for_backoff(self):
-        with patch('urllib.request.urlopen', side_effect=[self.provider_error('system_PRIVATE-ERROR-BODY', {'X-Oneapi-Request-Id': 'sk-private-key'}), self.response()]), patch('r20_backend.llm_transport.time.sleep') as sleep:
-            with self.assertLogs('r20_backend.llm_transport', level='WARNING') as logs:
+        with patch('urllib.request.urlopen', side_effect=[self.provider_error('system_PRIVATE-ERROR-BODY', {'X-Oneapi-Request-Id': 'sk-private-key'}), self.response()]), patch('okxquant_backend.llm_transport.time.sleep') as sleep:
+            with self.assertLogs('okxquant_backend.llm_transport', level='WARNING') as logs:
                 request_json(self.endpoint, {}, self.payload, 50)
         sleep.assert_called_once_with(0.5)
         self.assertNotIn('PRIVATE-ERROR-BODY', '\n'.join(logs.output))

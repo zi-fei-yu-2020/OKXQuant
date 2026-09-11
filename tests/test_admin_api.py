@@ -6,8 +6,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-import r20_backend.app as app_module
-from r20_backend.admin_auth import AdminAuthStore
+import okxquant_backend.app as app_module
+from okxquant_backend.admin_auth import AdminAuthStore
 
 
 class AdminApiTests(unittest.TestCase):
@@ -35,11 +35,11 @@ class AdminApiTests(unittest.TestCase):
     def login(self, username: str, password: str) -> dict[str, str]:
         response = self.client.post("/api/v1/admin/auth/login", json={"username": username, "password": password})
         self.assertEqual(response.status_code, 200, response.text)
-        return {"X-R20-Session": response.json()["session_token"]}
+        return {"X-OKXQuant-Session": response.json()["session_token"]}
 
     def test_docker_about_uses_build_metadata_without_git(self):
         headers = self.login("admin", "InitialAdmin123456")
-        with patch.dict("os.environ", {"R20_DEPLOYMENT_MODE": "docker", "R20_BUILD_BRANCH": "dev", "R20_BUILD_COMMIT": "test-image-commit"}), patch.object(app_module, "git", side_effect=AssertionError("Docker image has no Git checkout")) as git:
+        with patch.dict("os.environ", {"OKXQUANT_DEPLOYMENT_MODE": "docker", "OKXQUANT_BUILD_BRANCH": "dev", "OKXQUANT_BUILD_COMMIT": "test-image-commit"}), patch.object(app_module, "git", side_effect=AssertionError("Docker image has no Git checkout")) as git:
             response = self.client.get("/api/v1/admin/about", headers=headers)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["repository"]["branch"], "dev")
@@ -47,7 +47,7 @@ class AdminApiTests(unittest.TestCase):
         git.assert_not_called()
 
     def test_about_does_not_fetch_remote_repository(self):
-        with patch.dict("os.environ", {"R20_DEPLOYMENT_MODE": ""}):
+        with patch.dict("os.environ", {"OKXQUANT_DEPLOYMENT_MODE": ""}):
             result = app_module.update_status(fetch_remote=False)
         self.assertEqual(result["branch"], "dev")
         self.assertFalse(any(call.args[0][0] == "fetch" for call in app_module.git.call_args_list))
@@ -81,16 +81,16 @@ class AdminApiTests(unittest.TestCase):
     def test_health_and_about_report_651_release(self):
         health=self.client.get("/api/v1/health")
         self.assertEqual(health.status_code,200,health.text)
-        self.assertEqual(health.json()["version"],"7.3.0")
+        self.assertEqual(health.json()["version"],"0.1.0")
         headers=self.login("admin","InitialAdmin123456")
         about=self.client.get("/api/v1/admin/about",headers=headers)
         self.assertEqual(about.status_code,200,about.text)
-        self.assertEqual(about.json()["product"]["version"],"7.3.0")
+        self.assertEqual(about.json()["product"]["version"],"0.1.0")
         versions={item["name"]:item["version"] for item in about.json()["components"]}
-        self.assertEqual(versions["FastAPI Control Plane"],"7.3.0")
+        self.assertEqual(versions["FastAPI Control Plane"],"0.1.0")
 
     def test_legacy_header_disabled_after_initialization(self):
-        response = self.client.get("/api/v1/admin/overview", headers={"X-R20-Admin-Token": "InitialAdmin123456"})
+        response = self.client.get("/api/v1/admin/overview", headers={"X-OKXQuant-Admin-Token": "InitialAdmin123456"})
         self.assertEqual(response.status_code, 401)
 
     def test_vue_console_endpoints_require_session_and_return_data(self):
@@ -111,7 +111,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertIn("decisions", runtime.json())
         logs = self.client.get("/api/v1/admin/logs?source=backend&lines=30", headers=headers)
         self.assertEqual(logs.status_code, 200)
-        self.assertEqual(logs.json()["file"], "r20_backend.log")
+        self.assertEqual(logs.json()["file"], "okxquant_backend.log")
         self.assertEqual(self.client.get("/api/v1/admin/logs?source=../../etc/passwd", headers=headers).status_code, 400)
         library = self.client.get("/api/v1/admin/prompt-library", headers=headers)
         self.assertEqual(library.status_code, 200)

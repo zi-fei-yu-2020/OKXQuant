@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-R20 AI Brain Six-Crypto Quantitative Trading Decision Engine (ai_brain_trader.py)
+OKXQuant AI Brain Six-Crypto Quantitative Trading Decision Engine (ai_brain_trader.py)
 Batch ingests six crypto perpetuals into one macro-context LLM call.
 Maintains a validated live decision cache and durable Web audit history.
 """
@@ -34,7 +34,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 try:
-    from r20_backend.config import settings as standalone_settings
+    from okxquant_backend.config import settings as standalone_settings
 except ImportError:
     standalone_settings = None
 
@@ -61,7 +61,7 @@ def get_last_inference_error() -> str:
 
 from instrument_pool import load_instruments
 from prompt_library import active_profile
-from r20_gateway.telemetry import ModelCallTelemetry
+from okxquant_gateway.telemetry import ModelCallTelemetry
 
 TARGET_INSTRUMENTS = load_instruments()
 
@@ -129,7 +129,7 @@ def is_same_direction_scale_request(position_side: str, action: str) -> bool:
 def get_cpa_client_config() -> Tuple[str, str]:
     """Resolve LLM credentials only from process environment or local .env."""
     try:
-        from r20_backend.llm_manager import get_active_llm_runtime
+        from okxquant_backend.llm_manager import get_active_llm_runtime
         active_llm = get_active_llm_runtime()
         if active_llm.get("base_url"):
             return active_llm["base_url"], active_llm.get("api_key", "")
@@ -606,7 +606,7 @@ def validate_and_filter_decision(p: Dict[str, Any], d_item: Dict[str, Any], acti
         "active_position_sides": active_position_sides,
     }
     try:
-        from r20_backend.interceptor_manager import run_interceptor_pipeline
+        from okxquant_backend.interceptor_manager import run_interceptor_pipeline
         return run_interceptor_pipeline(p, d_item, context)
     except Exception as exc:
         # Fail-closed fallback in case interceptor manager cannot be reached
@@ -754,7 +754,7 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
     effort = os.environ.get("LLM_REASONING_EFFORT") or "high"
     api_format = "openai_chat"
     try:
-        from r20_backend.llm_manager import get_active_llm_runtime, execute_llm_request
+        from okxquant_backend.llm_manager import get_active_llm_runtime, execute_llm_request
         active_llm = get_active_llm_runtime()
         model_name = os.environ.get("LLM_MODEL") or active_llm.get("model") or model_name
         effort = os.environ.get("LLM_REASONING_EFFORT") or active_llm.get("reasoning_effort") or effort
@@ -777,7 +777,7 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
         # Transparent check: is Multi-Agent Council enabled?
         council_enabled = False
         try:
-            from r20_backend.council_manager import load_council_config, execute_council_debate
+            from okxquant_backend.council_manager import load_council_config, execute_council_debate
             c_cfg = load_council_config()
             council_enabled = bool(c_cfg.get("enabled"))
         except Exception:

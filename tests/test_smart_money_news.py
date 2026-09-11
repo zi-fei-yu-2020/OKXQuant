@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts import public_market as market
-from r20_backend import account_connections as accounts, connection_transport as transport
+from okxquant_backend import account_connections as accounts, connection_transport as transport
 
 
 def connection(identity='a'*32, secret='UNIT_SECRET'):

@@ -19,7 +19,7 @@ from fastapi import HTTPException
 
 
 def functions(root):
-    source = Path(__file__).resolve().parents[1] / "r20_backend/app.py"
+    source = Path(__file__).resolve().parents[1] / "okxquant_backend/app.py"
     names = {"simple_backup_config", "restore_backup_archive", "_save_memory_items"}
     selected = []
     for node in ast.parse(source.read_text(encoding="utf-8")).body:
@@ -164,7 +164,7 @@ class RestoreAPIGuardTests(unittest.TestCase):
         (self.root / "fake-proc").mkdir()
         (self.root / "backups/local").mkdir(parents=True)
         self.ns = functions(self.root)
-        self.payload = SimpleNamespace(archive_name="offline.tar.gz", confirmation="RESTORE R20")
+        self.payload = SimpleNamespace(archive_name="offline.tar.gz", confirmation="RESTORE OKXQUANT")
         self.archive = self.root / "backups/local/offline.tar.gz"
         with tarfile.open(self.archive, "w:gz") as tar:
             item = tarfile.TarInfo("data/state.json")
@@ -186,7 +186,7 @@ class RestoreAPIGuardTests(unittest.TestCase):
     def test_active_supervisor_is_rejected_without_importing_or_stopping_gateway(self):
         supervisor = SimpleNamespace(_thread=Mock())
         supervisor._thread.is_alive.return_value = True
-        with patch.dict(sys.modules, {"r20_gateway.supervisor": supervisor}), patch("scripts.backup_restore.restore_archive") as engine, self.assertRaises(HTTPException) as error:
+        with patch.dict(sys.modules, {"okxquant_gateway.supervisor": supervisor}), patch("scripts.backup_restore.restore_archive") as engine, self.assertRaises(HTTPException) as error:
             self.restore()
         self.assertEqual(error.exception.status_code, 409)
         self.assertIn("自动拉起线程", error.exception.detail)
@@ -194,7 +194,7 @@ class RestoreAPIGuardTests(unittest.TestCase):
         self.assertFalse((self.root / "data/state.json").exists())
 
     def test_each_active_runtime_lock_returns_409_before_restore(self):
-        for name in (".r20_gateway.lock", ".ai_factor_trader.lock", ".ai_brain_cycle.lock", ".r20_scheduler.lock"):
+        for name in (".okxquant_gateway.lock", ".ai_factor_trader.lock", ".ai_brain_cycle.lock", ".okxquant_scheduler.lock"):
             with self.subTest(name=name), (self.root / "data" / name).open("a+") as handle:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 with patch("scripts.backup_restore.restore_archive") as engine, self.assertRaises(HTTPException) as error:
@@ -209,7 +209,7 @@ class RestoreAPIGuardTests(unittest.TestCase):
     def test_all_locks_held_through_engine_and_released_even_on_failure(self):
         from scripts.backup_restore import UnsafeArchive
         def engine(*_):
-            for name in (".r20_gateway.lock", ".ai_factor_trader.lock", ".ai_brain_cycle.lock", ".r20_scheduler.lock"):
+            for name in (".okxquant_gateway.lock", ".ai_factor_trader.lock", ".ai_brain_cycle.lock", ".okxquant_scheduler.lock"):
                 with (self.root / "data" / name).open("a+") as handle:
                     with self.assertRaises(BlockingIOError):
                         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -217,7 +217,7 @@ class RestoreAPIGuardTests(unittest.TestCase):
         with patch("scripts.backup_restore.restore_archive", side_effect=engine), self.assertRaises(HTTPException) as error:
             self.restore()
         self.assertEqual(error.exception.status_code, 400)
-        for name in (".r20_gateway.lock", ".ai_factor_trader.lock", ".ai_brain_cycle.lock", ".r20_scheduler.lock"):
+        for name in (".okxquant_gateway.lock", ".ai_factor_trader.lock", ".ai_brain_cycle.lock", ".okxquant_scheduler.lock"):
             with (self.root / "data" / name).open("a+") as handle:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         self.ns["audit_record"].assert_not_called()
@@ -226,9 +226,9 @@ class RestoreAPIGuardTests(unittest.TestCase):
         process = self.root / "fake-proc/99999999"
         process.mkdir()
         process.joinpath("cwd").symlink_to(self.root, target_is_directory=True)
-        for command in (b"python\0scripts/ai_factor_trader.py\0", b"python\0scripts/ai_brain_trader.py\0", b"python\0-m\0r20_gateway.worker\0",
+        for command in (b"python\0scripts/ai_factor_trader.py\0", b"python\0scripts/ai_brain_trader.py\0", b"python\0-m\0okxquant_gateway.worker\0",
                         b"python\0-m\0scripts.ai_factor_trader\0", b"python\0-m\0scripts.ai_brain_trader\0",
-                        b"python\0-m\0r20_backend.scheduler\0", b"python\0r20_backend/scheduler.py\0"):
+                        b"python\0-m\0okxquant_backend.scheduler\0", b"python\0okxquant_backend/scheduler.py\0"):
             process.joinpath("cmdline").write_bytes(command)
             with patch("os.kill", side_effect=AssertionError("never signal")), patch("scripts.backup_restore.restore_archive") as engine, self.assertRaises(HTTPException) as error:
                 self.restore()
@@ -256,7 +256,7 @@ class RestoreAPIGuardTests(unittest.TestCase):
         engine.assert_not_called()
 
     def test_unsafe_lock_and_data_symlink_return_409(self):
-        lock = self.root / "data/.r20_gateway.lock"
+        lock = self.root / "data/.okxquant_gateway.lock"
         lock.symlink_to(self.root / "missing")
         with self.assertRaises(HTTPException) as error:
             self.restore()
@@ -274,7 +274,7 @@ class RestoreAPIGuardTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as error:
             self.restore()
         self.assertEqual(error.exception.status_code, 400)
-        self.payload.confirmation = "RESTORE R20"
+        self.payload.confirmation = "RESTORE OKXQUANT"
         for name in ("../offline.tar.gz", "C:\\offline.tar.gz", "/offline.tar.gz", "file.enc", "data:stream.tgz"):
             self.payload.archive_name = name
             with self.assertRaises(HTTPException) as error:

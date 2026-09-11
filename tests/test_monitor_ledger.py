@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from r20_backend.macro_status import project
+from okxquant_backend.macro_status import project
 from scripts import ledger_monitor as monitor
 from scripts.close_attribution import reason
 
@@ -39,7 +39,7 @@ class AttributionTests(unittest.TestCase):
         self.history = dict(instId='SOL-USDT-SWAP', direction='long', uTime='1788688602696', closeTotalPos='5')
         self.order = dict(instId='SOL-USDT-SWAP', posSide='long', side='sell', state='filled',
                           fillTime='1788688602695', accFillSz='5', ordId='3898562037694484480',
-                          clOrdId='r20close1788688602', algoId='', reduceOnly=True)
+                          clOrdId='okxquantclose1788688602', algoId='', reduceOnly=True)
 
     def test_exact_sol_manual_receipt(self):
         result = reason(self.history, [self.order])
@@ -76,7 +76,7 @@ class MonitorTests(unittest.TestCase):
                         open_time=monitor.bj(self.target['cTime']), status='holding', pnl=3, environment_id='demo-test')
 
     def test_confirmed_event_projects_without_estimated_pnl(self):
-        monitor.note_confirmed_close(self.env, self.target, [], 'r20close1788688602')
+        monitor.note_confirmed_close(self.env, self.target, [], 'okxquantclose1788688602')
         result = monitor.project_rows([self.row], self.env.identity)[0]
         self.assertEqual(result['status'], 'closed_pending')
         self.assertEqual(result['exit_source'], 'manual_admin')
@@ -85,7 +85,7 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(self.row['status'], 'holding')
 
     def test_scope_and_lifecycle_mismatch(self):
-        monitor.note_confirmed_close(self.env, self.target, [], 'r20close1788688602')
+        monitor.note_confirmed_close(self.env, self.target, [], 'okxquantclose1788688602')
         for changes in ({'environment_id': 'live-test'}, {'pos_id': 'other'}, {'open_time': 'other'}):
             result = monitor.project_rows([{**self.row, **changes}], self.env.identity)[0]
             self.assertEqual(result['status'], 'holding')
@@ -123,10 +123,10 @@ class MonitorTests(unittest.TestCase):
     def test_native_snapshot_is_get_only_and_validated(self):
         from scripts.sync_full_ledger import read_snapshot
         env = SimpleNamespace(configured=True)
-        with patch('r20_backend.okx_trade_service._request', return_value=[]) as read:
+        with patch('okxquant_backend.okx_trade_service._request', return_value=[]) as read:
             self.assertEqual(read_snapshot(env, '/positions', 'unused', {}), [])
             read.assert_called_once_with('GET', '/positions', {}, env, timeout=8)
-        with patch('r20_backend.okx_trade_service._request', return_value={'error': 503}):
+        with patch('okxquant_backend.okx_trade_service._request', return_value={'error': 503}):
             with self.assertRaises(RuntimeError): read_snapshot(env, '/positions', 'unused', {})
 
     def test_sol_lifecycle_accounting_and_notification_survive_worker(self):
@@ -137,7 +137,7 @@ class MonitorTests(unittest.TestCase):
                        uTime='1788688602696', closeTotalPos='5', openAvgPx='105.7', closeAvgPx='106.34',
                        pnl='3.2', fee='-0.37155', fundingFee='-0.05259', realizedPnl='2.77586', lever='3')
         order = dict(instId='SOL-USDT-SWAP', posSide='long', side='sell', state='filled',
-                     fillTime='1788688602695', accFillSz='5', ordId='3898562037694484480', clOrdId='r20close1788688602')
+                     fillTime='1788688602695', accFillSz='5', ordId='3898562037694484480', clOrdId='okxquantclose1788688602')
         with ExitStack() as stack:
             for name, value in [('DATA_DIR', str(root)), ('LEDGER_JSON_FILE', str(root/'trading_ledger.json')),
                                 ('INITIAL_STATE_FILE', str(root/'initial.json')), ('POSITION_TRACKER_FILE', str(root/'tracker.json'))]:

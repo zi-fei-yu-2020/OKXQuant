@@ -1,4 +1,4 @@
-"""Offline, bounded restore of *trusted* R20 source/runtime archives.
+"""Offline, bounded restore of *trusted* OKXQuant source/runtime archives.
 
 No service/config imports, network, process management, or tar.extract. Source
 scope matches backup_runtime.SCOPE_PATHS; this is not a signature verifier or a
@@ -38,7 +38,7 @@ class RestoreLimits:
 
 
 # Deliberately kept independent of backup_runtime (no live configuration imports).
-SOURCE_DIRS = frozenset({"scripts", "dashboard", "r20_backend", "r20_gateway", "tests"})
+SOURCE_DIRS = frozenset({"scripts", "dashboard", "okxquant_backend", "okxquant_gateway", "tests"})
 ROOT_FILES = frozenset({
     "RECOVERY_GUIDE.md", "SOUL.md", "PROFILE.md", "AGENTS.md", "MEMORY.md",
     "README.md", "requirements.txt", "pyproject.toml", "docker-compose.yml",
@@ -78,7 +78,7 @@ def _allowed(parts: tuple[str, ...], directory: bool) -> bool:
     if any(p in PRIVATE_PARTS or p.startswith(".env") for p in lower):
         return False
     if (lower[-1].endswith(PRIVATE_SUFFIXES) or lower[-1].startswith(PRIVATE_DATA_PREFIXES)
-            or lower[-1].startswith("r20_admin.db")):
+            or lower[-1].startswith("okxquant_admin.db")):
         return False
     if parts[0] in SOURCE_DIRS:
         # Code implementing auth/secrets is source, NOT a stored credential.
@@ -221,7 +221,7 @@ def restore_archive(archive: Path, destination: Path, *, limits: RestoreLimits |
         raise ValueError("恢复限额必须为正数")
     restored, skipped = [], []
     try:
-        with _root_fd(Path(archive).parent) as archive_dir, _root_fd(Path(destination)) as root_fd, tempfile.TemporaryDirectory(prefix="r20-restore-") as temporary:
+        with _root_fd(Path(archive).parent) as archive_dir, _root_fd(Path(destination)) as root_fd, tempfile.TemporaryDirectory(prefix="okxquant-restore-") as temporary:
             stage = Path(temporary)
             archive_fd = os.open(Path(archive).name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=archive_dir)
             with os.fdopen(archive_fd, "rb") as source:
@@ -276,7 +276,7 @@ def restore_archive(archive: Path, destination: Path, *, limits: RestoreLimits |
                     if parts[0] not in SOURCE_DIRS | {"data"} and parts[0] not in ROOT_FILES:
                         # Known sensitive top-level entries are skipped, not restored.
                         if parts[0].casefold() not in PRIVATE_PARTS and not parts[0].casefold().startswith(".env"):
-                            raise UnsafeArchive("归档路径不在现有 R20 备份恢复范围内")
+                            raise UnsafeArchive("归档路径不在现有 OKXQuant 备份恢复范围内")
                     # Even excluded entries cannot exploit an existing target link.
                     _preflight(root_fd, parts, member.isdir(), check_sqlite=allowed)
                     entries.append((member, parts, allowed))
@@ -305,7 +305,7 @@ def restore_archive(archive: Path, destination: Path, *, limits: RestoreLimits |
                 with _directory_fd(root_fd, parts[:-1]) as parent_fd:
                     _preflight(parent_fd, (parts[-1],), False, check_sqlite=True)
                     # Same-directory temp + rename: never open/truncate the old inode.
-                    temporary_name = ".r20-restore-" + os.urandom(12).hex()
+                    temporary_name = ".okxquant-restore-" + os.urandom(12).hex()
                     fd = os.open(temporary_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent_fd)
                     try:
                         with os.fdopen(fd, "wb") as output, (stage / str(index)).open("rb") as source:

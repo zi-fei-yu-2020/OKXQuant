@@ -96,7 +96,7 @@ class EvolutionReviewTests(unittest.TestCase):
 
     def test_latest_failed_job_does_not_hide_previous_successful_report(self):
         self.write('self_improvement_report.json', {'timestamp': '2026-09-06 20:00:05', 'total_trades': 8})
-        with sqlite3.connect(self.root / 'r20_gateway.db') as db:
+        with sqlite3.connect(self.root / 'okxquant_gateway.db') as db:
             db.execute('CREATE TABLE job_runs(id INTEGER,job_name TEXT,status TEXT,started_at TEXT,finished_at TEXT,return_code INTEGER)')
             db.execute("INSERT INTO job_runs VALUES (1,'self_improvement','failed','2026-09-07 20:00:00','2026-09-07 20:00:01',1)")
         value = public_status(self.root)

@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from scripts import algo_reader as reader
 from scripts.okx_runtime import OKXEnvironment
 import ai_factor_trader as trader
-from r20_backend import okx_trade_service
+from okxquant_backend import okx_trade_service
 
 
 def order(inst='SOL-USDT-SWAP', identity='88', size='4'):

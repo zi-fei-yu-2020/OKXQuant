@@ -15,7 +15,7 @@ SPA_PATHS = (
 )
 
 
-class FrontendFallbackTests(unittest.TestCase):
+class OKXQuantFrontendFallbackTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -36,7 +36,7 @@ class FrontendFallbackTests(unittest.TestCase):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 503)
-                self.assertIn('frontend/dist/index.html', response.text)
+                self.assertIn('okxquant_frontend/dist/index.html', response.text)
                 self.assertIn('npm run build', response.text)
                 self.assertIn('no-store', response.headers['cache-control'])
                 self.assertNotIn('location', response.headers)

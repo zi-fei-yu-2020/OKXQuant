@@ -17,7 +17,7 @@ from scripts import strategy_evidence as evidence
 
 
 def read_positions(env):
-    from r20_backend.okx_trade_service import _request
+    from okxquant_backend.okx_trade_service import _request
     if env.configured:
         return _request('GET','/api/v5/account/positions',{'instType':'SWAP'},env)
     import ai_factor_trader as trader
@@ -27,7 +27,7 @@ def read_positions(env):
 
 
 def observe_equity(env,positions=None):
-    from r20_backend.okx_trade_service import _request
+    from okxquant_backend.okx_trade_service import _request
     from scripts.entry_gateway import equity_guard
     from scripts.risk_policy import load_policy
     rows=_request('GET','/api/v5/account/balance',{},env)
@@ -180,7 +180,7 @@ def run_guard(*, observe_only=False):
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--observe-only',action='store_true');args=parser.parse_args()
     from scripts.okx_runtime import _load_dotenv
-    enabled=str(_load_dotenv().get('R20_POSITION_GUARD_ENABLED','1')).lower()
+    enabled=str(_load_dotenv().get('OKXQUANT_POSITION_GUARD_ENABLED','1')).lower()
     if enabled not in {'0','1','true','false','yes','no'}:raise ValueError('Invalid position guard enable flag')
     if enabled not in {'1','true','yes'} and not args.observe_only:
         print('Independent position guard disabled by operator');return

@@ -252,7 +252,7 @@ def _signed_page(env, params, deadline):
     request_path = ENDPOINT + '?' + urllib.parse.urlencode(params)
     timestamp = datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
     signature = base64.b64encode(hmac.new(env.secret_key.encode(), (timestamp + 'GET' + request_path).encode(), hashlib.sha256).digest()).decode()
-    headers = {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 R20-Private-Read/1.0',
+    headers = {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 OKXQuant-Private-Read/1.0',
                'OK-ACCESS-KEY': env.api_key, 'OK-ACCESS-SIGN': signature,
                'OK-ACCESS-TIMESTAMP': timestamp, 'OK-ACCESS-PASSPHRASE': env.passphrase}
     if env.simulated: headers['x-simulated-trading'] = '1'
@@ -420,7 +420,7 @@ def read_algo_history(env, *, ord_type, timeout=2.0):
     try:
         with _turn(deadline,'monitor'):
             _reserve(deadline,'monitor');_check(deadline,'monitor')
-            from r20_backend.okx_trade_service import _request
+            from okxquant_backend.okx_trade_service import _request
             rows=_request('GET','/api/v5/trade/orders-algo-history',
                 {'ordType':ord_type,'state':'effective','instType':'SWAP','limit':'100'},env,
                 timeout=max(.1,deadline-time.monotonic()))

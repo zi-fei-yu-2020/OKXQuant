@@ -15,13 +15,13 @@ python scripts/run_tests.py --verbose
 1. 复制源码到系统临时目录，使用当前工作区的修改，不要求先提交。
 2. 不复制 `.git`、真实 `.env`、`data/`、`logs/`、`backups/`、`node_modules/` 和前端构建产物。
 3. 用空运行目录和隔离的 `HOME` 启动测试子进程，不继承 OKX、LLM、通知和自定义备份凭证。
-4. 设置 `R20_TESTING=1`，禁止 Dashboard 和 Gateway 启动后台工作。
+4. 设置 `OKXQUANT_TESTING=1`，禁止 Dashboard 和 Gateway 启动后台工作。
 5. 在测试发现与执行期间阻止未 mock 的网络连接、DNS 查询和子进程启动。即使业务代码捕获了阻止异常，测试命令仍会失败并列出相关测试。
 6. 将测试失败状态返回给调用方，完成后清理临时副本。
 
 这是可信项目测试的副作用隔离，不是执行不可信 Python 代码的安全沙箱。不要把真实密钥写进测试源码或测试夹具。
 
-`R20_TESTING=1` 本身不能重定向所有状态文件；请始终使用上述测试入口。不要在正常部署环境设置该变量，否则自动调度和监控缓存后台刷新不会启动。
+`OKXQUANT_TESTING=1` 本身不能重定向所有状态文件；请始终使用上述测试入口。不要在正常部署环境设置该变量，否则自动调度和监控缓存后台刷新不会启动。
 
 ## Python：Linux / WSL
 
@@ -42,9 +42,9 @@ python scripts/run_tests.py --verbose
 对于本仓库在 Windows 中的位置，可从 PowerShell 进入 WSL 后执行：
 
 ```bash
-cd /mnt/d/Project/workspace/r20-quantum-trader
-python3 -m venv /tmp/r20-test-venv-local
-. /tmp/r20-test-venv-local/bin/activate
+cd /mnt/d/Project/workspace/OKXQuant
+python3 -m venv /tmp/okxquant-test-venv-local
+. /tmp/okxquant-test-venv-local/bin/activate
 python -m pip install -r requirements.txt
 python scripts/run_tests.py --verbose
 ```
@@ -62,7 +62,7 @@ python scripts/run_tests.py --pattern 'test_admin_api.py' --verbose
 使用 Node.js 22 和锁文件安装依赖：
 
 ```bash
-cd frontend
+cd okxquant_frontend
 npm ci
 npm run typecheck
 npm run build

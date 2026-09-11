@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate local R20 dashboard cache without an external console dependency."""
+"""Generate local OKXQuant dashboard cache without an external console dependency."""
 
 import os
 from okx_runtime import replace_cli_prefix as okx_private_command

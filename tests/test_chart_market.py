@@ -5,7 +5,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from r20_backend import chart_market
+from okxquant_backend import chart_market
 
 NOW = 1788916000000
 START = NOW // 3600000 * 3600000

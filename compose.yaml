@@ -1,4 +1,4 @@
-name: r20-quantum-trader
+name: okxquant
 
 services:
   app:
@@ -6,10 +6,11 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        NODE_IMAGE: "${R20_NODE_IMAGE:-node:22-bookworm-slim}"
-        PYTHON_IMAGE: "${R20_PYTHON_IMAGE:-python:3.12-slim-bookworm}"
-        OKX_CLI_SPEC: "${R20_OKX_CLI_SPEC:-@okx_ai/okx-trade-cli@^1.4.4}"
-    image: "${R20_IMAGE:-r20-quantum-trader:local}"
+        NODE_IMAGE: "${OKXQUANT_NODE_IMAGE:-node:22-bookworm-slim}"
+        PYTHON_IMAGE: "${OKXQUANT_PYTHON_IMAGE:-python:3.12-slim-bookworm}"
+        OKX_CLI_SPEC: "${OKXQUANT_OKX_CLI_SPEC:-@okx_ai/okx-trade-cli@^1.4.4}"
+    container_name: okxquant-app
+    image: "${OKXQUANT_IMAGE:-okxquant:local}"
     restart: unless-stopped
     init: true
     env_file:
@@ -18,20 +19,20 @@ services:
       TZ: "${TZ:-Asia/Shanghai}"
       PYTHONUNBUFFERED: "1"
       PYTHONPATH: /app
-      R20_ENV_FILE: /app/config/.env
-      R20_DEPLOYMENT_MODE: docker
-      R20_BUILD_BRANCH: "${R20_BUILD_BRANCH:-dev}"
-      R20_BUILD_COMMIT: "${R20_BUILD_COMMIT:-local}"
+      OKXQUANT_ENV_FILE: /app/config/.env
+      OKXQUANT_DEPLOYMENT_MODE: docker
+      OKXQUANT_BUILD_BRANCH: "${OKXQUANT_BUILD_BRANCH:-dev}"
+      OKXQUANT_BUILD_COMMIT: "${OKXQUANT_BUILD_COMMIT:-local}"
     ports:
-      - "${R20_HTTP_PORT:-8080}:8080"
+      - "${OKXQUANT_HTTP_PORT:-8080}:8080"
     volumes:
-      - r20_config:/app/config
-      - r20_data:/app/data
-      - r20_logs:/app/logs
-      - r20_backups:/app/backups
-      - r20_okx:/home/r20/.okx
-      - r20_bypy:/home/r20/.bypy
-      - r20_npm:/home/r20/.npm-global
+      - okxquant_config:/app/config
+      - okxquant_data:/app/data
+      - okxquant_logs:/app/logs
+      - okxquant_backups:/app/backups
+      - okxquant_okx:/home/okxquant/.okx
+      - okxquant_bypy:/home/okxquant/.bypy
+      - okxquant_npm:/home/okxquant/.npm-global
     healthcheck:
       test:
         - CMD
@@ -47,10 +48,17 @@ services:
       - no-new-privileges:true
 
 volumes:
-  r20_config:
-  r20_data:
-  r20_logs:
-  r20_backups:
-  r20_okx:
-  r20_bypy:
-  r20_npm:
+  okxquant_config:
+    name: okxquant_config
+  okxquant_data:
+    name: okxquant_data
+  okxquant_logs:
+    name: okxquant_logs
+  okxquant_backups:
+    name: okxquant_backups
+  okxquant_okx:
+    name: okxquant_okx
+  okxquant_bypy:
+    name: okxquant_bypy
+  okxquant_npm:
+    name: okxquant_npm

@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 import dashboard.app as dashboard
-import r20_gateway.supervisor as supervisor
+import okxquant_gateway.supervisor as supervisor
 from scripts import run_tests
 
 
@@ -21,7 +21,7 @@ class TestIsolationTests(unittest.TestCase):
         self.assertFalse(dashboard._BG_WORKER_RUNNING)
 
     def test_test_mode_disables_background_startup(self):
-        with patch.dict(os.environ, {"R20_TESTING": "1"}), \
+        with patch.dict(os.environ, {"OKXQUANT_TESTING": "1"}), \
              patch.object(dashboard.threading, "Thread") as thread, \
              patch.object(supervisor, "ensure_worker") as worker:
             dashboard.start_dashboard_background_worker()
@@ -30,7 +30,7 @@ class TestIsolationTests(unittest.TestCase):
             worker.assert_not_called()
 
     def test_dashboard_production_startup_is_preserved(self):
-        with patch.dict(os.environ, {"R20_TESTING": "0"}), \
+        with patch.dict(os.environ, {"OKXQUANT_TESTING": "0"}), \
              patch.object(dashboard, "_BG_WORKER_THREAD", None), \
              patch.object(dashboard, "_BG_WORKER_RUNNING", False), \
              patch.object(dashboard.threading, "Thread") as thread:
@@ -38,7 +38,7 @@ class TestIsolationTests(unittest.TestCase):
             thread.return_value.start.assert_called_once()
 
     def test_gateway_production_startup_is_preserved(self):
-        with patch.dict(os.environ, {"R20_TESTING": "0"}), \
+        with patch.dict(os.environ, {"OKXQUANT_TESTING": "0"}), \
              patch.object(supervisor, "_thread", None), \
              patch.object(supervisor, "ensure_worker") as worker, \
              patch.object(supervisor.threading, "Thread") as thread:
@@ -51,15 +51,15 @@ class TestIsolationTests(unittest.TestCase):
             "OKX_LIVE_API_KEY": "not-a-real-key",
             "LLM_API_KEY": "not-a-real-key",
             "CUSTOM_BACKUP_PASSWORD": "not-a-real-key",
-            "R20_ENV_FILE": "/live/config/.env",
-            "R20_GATEWAY_DB": "/live/data/gateway.db",
+            "OKXQUANT_ENV_FILE": "/live/config/.env",
+            "OKXQUANT_GATEWAY_DB": "/live/data/gateway.db",
         }):
             env = run_tests.test_environment(Path("/sandbox"))
-        for name in ("OKX_LIVE_API_KEY", "LLM_API_KEY", "CUSTOM_BACKUP_PASSWORD", "R20_ENV_FILE", "R20_GATEWAY_DB"):
+        for name in ("OKX_LIVE_API_KEY", "LLM_API_KEY", "CUSTOM_BACKUP_PASSWORD", "OKXQUANT_ENV_FILE", "OKXQUANT_GATEWAY_DB"):
             self.assertNotIn(name, env)
         self.assertEqual(env["HOME"], "/sandbox/home")
-        self.assertEqual(env["R20_OKX_ENV"], "demo")
-        self.assertEqual(env["R20_TESTING"], "1")
+        self.assertEqual(env["OKXQUANT_OKX_ENV"], "demo")
+        self.assertEqual(env["OKXQUANT_TESTING"], "1")
 
     def test_source_snapshot_excludes_runtime_files(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -74,20 +74,20 @@ class TestIsolationTests(unittest.TestCase):
             (root / ".env").write_text("SECRET=private", encoding="utf-8")
             (root / "data").mkdir()
             (root / "data" / "private.db").write_text("private", encoding="utf-8")
-            (root / "frontend" / "node_modules").mkdir()
+            (root / "okxquant_frontend" / "node_modules").mkdir()
             snapshot = Path(temporary) / "snapshot"
             snapshot.mkdir()
             with patch.object(run_tests, "ROOT", root):
                 run_tests.copy_sources(snapshot)
             self.assertFalse((snapshot / ".env").exists())
             self.assertEqual(list((snapshot / "data").iterdir()), [])
-            self.assertFalse((snapshot / "frontend" / "node_modules").exists())
+            self.assertFalse((snapshot / "okxquant_frontend" / "node_modules").exists())
             self.assertTrue((snapshot / "scripts" / "source.py").exists())
 
     def test_asgi_lifespans_do_not_start_workers_in_test_mode(self):
         from fastapi.testclient import TestClient
-        import r20_backend.app as backend
-        with patch.dict(os.environ, {"R20_TESTING": "1"}), \
+        import okxquant_backend.app as backend
+        with patch.dict(os.environ, {"OKXQUANT_TESTING": "1"}), \
              patch.object(dashboard.threading, "Thread") as thread, \
              patch.object(supervisor, "ensure_worker") as worker, \
              patch.object(backend.admin_auth, "initialize_from_legacy"):
@@ -108,11 +108,11 @@ class TestIsolationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / ".r20-test-sandbox").touch()
+            (root / ".okxquant-test-sandbox").touch()
             suite = unittest.TestSuite([CatchesProcessError()])
             output = io.StringIO()
             with patch.object(run_tests, "ROOT", root), \
-                 patch.dict(os.environ, {"R20_TEST_ROOT": str(root), "R20_TESTING": "1"}), \
+                 patch.dict(os.environ, {"OKXQUANT_TEST_ROOT": str(root), "OKXQUANT_TESTING": "1"}), \
                  patch.object(unittest.defaultTestLoader, "discover", return_value=suite), \
                  redirect_stderr(output):
                 code = run_tests.run_isolated("test_*.py", 1)
@@ -120,7 +120,7 @@ class TestIsolationTests(unittest.TestCase):
             self.assertIn("Blocked 1 unmocked external operation", output.getvalue())
 
     def test_internal_mode_refuses_non_sandbox_checkout(self):
-        with patch.dict(os.environ, {"R20_TEST_ROOT": "/not-this-checkout"}):
+        with patch.dict(os.environ, {"OKXQUANT_TEST_ROOT": "/not-this-checkout"}):
             with self.assertRaises(RuntimeError):
                 run_tests.run_isolated("test_*.py", 1)
 

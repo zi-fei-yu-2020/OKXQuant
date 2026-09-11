@@ -2,7 +2,7 @@ import importlib.util
 from pathlib import Path
 import unittest
 from scripts import trading_prompt
-from r20_backend.interceptor_manager import run_interceptor_pipeline
+from okxquant_backend.interceptor_manager import run_interceptor_pipeline
 
 
 class EntryScoreTests(unittest.TestCase):

@@ -8,7 +8,7 @@ ROOT=Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 from scripts import strategy_evidence as evidence
 from scripts.okx_runtime import selected_environment
-from r20_backend.okx_trade_service import _request
+from okxquant_backend.okx_trade_service import _request
 
 
 def collect_fills(env,*,max_pages=5):

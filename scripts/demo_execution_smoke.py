@@ -113,7 +113,7 @@ def run(inst_id, *, confirmation, max_notional=20):
               "execution_transport":"native_rest", "cli_validation":False,
               "production_entry_gateway":False, "environment":"demo", "instrument":inst_id, "started_at":time.time(),
               "max_notional_usdt":max_notional, "steps":[], "status":"running"}
-    client_id = 'r20smoke' + uuid.uuid4().hex[:20]
+    client_id = 'oqsmoke' + uuid.uuid4().hex[:16]
     order_id = None
     sent = False
     env = None
@@ -173,9 +173,9 @@ def run(inst_id, *, confirmation, max_notional=20):
 
     try:
         # All config/I/O imports remain inside run; offline tests replace every boundary.
-        from r20_backend.config import refresh_settings
+        from okxquant_backend.config import refresh_settings
         from scripts.okx_runtime import freeze_environment, unfreeze_environment, selected_environment
-        from r20_backend.okx_trade_service import _request, _create_intent, fast_close_confirmed
+        from okxquant_backend.okx_trade_service import _request, _create_intent, fast_close_confirmed
         from scripts import risk_policy, trade_lock, public_market
         from scripts.algo_reader import read_algo_orders
         refresh_settings()

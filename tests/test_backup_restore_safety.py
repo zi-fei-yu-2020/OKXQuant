@@ -53,8 +53,8 @@ class RestoreSafetyTests(unittest.TestCase):
 
     def test_all_existing_archive_scopes_restore_regular_files_only(self):
         names = ["data/state.json", "data/trading.db", "data/AI_TRADING_MEMORY.md",
-                 "scripts/job.py", "dashboard/index.html", "r20_backend/app.py",
-                 "r20_gateway/worker.py", "tests/test_example.py", "RECOVERY_GUIDE.md",
+                 "scripts/job.py", "dashboard/index.html", "okxquant_backend/app.py",
+                 "okxquant_gateway/worker.py", "tests/test_example.py", "RECOVERY_GUIDE.md",
                  "SOUL.md", "PROFILE.md", "AGENTS.md", "MEMORY.md", "README.md",
                  "requirements.txt", "pyproject.toml", "docker-compose.yml", "Dockerfile", ".gitignore"]
         self.make([member("data", b"", tarfile.DIRTYPE), *[member(n) for n in names]])
@@ -155,15 +155,15 @@ class RestoreSafetyTests(unittest.TestCase):
 
     def test_secret_auth_runtime_and_unsupported_data_are_skipped(self):
         names = [".env", ".env.production", ".git/config", ".okx/auth.json", ".bypy/auth.json",
-                 "data/.r20_secret_key", "data/r20_secrets.enc", "data/r20_admin.db", "data/r20_admin.db-wal",
+                 "data/.okxquant_secret_key", "data/okxquant_secrets.enc", "data/okxquant_admin.db", "data/okxquant_admin.db-wal",
                  "data/credentials/value.json", "data/oauth-connections/value.json", "data/session.json",
                  "data/nested/password.json", "data/private_key.txt", "data/llm_models.json", "data/llm_models.backup.json", "data/llm_providers.json",
-                 "data/.r20_gateway.lock", "data/.ai_brain_cycle.lock", "data/r20_gateway.pid",
+                 "data/.okxquant_gateway.lock", "data/.ai_brain_cycle.lock", "data/okxquant_gateway.pid",
                  "data/trading.db-wal", "data/trading.db-shm", "data/trading.db-journal", "data/unknown.bin",
                  "scripts/.env.local", "scripts/.envrc", "scripts/secret/nested.json", "scripts/auth.json", "scripts/secrets.json", "scripts/llm_models.json",
-                 "scripts/r20_admin.db", "scripts/api_key.json", "scripts/unknown.bin", "scripts/client.pem", "scripts/__pycache__/x.pyc"]
+                 "scripts/okxquant_admin.db", "scripts/api_key.json", "scripts/unknown.bin", "scripts/client.pem", "scripts/__pycache__/x.pyc"]
         # All fixtures below are synthetic: never read the checkout's credentials.
-        for name in (".env", "data/r20_admin.db", "data/llm_models.json"):
+        for name in (".env", "data/okxquant_admin.db", "data/llm_models.json"):
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"keep-synthetic")
@@ -173,13 +173,13 @@ class RestoreSafetyTests(unittest.TestCase):
         self.assertEqual(result["skipped_count"], len(names))
         for name in names:
             path = self.root / name
-            if name in {".env", "data/r20_admin.db", "data/llm_models.json"}:
+            if name in {".env", "data/okxquant_admin.db", "data/llm_models.json"}:
                 self.assertEqual(path.read_bytes(), b"keep-synthetic")
             else:
                 self.assertFalse(path.exists(), name)
 
     def test_outside_archive_scope_is_rejected(self):
-        for name in ("etc/passwd", "frontend/src/main.ts", "backups/local/file.json", "logs/trader.log"):
+        for name in ("etc/passwd", "okxquant_frontend/src/main.ts", "backups/local/file.json", "logs/trader.log"):
             with self.subTest(name=name):
                 self.rejected([member(name)])
 
@@ -315,7 +315,7 @@ class ArchiveSecretExclusionTests(unittest.TestCase):
 
     def test_default_data_scope_never_archives_inline_provider_keys(self):
         from scripts import backup_runtime as runtime
-        from r20_backend.backup_store import _default_job
+        from okxquant_backend.backup_store import _default_job
         with patch.object(runtime, "ROOT", self.root), patch.object(runtime, "BACKUPS", self.root / "backups"):
             archive, included = runtime.create_archive(_default_job(), "offline-fixture")
             self.assertIn("data", included)
@@ -326,7 +326,7 @@ class ArchiveSecretExclusionTests(unittest.TestCase):
 
     def test_empty_custom_excludes_cannot_send_keys_to_local_or_remote_delivery(self):
         from scripts import backup_runtime as runtime
-        from r20_backend.backup_store import _default_job
+        from okxquant_backend.backup_store import _default_job
         job = _default_job()
         job.update({"exclude": [], "pre_backup_sync": False, "cleanup_local_on_success": False,
                     "targets": [{"id": kind, "type": kind, "enabled": True} for kind in ("local", "s3", "oss", "webdav", "baidu")]})

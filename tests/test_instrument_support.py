@@ -10,9 +10,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import instrument_support as support
 import ai_factor_trader as trader
 import ai_brain_trader as brain
-import r20_backend.app as app_module
+import okxquant_backend.app as app_module
 from fastapi.testclient import TestClient
-from r20_backend.admin_auth import AdminAuthStore
+from okxquant_backend.admin_auth import AdminAuthStore
 
 POOL = [{'instId': 'BTC-USDT-SWAP', 'name': 'BTC'}, {'instId': 'WLD-USDT-SWAP', 'name': 'WLD'}]
 CATALOG = {'code': '0', 'data': [{'instId': 'BTC-USDT-SWAP', 'state': 'live', 'settleCcy': 'USDT'}]}
@@ -115,7 +115,7 @@ class InstrumentSupportTests(unittest.TestCase):
             write.assert_not_called(); ticker.assert_not_called()
 
     def test_supported_order_keeps_existing_protected_order_payload(self):
-        with patch.object(trader.market, '_selected', return_value=SimpleNamespace(mode='live', simulated=False, identity='test-live')), patch.object(trader.entry_gateway, 'prepare', return_value=({'size': 1, 'entry': 100, 'stop': 90, 'take_profit': 120}, 'r20test')), patch.object(trader.support, 'opening_status', return_value={'can_open': True}), patch.object(trader, 'okx_private_command', side_effect=lambda x:x), patch.object(trader, 'run_cmd_result', return_value={'ok': True, 'data': [{'ordId': '123'}]}) as write:
+        with patch.object(trader.market, '_selected', return_value=SimpleNamespace(mode='live', simulated=False, identity='test-live')), patch.object(trader.entry_gateway, 'prepare', return_value=({'size': 1, 'entry': 100, 'stop': 90, 'take_profit': 120}, 'okxquanttest')), patch.object(trader.support, 'opening_status', return_value={'can_open': True}), patch.object(trader, 'okx_private_command', side_effect=lambda x:x), patch.object(trader, 'run_cmd_result', return_value={'ok': True, 'data': [{'ordId': '123'}]}) as write:
             self.assertEqual(trader.submit_protected_limit_order('BTC-USDT-SWAP', 'buy', 'long', 1, 100, 120, 90), (True, '123'))
         command = write.call_args.args[0]
         for part in ('--ordType limit', '--tpTriggerPx 120', '--slTriggerPx 90', '--sz 1'):
@@ -132,7 +132,7 @@ class InstrumentSupportApiTests(unittest.TestCase):
         p=patch.object(app_module, 'admin_auth', self.auth); p.start(); self.addCleanup(p.stop)
         self.client = TestClient(app_module.app)
         login=self.client.post('/api/v1/admin/auth/login', json={'username':'admin','password':'InitialAdmin123456'})
-        self.headers={'X-R20-Session':login.json()['session_token']}
+        self.headers={'X-OKXQuant-Session':login.json()['session_token']}
 
     def test_preview_is_authenticated_and_does_not_change_environment(self):
         self.assertEqual(self.client.get('/api/v1/admin/instruments/support').status_code, 401)

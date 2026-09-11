@@ -70,7 +70,7 @@ class DashboardRefreshTests(unittest.TestCase):
         self.assertFalse(self.lock.locked())
 
     def test_async_refresh_is_singleflight_before_thread_start(self):
-        with patch.dict('os.environ', {'R20_TESTING': '0'}), patch.object(dashboard.threading, 'Thread') as thread:
+        with patch.dict('os.environ', {'OKXQUANT_TESTING': '0'}), patch.object(dashboard.threading, 'Thread') as thread:
             try:
                 self.assertTrue(dashboard.request_cache_refresh())
                 self.assertFalse(dashboard.request_cache_refresh())

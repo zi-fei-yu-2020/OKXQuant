@@ -1,0 +1,20 @@
+[Unit]
+Description=OKXQuant Standalone Backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=okxquant
+Group=okxquant
+Environment=HOME=/home/okxquant
+Environment=PATH=/opt/OKXQuant/.venv/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/opt/OKXQuant
+EnvironmentFile=/opt/OKXQuant/.env
+ExecStart=/usr/bin/env python3 -m uvicorn okxquant_backend.app:app --host 0.0.0.0 --port 8080
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

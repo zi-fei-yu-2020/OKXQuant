@@ -40,7 +40,7 @@ def order_source(order,history,orders,algos,executions,scope):
             'label':'来源证据不足','tier':'unknown','evidence':'no_source_metadata_or_execution_link'}
     if order.get('category') in ('full_liquidation','partial_liquidation','adl'):
         return {**result,'source':'exchange_risk','label':'交易所强制结算','tier':'verified','evidence':'exchange_category'}
-    if re.fullmatch(r'r20close\d{10,13}',str(order.get('clOrdId') or '')):
+    if re.fullmatch(r'okxquantclose\d{10,13}',str(order.get('clOrdId') or '')):
         return {**result,'source':'manual_admin','label':'手动平仓（后台操作）','tier':'verified','evidence':'reserved_admin_client_id'}
     linked=[]
     for algo in algos:

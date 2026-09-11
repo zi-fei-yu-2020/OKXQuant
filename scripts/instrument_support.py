@@ -78,7 +78,7 @@ def refresh_catalog(environment, *, force=False):
 
 
 def _background(environment):
-    if os.getenv("R20_TESTING") == "1":
+    if os.getenv("OKXQUANT_TESTING") == "1":
         return
     with _WORKER_LOCK:
         if environment in _WORKERS or time.monotonic() < _FAILED_UNTIL.get(environment, 0):

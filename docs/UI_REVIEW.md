@@ -4,13 +4,13 @@
 
 本轮覆盖监控前台、管理登录、16 个管理页面及公共反馈交互。保留 Vue Router 路由、Pinia 数据流、后台 API 权限验证、交易环境确认、平仓密码与确认短语。没有调整交易策略或风控规则。
 
-本地原服务在检查时未监听 5173/8080，因此使用独立临时后端预览：空运行目录、独立测试账户、`R20_TESTING=1`、不启动 Gateway。没有使用真实账户密码进行自动化测试，也没有把用户提供的密码写入仓库。
+本地原服务在检查时未监听 5173/8080，因此使用独立临时后端预览：空运行目录、独立测试账户、`OKXQUANT_TESTING=1`、不启动 Gateway。没有使用真实账户密码进行自动化测试，也没有把用户提供的密码写入仓库。
 
 ## 发现的问题与处理
 
 | 问题 | 涉及位置 | 本轮处理 |
 | --- | --- | --- |
-| 深浅主题依赖大量硬编码深色值和全局 `!important` 补丁，浅色下部分文字不可读 | `frontend/src/style.css`、各管理页面 | 重建语义色彩变量，采用浅色 SaaS 默认主题，保留用户保存的深色偏好；统一背景、边框、状态色与焦点样式 |
+| 深浅主题依赖大量硬编码深色值和全局 `!important` 补丁，浅色下部分文字不可读 | `okxquant_frontend/src/style.css`、各管理页面 | 重建语义色彩变量，采用浅色 SaaS 默认主题，保留用户保存的深色偏好；统一背景、边框、状态色与焦点样式 |
 | 后台移动端和桌面端重复维护导航，导航、标题和页面区域层级不一致 | `AdminLayout.vue` | 导航配置集中到 `config/navigation.ts`；复用 `SidebarNav`；统一侧栏、顶栏、页面标题与内容容器 |
 | 标题、字段与说明大量使用 9–11px 等宽字体，密度不合理 | 管理页面、监控导航 | 调整字号与间距，UI 标签使用无衬线字体，数值保留等宽数字特性；日志和源码继续使用等宽字体 |
 | 空账户被展示为 0 收益且带硬编码实盘标识 | `TopHudRibbon.vue`、`DashboardView.vue` | 未就绪值显示“—”，状态区分等待数据、快照过期和连接异常，不用模拟收益伪装实盘数据 |
@@ -21,12 +21,12 @@
 | 部分复制操作在写入剪贴板之前就显示成功 | 因子详情、实时提示词、文档页 | 统一 `useClipboard`，等待实际结果后反馈，权限失败时不伪报成功 |
 | 部分加载失败只打印控制台，页面表现为空白 | 概览、版本、模型、审计、决策页面 | 补充可见错误通知及适用的重试空状态；正常的表单校验保留在字段附近 |
 | 版本检查调用不存在的接口 | `AboutPage.vue` | 改为后端已提供的 `GET /api/v1/admin/update-status`，仍不直接执行更新 |
-| 移动视口禁止用户缩放 | `frontend/index.html` | 移除 `user-scalable=no` 和缩放上限 |
+| 移动视口禁止用户缩放 | `okxquant_frontend/index.html` | 移除 `user-scalable=no` 和缩放上限 |
 | 平板宽度下浮动操作可能与新底部导航重叠 | `FloatingActions.vue` | 对齐导航与浮动操作的响应式断点 |
 
 ## 公共组件与组合函数
 
-公共组件位于 `frontend/src/components/ui/`：
+公共组件位于 `okxquant_frontend/src/components/ui/`：
 
 - `AppButton`：按钮层级、忙碌与禁用状态。
 - `AppCard`：页面和数据卡片，共用容器而不重写内部业务逻辑。
@@ -39,7 +39,7 @@
 - `SidebarNav`：同一套桌面与移动导航实现。
 - `ToastViewport`、`FeedbackHost`：全局和弹窗内反馈。
 
-组合函数位于 `frontend/src/composables/`：
+组合函数位于 `okxquant_frontend/src/composables/`：
 
 - `useFeedback`：兼容现有业务处理函数，统一通知呈现。
 - `useDialogs`：异步确认/输入、取消语义和排队处理。
@@ -52,7 +52,7 @@
 ### 类型、构建与回归
 
 ```bash
-cd frontend
+cd okxquant_frontend
 npm run test:unit
 npm run typecheck
 npm run build
@@ -72,8 +72,8 @@ python scripts/run_tests.py
 
 ```bash
 # 凭证从环境读取，不写进脚本、截图或报告
-export R20_UI_TEST_USERNAME=admin
-# 在自己的终端设置临时预览账户的 R20_UI_TEST_PASSWORD
+export OKXQUANT_UI_TEST_USERNAME=admin
+# 在自己的终端设置临时预览账户的 OKXQUANT_UI_TEST_PASSWORD
 
 # WSL 终端 1：启动后保持运行；Ctrl+C 退出并清理临时数据
 python scripts/preview_ui.py --port 8081
@@ -96,7 +96,7 @@ python scripts/check_ui.py --base-url http://127.0.0.1:8081 --fixtures --interac
 
 浏览器测试会拦截登录以外的写请求；模拟校验错误由浏览器直接返回，不会创建账户。`--fixtures` 的金额、持仓和信号只是布局夹具，**不是实盘数据或交易建议**。
 
-截图和 JSON 报告保存到 `frontend/.ui-artifacts/`，已加入忽略规则，不提交账户会话或截图到 Git。系统级 Python 测试也不会复制这些产物。
+截图和 JSON 报告保存到 `okxquant_frontend/.ui-artifacts/`，已加入忽略规则，不提交账户会话或截图到 Git。系统级 Python 测试也不会复制这些产物。
 
 ## 本轮验证结果
 
@@ -106,7 +106,7 @@ python scripts/check_ui.py --base-url http://127.0.0.1:8081 --fixtures --interac
 - 最终浏览器检查：22 个路由 × 2 套主题 × 5 个视口，共 220 组布局；整页横向溢出 0，未捕获 JavaScript 错误 0，未命名图标按钮 0。
 - 5 组关键弹窗交互断言通过，测试没有向后端提交未预期的写请求。
 - 首轮另检查了 88 组空数据布局；最终一轮使用浏览器夹具覆盖有持仓、挂单和长金额的前台状态。
-- 最终截图与报告：`frontend/.ui-artifacts/final/`。这些产物不会提交到 Git。
+- 最终截图与报告：`okxquant_frontend/.ui-artifacts/final/`。这些产物不会提交到 Git。
 
 ## 未覆盖的事项
 

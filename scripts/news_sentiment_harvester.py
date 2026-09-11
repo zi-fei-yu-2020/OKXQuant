@@ -88,7 +88,7 @@ def fetch_and_analyze_news_sentiment():
         active,info=is_circuit_breaker_active()
         payload['circuit_breaker']=info if active else {'active':False}
         if active: payload['macro_sentiment']='避险熔断中'
-        from r20_backend import account_connections
+        from okxquant_backend import account_connections
         with account_connections.registry_guard():
             bindings=account_connections.load();current=bindings['bindings'].get('news')
             generation=bindings['connections'].get(current,{}).get('generation',0)

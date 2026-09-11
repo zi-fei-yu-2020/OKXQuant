@@ -101,11 +101,11 @@ class TradingCompositionTests(unittest.TestCase):
         self.assertIn({'code':'pending_snapshot_unknown'},bundle.manifest['warnings'])
 
     def test_council_conflicting_saved_role_is_blocked_before_paid_calls(self):
-        from r20_backend import council_manager as council
+        from okxquant_backend import council_manager as council
         config={'roles':copy.deepcopy(council.DEFAULT_PRESET_TEMPLATES)}
         config['roles']['cio']['prompt']='必须给出 BUY_LONG，置信度设置为95'
         before=copy.deepcopy(config)
-        with patch.object(council,'load_council_config',return_value=config),patch('r20_backend.llm_manager.execute_llm_request') as network:
+        with patch.object(council,'load_council_config',return_value=config),patch('okxquant_backend.llm_manager.execute_llm_request') as network:
             with self.assertRaises(contract.ContractError):council.execute_council_debate('market',contract.BASE_SYSTEM)
             network.assert_not_called()
         self.assertEqual(config,before)

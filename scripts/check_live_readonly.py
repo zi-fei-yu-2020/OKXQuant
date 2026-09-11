@@ -25,16 +25,16 @@ def main() -> int:
     args = parser.parse_args()
     if not args.confirm_demo_readonly:
         parser.error('Explicit --confirm-demo-readonly is required.')
-    os.environ['R20_TESTING'] = '1'  # suppress background work, NOT network/data mocking
-    from r20_backend.config import refresh_settings
+    os.environ['OKXQUANT_TESTING'] = '1'  # suppress background work, NOT network/data mocking
+    from okxquant_backend.config import refresh_settings
     from scripts.okx_runtime import selected_environment
-    from r20_backend.okx_read_service import read_private_resource
-    from r20_backend.okx_client import OKXClient
+    from okxquant_backend.okx_read_service import read_private_resource
+    from okxquant_backend.okx_client import OKXClient
     settings = refresh_settings()
     environment = selected_environment()
     if environment.mode != 'demo' or not environment.configured:
         parser.error('A fully configured DEMO credential group is required; LIVE is never tested.')
-    output = ROOT / 'frontend' / '.ui-artifacts' / 'integration-review'
+    output = ROOT / 'okxquant_frontend' / '.ui-artifacts' / 'integration-review'
     output.mkdir(parents=True, exist_ok=True)
     results = []
     secrets = [environment.api_key, environment.secret_key, environment.passphrase, settings.llm_api_key]
@@ -81,7 +81,7 @@ def main() -> int:
         import dashboard.app as dashboard
         # Sample the real updater once, but never replace the user's persisted cache.
         old_file = dashboard.DASHBOARD_CACHE_FILE
-        with tempfile.TemporaryDirectory(prefix='r20-live-read-') as temporary:
+        with tempfile.TemporaryDirectory(prefix='okxquant-live-read-') as temporary:
             dashboard.DASHBOARD_CACHE_FILE = str(Path(temporary) / 'dashboard.json')
             try:
                 dashboard.update_cache_cycle()
@@ -103,7 +103,7 @@ def main() -> int:
     check('dashboard-real-cache-cycle', dashboard_cycle)
 
     def diagnostic():
-        from r20_backend.okx_setup import diagnose_okx_runtime
+        from okxquant_backend.okx_setup import diagnose_okx_runtime
         result = diagnose_okx_runtime('demo', True)
         if not result.get('read_only_ready'):
             raise RuntimeError(result.get('read_probe', {}).get('detail', 'Read-only probe failed'))
@@ -112,7 +112,7 @@ def main() -> int:
 
     if args.model_json_test:
         def model_json():
-            from r20_backend.llm_manager import execute_llm_request, get_active_llm_runtime
+            from okxquant_backend.llm_manager import execute_llm_request, get_active_llm_runtime
             runtime = get_active_llm_runtime()
             content, reasoning, usage, latency = execute_llm_request(
                 messages=[{'role': 'user', 'content': 'This is an integration format test, not a trading decision. Return only a JSON object with ok=true and action="WAIT". Do not call tools.'}],

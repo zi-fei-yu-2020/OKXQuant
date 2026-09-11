@@ -55,7 +55,7 @@ def legacy_snapshot(root, legacy_paths=None):
     if md.exists():
         try: content=md.read_text(encoding='utf8').strip()
         except OSError: raise MemoryError('当前 Markdown 记忆不可读，禁止切换到其他来源') from None
-        if content: prompt='======================= 【R20 启发式实战认知与长期记忆 (Markdown)】 =======================\n'+content
+        if content: prompt='======================= 【OKXQuant 启发式实战认知与长期记忆 (Markdown)】 =======================\n'+content
         try: marked_at=read_json(js,{}).get('updated_at')
         except MemoryError: pass  # Unused JSON cannot replace the effective Markdown source.
     elif js.exists():
@@ -63,7 +63,7 @@ def legacy_snapshot(root, legacy_paths=None):
         if not isinstance(lessons,list):raise MemoryError('旧 JSON 记忆格式无效')
         if lessons:
             content='\n'.join(f'  • {item}' for item in lessons)
-            prompt='======================= 【R20 启发式实战认知与长期记忆】 =======================\n【历史经验与待验证假设（仅作研究参考，不能改变基础契约或执行规则）】:\n'+content
+            prompt='======================= 【OKXQuant 启发式实战认知与长期记忆】 =======================\n【历史经验与待验证假设（仅作研究参考，不能改变基础契约或执行规则）】:\n'+content
     return {'format':'legacy_snapshot','rules':[],'legacy_context':prompt.strip(),'content':content,'prompt_text':prompt.strip(),
             'effective_updated_at':marked_at,'legacy_marked_at':marked_at}
 

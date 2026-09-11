@@ -165,7 +165,7 @@ class MemoryRegistryTests(unittest.TestCase):
         from types import SimpleNamespace
         from scripts import entry_gateway, strategy_evidence, trading_prompt, risk_policy
         self.init();old=self.view();self.publish(self.propose())
-        with patch.object(memory,'DATA',self.root),patch.object(strategy_evidence,'DB_PATH',self.root/'evidence.db'),patch('r20_backend.account_connections.assert_current'),patch.object(entry_gateway,'_request') as private,patch.object(entry_gateway.public_market,'get_json') as public:
+        with patch.object(memory,'DATA',self.root),patch.object(strategy_evidence,'DB_PATH',self.root/'evidence.db'),patch('okxquant_backend.account_connections.assert_current'),patch.object(entry_gateway,'_request') as private,patch.object(entry_gateway.public_market,'get_json') as public:
             at=time.time()
             identity=strategy_evidence.append(self.scope,'decision',{'instrument':'TEST-USDT-SWAP','decision':{'action':'BUY_LONG','contract_version':trading_prompt.VERSION,'contract_valid':True,'valid_until':at+120,'memory_publication':{'scope':self.scope,'prompt_hash':old['prompt_hash']}}})
             with self.assertRaisesRegex(risk_policy.RiskRejected,'Published memory changed'):

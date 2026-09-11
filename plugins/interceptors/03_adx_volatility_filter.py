@@ -1,10 +1,10 @@
 """
-R20 物理拦截插件规范
+OKXQuant 物理拦截插件规范
 ====================
 id: 03_adx_volatility_filter
 name: 1H ADX 趋势强度门禁
 version: 1.1.0
-author: R20 Official
+author: OKXQuant Official
 description: 低ADX的普通信号保持拦截；已收盘触发且价格与成本可重建的程序计划可继续最终风控，ADX不是胜率或单独的开仓授权。
 tags: 震荡过滤, ADX, 官方预设
 """

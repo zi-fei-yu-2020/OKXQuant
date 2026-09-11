@@ -207,7 +207,7 @@ class DecisionReportingTests(unittest.TestCase):
         self.assertIn('不完整1(BTC)',format_summary(summary))
 
     def test_incomplete_macro_is_not_green_ready(self):
-        from r20_backend.macro_status import project
+        from okxquant_backend.macro_status import project
         result=project({'BTC':{'macro_assessment':'text','timestamp':100}},[],validation={'status':'incomplete'},validation_at=101,now=110)
         self.assertEqual(result['status'],'incomplete')
 

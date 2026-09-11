@@ -1,10 +1,10 @@
 """
-R20 物理拦截插件规范
+OKXQuant 物理拦截插件规范
 ====================
 id: 02_confidence_gatekeeper
 name: 证据评分格式核验（非开仓分数线）
 version: 2.0.0
-author: R20 Official
+author: OKXQuant Official
 description: confidence 仅为未校准的研究评分，不是胜率。核验数值有效性，不再按 75/80 分拒绝候选；数据、证据契约、方向、成本后盈亏比和最终风险预算仍独立校验。
 tags: 证据评分, 非概率, 官方预设
 """

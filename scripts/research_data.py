@@ -36,7 +36,7 @@ class PublicCapture:
         if cache.exists():return json.loads(cache.read_text(encoding='utf8'))
         time.sleep(max(0,self.interval-(time.monotonic()-self.last)))
         url='https://www.okx.com'+path+'?'+urllib.parse.urlencode(params)
-        req=urllib.request.Request(url,headers={'User-Agent':'R20-Public-Research/1'},method='GET')
+        req=urllib.request.Request(url,headers={'User-Agent':'OKXQuant-Public-Research/1'},method='GET')
         self.last=time.monotonic();self.requests+=1
         with urllib.request.urlopen(req,timeout=20) as response:payload=json.load(response)
         if str(payload.get('code'))!='0' or not isinstance(payload.get('data'),list):raise ValueError('Public source unavailable; no synthetic fallback')

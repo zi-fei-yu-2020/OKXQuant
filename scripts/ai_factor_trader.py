@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-R20 High-Alpha Quantitative Multi-Factor Trading Matrix & Execution Engine (R20 Quantum Trader v6.8.1)
+OKXQuant High-Alpha Quantitative Multi-Factor Trading Matrix & Execution Engine (OKXQuant v0.1.0)
 Architecture:
 1. Multi-Dimensional Quant Factor Sub-Engine:
    - Trend Momentum: EMA Slope (9/21/55), Multi-Timeframe Alignment (15M, 1H, 4H)
@@ -161,7 +161,7 @@ def is_tradfi_market_liquid(asset_type: str) -> bool:
 def run_cmd_result(cmd, timeout=15):
     """Return process metadata; callers must inspect returncode before mutating local state."""
     try:
-        from r20_backend.account_connections import assert_current
+        from okxquant_backend.account_connections import assert_current
         assert_current(market._selected())
         with algo_reader.command_barrier(cmd, market._selected()):
             res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
@@ -1633,7 +1633,7 @@ def execute_ai_position_management(real_pos_dict, trackers, timestamp_full, exec
                 executed_actions.append(f"[{name}] All stop segments read-back confirmed; weakest protection {actual}: {reason}")
 
 # =============================================================================
-# 🧠 R20 Quantum Trader v6.8.1 Multi-Factor Scoring & Strategy Setup Classifier
+# 🧠 OKXQuant v0.1.0 Multi-Factor Scoring & Strategy Setup Classifier
 # =============================================================================
 def evaluate_asset_signal(f):
     """

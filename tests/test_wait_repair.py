@@ -155,7 +155,7 @@ class RepairTests(unittest.TestCase):
 
 class LLMBudgetTests(unittest.TestCase):
     def test_single_attempt_is_forwarded_to_transport_without_changing_default_calls(self):
-        from r20_backend import llm_manager
+        from okxquant_backend import llm_manager
         payload={'choices':[{'message':{'content':'{}'}}],'usage':{}}
         with patch.object(llm_manager,'get_active_llm_runtime',return_value={}),patch.object(llm_manager,'request_json',return_value=(payload,200,1,1)) as request:
             args={'messages':[{'role':'user','content':'fixture'}],'model':'test','base_url':'https://example.invalid/v1','api_key':'','api_format':'openai_chat','timeout':20}

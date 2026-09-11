@@ -6,7 +6,7 @@ from scripts import risk_policy as risk
 from scripts import capital_pool
 from scripts.algo_reader import read_algo_orders
 from scripts import public_market
-from r20_backend.okx_trade_service import _request
+from okxquant_backend.okx_trade_service import _request
 
 
 def reconcile_intents(env):
@@ -77,7 +77,7 @@ def prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bud
 
 
 def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, budget, decision_id, decision_at, horizon='swing'):
-    from r20_backend.account_connections import assert_current
+    from okxquant_backend.account_connections import assert_current
     assert_current(env)
     if not env.configured: raise risk.RiskRejected('Final risk preflight requires current account static credentials')
     age=time.time()-risk.number(decision_at,positive=True)

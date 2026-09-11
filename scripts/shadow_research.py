@@ -135,7 +135,7 @@ def main():
         if not args.allow_llm_cost:
             print(json.dumps({'captured':str(output),'model_calls':0,'executed_orders':0}));return
     if not args.allow_llm_cost:parser.error('Explicit --allow-llm-cost is required; four isolated model calls per cohort')
-    from r20_backend.llm_manager import get_active_llm_runtime,execute_llm_request
+    from okxquant_backend.llm_manager import get_active_llm_runtime,execute_llm_request
     runtime=get_active_llm_runtime()
     def call(system,payload):
         text,_,_,_=execute_llm_request(messages=[{'role':'system','content':system},{'role':'user','content':evidence.canonical(payload)}],

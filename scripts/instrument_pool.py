@@ -1,4 +1,4 @@
-"""Shared, validated R20 trading universe configuration."""
+"""Shared, validated OKXQuant trading universe configuration."""
 from __future__ import annotations
 import json
 import os

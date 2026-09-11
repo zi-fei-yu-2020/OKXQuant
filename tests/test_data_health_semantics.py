@@ -6,7 +6,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
-from r20_backend import app
+from okxquant_backend import app
 
 class DataHealthSemanticsTests(unittest.TestCase):
     def test_freshly_written_unconfigured_news_is_not_healthy(self):

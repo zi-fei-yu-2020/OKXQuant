@@ -40,7 +40,7 @@
 - 前端单元回归 14 项通过，严格类型检查与生产构建通过。
 - Windows 只读提示词/锁边界回归 2 项通过；完整后端隔离回归 183 项通过。
 
-报告和截图：`frontend/.ui-artifacts/windows-review/final/`。
+报告和截图：`okxquant_frontend/.ui-artifacts/windows-review/final/`。
 检查辅助代码：`scripts/desktop_ui_review.py`、`scripts/ui_browser_audit.js`。
 
 ## 未宣称覆盖

@@ -5,11 +5,11 @@
 ## 方案 A：精炼爆款单推（极简纯文字版 · 直接配系统大图）
 
 配图链接：
-https://raw.githubusercontent.com/555cute/r20-quantum-trader/main/docs/images/dashboard_trading.png
+https://raw.githubusercontent.com/zi-fei-yu-2020/OKXQuant/main/docs/images/dashboard_trading.png
 
 推文正文（直接复制发推）：
 ```text
-正式开源 R20 Quantum Trader v7.2.1。
+正式开源 OKXQuant v0.1.0。
 面向 OKX 永续合约的 LLM 原生量化交易终端。
 
 我们解决了大模型实盘交易的两个核心问题：
@@ -22,8 +22,8 @@ https://raw.githubusercontent.com/555cute/r20-quantum-trader/main/docs/images/da
 - 白盒自进化认知中枢（心法单项启停，突发极端行情一键回滚基准）
 - Docker Compose 一键启动，172 项自动化单测全通
 
-开源代码：https://github.com/555cute/r20-quantum-trader
-在线大屏：https://www.r20.cn
+开源代码：https://github.com/zi-fei-yu-2020/OKXQuant
+在线大屏：https://trade.112102.xyz
 
 #Crypto #Quant #Bitcoin #OKX #OpenSource
 ```
@@ -37,7 +37,7 @@ https://raw.githubusercontent.com/555cute/r20-quantum-trader/main/docs/images/da
 为什么传统固定公式的网格机器人在单边市容易爆仓？
 为什么把交易决策完全交给大模型，又容易在插针行情后产生“因噎废食”的过度防御？
 
-今天开源 R20 Quantum Trader v7.2.1，一套面向实盘的 LLM 原生加密量化终端。
+今天开源 OKXQuant v0.1.0，一套面向实盘的 LLM 原生加密量化终端。
 以下是我们对上述问题的工程解法：
 ```
 
@@ -45,7 +45,7 @@ https://raw.githubusercontent.com/555cute/r20-quantum-trader/main/docs/images/da
 ```text
 2/4 大模型自进化是一把双刃剑：一旦遭遇黑天鹅爆拉或瞬间插针，LLM 很容易在复盘时得出“永远不要做多”这种严重带偏未来行情的结论。
 
-R20 v7.2.1 引入 Evolution Shield 防污染护栏：
+OKXQuant v0.1.0 引入 Evolution Shield 防污染护栏：
 - 宪法红线审查：硬性阻断极端多空偏见与违规扩大止损
 - 离群噪点过滤：拒绝单笔偶发事件归因
 - 7至14天敏锐半衰期，支持一键安全回滚黄金基准心法
@@ -67,8 +67,8 @@ R20 v7.2.1 引入 Evolution Shield 防污染护栏：
 - docker compose up -d 一键容器化部署
 - 172 项全栈自动化测试全量通过，无遗留历史技术债
 
-项目主页：https://github.com/555cute/r20-quantum-trader
-在线体验：https://www.r20.cn
+项目主页：https://github.com/zi-fei-yu-2020/OKXQuant
+在线体验：https://trade.112102.xyz
 
 #Quant #DeFi #Ethereum #BTC
 ```
@@ -78,7 +78,7 @@ R20 v7.2.1 引入 Evolution Shield 防污染护栏：
 ## 方案 C：英文国际版（极简干练 · 面向海外开发者）
 
 ```text
-Announcing R20 Quantum Trader v7.2.1.
+Announcing OKXQuant v0.1.0.
 An institutional-grade, LLM-native algorithmic trading terminal for OKX Perpetual Swaps.
 
 Solving Cognitive Poisoning during flash crashes:
@@ -87,8 +87,8 @@ Solving Cognitive Poisoning during flash crashes:
 - Asymmetric Trend Framework: 2.0x ATR noise-resistant SL & 0.8R breakeven ratchet.
 - Production Docker Compose & 172/172 passed test suite.
 
-GitHub: https://github.com/555cute/r20-quantum-trader
-Live Demo: https://www.r20.cn
+GitHub: https://github.com/zi-fei-yu-2020/OKXQuant
+Live Demo: https://trade.112102.xyz
 
 #Crypto #Quant #Bitcoin #AI #TradingBot #OpenSource #OKX
 ```

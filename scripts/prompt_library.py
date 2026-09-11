@@ -28,7 +28,7 @@ TEMPLATE_VARIABLES_METADATA = [
         "label": "自进化实战心法",
         "category": "自进化",
         "description": "注入每日复盘根据历史平仓台账提炼的核心实战心法、避坑指南与痛点归因",
-        "sample": "# R20 AI 交易大脑长期记忆与启发式心法\n1. [2026-09-04] 4H主升浪中回调即是做多机会，严禁盲目摸顶开空...",
+        "sample": "# OKXQuant AI 交易大脑长期记忆与启发式心法\n1. [2026-09-04] 4H主升浪中回调即是做多机会，严禁盲目摸顶开空...",
     },
     {
         "key": "market_matrix",
@@ -76,8 +76,8 @@ TEMPLATE_VARIABLES_METADATA = [
         "key": "strategy_version",
         "label": "系统版本号",
         "category": "系统环境",
-        "description": "当前 R20 Quantum Trader 交易引擎版本",
-        "sample": "6.8.1",
+        "description": "当前 OKXQuant 交易引擎版本",
+        "sample": "0.1.0",
     },
     {
         "key": "timezone",
@@ -443,11 +443,11 @@ def rollback_profile(profile_id: str, revision_id: str) -> dict[str, Any]:
 
 def export_profile(profile_id: str) -> dict[str, Any]:
     profile = get_profile(profile_id)
-    return {"format": "r20-prompt-profile", "version": 3, "exported_at": _now(), "profile": {k: profile.get(k) for k in ("name", "description", "editor_mode", "pipelines", "simple_policy", "execution_profile", *TEMPLATE_KEYS)}}
+    return {"format": "okxquant-prompt-profile", "version": 3, "exported_at": _now(), "profile": {k: profile.get(k) for k in ("name", "description", "editor_mode", "pipelines", "simple_policy", "execution_profile", *TEMPLATE_KEYS)}}
 
 
 def import_profile(payload: dict[str, Any], name_override: str = "") -> dict[str, Any]:
-    if payload.get("format") != "r20-prompt-profile" or not isinstance(payload.get("profile"), dict): raise ValueError("无效的 R20 提示词方案文件")
+    if payload.get("format") != "okxquant-prompt-profile" or not isinstance(payload.get("profile"), dict): raise ValueError("无效的 OKXQuant 提示词方案文件")
     source = payload["profile"]
     binding=source.get('execution_profile') or 'standard'
     if binding not in ('standard','small300'):raise ValueError('Unknown imported execution preset')
@@ -497,7 +497,7 @@ def _variable_context(profile_name: str = "") -> dict[str, str]:
         pass
 
     ctx = {
-        "strategy_version": os.getenv("R20_VERSION", "6.8.1"),
+        "strategy_version": os.getenv("OKXQUANT_VERSION", "0.1.0"),
         "timezone": "Asia/Shanghai",
         "active_instruments": instruments,
         "profile_name": profile_name,
@@ -510,7 +510,7 @@ def _variable_context(profile_name: str = "") -> dict[str, str]:
         "market_matrix": "【六币种原生行情、技术指标与筹码矩阵已就绪】",
     }
 
-    # Load durable R20 Markdown trading memory if present
+    # Load durable OKXQuant Markdown trading memory if present
     ai_mem_md = ROOT / "data" / "AI_TRADING_MEMORY.md"
     if ai_mem_md.exists():
         try:

@@ -75,7 +75,7 @@ def record_decisions(scope, cache, packages, model, prompt_hash, as_of):
     for inst, row in cache.items():
         payload = {'schema':1,'model':model,'prompt_hash':prompt_hash,'as_of_ms':int(row.get('data_as_of',as_of)*1000),'generated_at_ms':int(as_of*1000),
                    'instrument':inst,'position_basis':row.get('position_basis',{}),'decision':row.get('decision',{}),'features':by_id.get(inst,{}),
-                   'strategy_version':os.getenv('R20_BUILD_COMMIT','local-risk-v2'),'counterfactual':False}
+                   'strategy_version':os.getenv('OKXQUANT_BUILD_COMMIT','local-risk-v2'),'counterfactual':False}
         from scripts.execution_profiles import runtime as execution_runtime
         payload['execution_profile_signature']=row.get('execution_profile_signature') or execution_runtime()['signature']
         from scripts.okx_runtime import selected_environment
@@ -87,7 +87,7 @@ def record_decisions(scope, cache, packages, model, prompt_hash, as_of):
 def begin_intent(scope, decision_id, inst_id, payload):
     """Commit before sending exposure. Duplicate/uncertain decisions cannot be resent."""
     if not decision_id: raise ValueError('New exposure requires a durable decision ID')
-    identity = 'r20' + uuid.uuid4().hex[:28]
+    identity = 'okxquant' + uuid.uuid4().hex[:28]
     with connection() as db:
         db.execute('INSERT INTO intents VALUES (?,?,?,?,?,?,?)',
                    (identity,scope,decision_id,inst_id,'unknown',time.time(),canonical(_scrub(payload))))

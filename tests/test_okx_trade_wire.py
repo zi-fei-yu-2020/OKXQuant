@@ -6,7 +6,7 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 from scripts.okx_runtime import OKXEnvironment
-from r20_backend.okx_trade_service import _request
+from okxquant_backend.okx_trade_service import _request
 
 
 class OKXTradeWireTests(unittest.TestCase):
@@ -22,7 +22,7 @@ class OKXTradeWireTests(unittest.TestCase):
     def test_batch_algo_cancel_signs_exact_array_and_demo_header(self):
         stamp = '2026-09-05T00:00:00.000Z'
         payload = [{'instId': 'BTC-USDT-SWAP', 'algoId': 'test-algo'}]
-        with patch('r20_backend.okx_trade_service._timestamp', return_value=stamp), patch('urllib.request.urlopen', return_value=self.response({'code': '0', 'data': [{'sCode': '0', 'algoId': 'test-algo'}]})) as send:
+        with patch('okxquant_backend.okx_trade_service._timestamp', return_value=stamp), patch('urllib.request.urlopen', return_value=self.response({'code': '0', 'data': [{'sCode': '0', 'algoId': 'test-algo'}]})) as send:
             _request('POST', '/api/v5/trade/cancel-algos', payload, self.env)
         request = send.call_args.args[0]
         self.assertEqual(json.loads(request.data), payload)

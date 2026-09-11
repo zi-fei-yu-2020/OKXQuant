@@ -8,8 +8,8 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from r20_backend import account_connections as center, connection_transport as transport
-from r20_gateway import secrets as vault
+from okxquant_backend import account_connections as center, connection_transport as transport
+from okxquant_gateway import secrets as vault
 from scripts import ledger_monitor, strategy_evidence, trade_lock, okx_runtime, news_connection
 
 
@@ -304,7 +304,7 @@ class ApiTests(AccountFixture):
     def test_account_routes_require_superadmin_and_never_return_keys(self):
         from fastapi import FastAPI,HTTPException
         from fastapi.testclient import TestClient
-        from r20_backend.account_routes import install
+        from okxquant_backend.account_routes import install
         app=FastAPI()
         def require(session):
             if session!='admin':raise HTTPException(status_code=403,detail='forbidden')
@@ -312,7 +312,7 @@ class ApiTests(AccountFixture):
         install(app,require,lambda *args:None)
         with TestClient(app) as client:
             self.assertEqual(client.get('/api/v1/admin/accounts').status_code,403)
-            result=client.post('/api/v1/admin/accounts/connections',headers={'X-R20-Session':'admin'},json={
+            result=client.post('/api/v1/admin/accounts/connections',headers={'X-OKXQuant-Session':'admin'},json={
                 'label':'demo','auth_type':'api_key','mode':'demo','site':'global','api_key':'SECRET_API','secret_key':'SECRET_PRIVATE','passphrase':'SECRET_PASS',
                 'capabilities':{'write_ready':True}})
             self.assertEqual(result.status_code,200)
@@ -406,22 +406,22 @@ class AccountDisplayTests(AccountFixture):
         self.assertEqual(center.display_label('自定义账户名称'),'自定义账户名称')
 
     def test_news_interval_comes_from_scheduler_definition(self):
-        from r20_gateway.scheduler import JOBS
+        from okxquant_gateway.scheduler import JOBS
         self.assertEqual(center.public_status()['news_interval_seconds'],next(j.interval_seconds for j in JOBS if j.name=='news'))
         self.assertEqual(center.public_status()['news_interval_seconds'],600)
 
     def test_manual_close_setting_changes_only_permission_not_bindings_or_trades(self):
-        from r20_backend import settings_store
-        env=self.root/'settings.env';env.write_text('R20_OKX_ENV=demo\nUNRELATED=keep\n')
+        from okxquant_backend import settings_store
+        env=self.root/'settings.env';env.write_text('OKXQUANT_OKX_ENV=demo\nUNRELATED=keep\n')
         before=center.load()
         with patch.object(settings_store,'ENV_FILE',env),patch.object(settings_store,'refresh_settings'),patch.dict(os.environ,{},clear=False),patch.object(transport,'request') as request:
             result=center.set_manual_close(True,'ENABLE MANUAL CLOSE')
             self.assertTrue(result['manual_close_enabled'])
-            self.assertIn('R20_OKX_ENV=demo',env.read_text());self.assertIn('UNRELATED=keep',env.read_text())
-            self.assertIn('R20_MANUAL_CLOSE_ENABLED=1',env.read_text())
+            self.assertIn('OKXQUANT_OKX_ENV=demo',env.read_text());self.assertIn('UNRELATED=keep',env.read_text())
+            self.assertIn('OKXQUANT_MANUAL_CLOSE_ENABLED=1',env.read_text())
             before_invalid=env.read_bytes()
             with self.assertRaises(center.AccountChangeError):center.set_manual_close(False,'ENABLE MANUAL CLOSE')
             self.assertEqual(env.read_bytes(),before_invalid)
             center.set_manual_close(False,'DISABLE MANUAL CLOSE')
-            self.assertIn('R20_MANUAL_CLOSE_ENABLED=0',env.read_text())
+            self.assertIn('OKXQUANT_MANUAL_CLOSE_ENABLED=0',env.read_text())
         self.assertEqual(center.load(),before);request.assert_not_called()

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-R20 AI LLM-Native Self-Improvement & Strategy Evolution Engine v6.8.1 (self_improvement_engine.py)
+OKXQuant AI LLM-Native Self-Improvement & Strategy Evolution Engine v0.1.0 (self_improvement_engine.py)
 Focuses purely on Crypto Alpha generation & dynamic quantitative risk adaptation.
 Eliminates rigid cooldown bans in favor of dynamic volatility-adjusted thresholds,
 asymmetric Kelly bet-sizing, and LLM cognitive post-mortem lessons.
@@ -29,7 +29,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 try:
-    from r20_backend.config import settings as standalone_settings
+    from okxquant_backend.config import settings as standalone_settings
 except ImportError:
     standalone_settings = None
 
@@ -48,7 +48,7 @@ EVOLUTION_LOCK_FILE = os.path.join(DATA_DIR, ".self_improvement.lock")
 
 from instrument_pool import load_instruments
 from prompt_library import active_profile, apply_module_layout
-from r20_gateway.telemetry import ModelCallTelemetry
+from okxquant_gateway.telemetry import ModelCallTelemetry
 TARGET_INSTRUMENTS = [item["name"] for item in load_instruments()]
 
 def atomic_write_json(path: str, payload: Any) -> None:
@@ -106,7 +106,7 @@ def log_msg(msg: str):
 def get_cpa_client_config() -> Tuple[str, str]:
     """Resolve LLM credentials only from process environment or local .env."""
     try:
-        from r20_backend.llm_manager import get_active_llm_runtime
+        from okxquant_backend.llm_manager import get_active_llm_runtime
         active_llm = get_active_llm_runtime()
         if active_llm.get("base_url"):
             return active_llm["base_url"], active_llm.get("api_key", "")
@@ -141,7 +141,7 @@ def load_closed_trades(scope=None):
         log_msg("Review excluded non-evidence rows: " + json.dumps(excluded, sort_keys=True))
     return enrich(rows, scope, DATA_DIR)
 
-EVOLUTION_SYSTEM_PROMPT = """你是 R20 Quantum Trader 的首席投资官，负责基于真实已平仓交易证据进行认知复盘。模型只输出严格 JSON；宿主程序负责北京时间戳与 Markdown 渲染。
+EVOLUTION_SYSTEM_PROMPT = """你是 OKXQuant 的首席投资官，负责基于真实已平仓交易证据进行认知复盘。模型只输出严格 JSON；宿主程序负责北京时间戳与 Markdown 渲染。
 
 【证据纪律】
 1. 只允许根据输入台账中真实可见的字段归因；不得把盈亏结果倒推成未提供的微积分、定积分、概率、新闻或聪明钱事实。
@@ -251,7 +251,7 @@ decision_evidence 只来自同账户真实成交 → 客户端订单意图 → �
     effort = os.environ.get("LLM_REASONING_EFFORT") or "high"
     api_format = "openai_chat"
     try:
-        from r20_backend.llm_manager import get_active_llm_runtime, execute_llm_request
+        from okxquant_backend.llm_manager import get_active_llm_runtime, execute_llm_request
         active_llm = get_active_llm_runtime()
         model_name = os.environ.get("LLM_MODEL") or active_llm.get("model") or model_name
         effort = os.environ.get("LLM_REASONING_EFFORT") or active_llm.get("reasoning_effort") or effort
@@ -331,7 +331,7 @@ def run_self_evolution(force: bool = False):
     tz_bj = datetime.timezone(datetime.timedelta(hours=8))
     now_bj = datetime.datetime.now(tz_bj)
     timestamp_str = now_bj.strftime("%Y-%m-%d %H:%M:%S")
-    log_msg("🧬 启动 R20 AI 大脑自进化认知复盘与实战心法提炼 (v7.2.1 Crypto Focus)...")
+    log_msg("🧬 启动 OKXQuant AI 大脑自进化认知复盘与实战心法提炼 (v0.1.0 Crypto Focus)...")
 
     from scripts import memory_registry
     memory_scope=memory_registry.scope_of()
@@ -430,8 +430,8 @@ def run_self_evolution(force: bool = False):
     change_status='NO_CHANGE'
     candidates=[c for c in memory_registry.view(DATA_DIR,scope=memory_scope,admin=True)['candidates'] if c['id'] in candidate_ids]
 
-    # Save as durable R20 Markdown memory file: update timestamp and insights while keeping core lessons if no overwrite
-    md_content = f"""# R20 AI 交易复盘（报告，不等于已应用的策略变更）
+    # Save as durable OKXQuant Markdown memory file: update timestamp and insights while keeping core lessons if no overwrite
+    md_content = f"""# OKXQuant AI 交易复盘（报告，不等于已应用的策略变更）
 
 > **本次复盘时间**: {timestamp_str} (北京时间)
 > **复盘样本覆盖**: 已平仓 {total_trades} 笔 | 样本胜率: {win_rate}%

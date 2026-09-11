@@ -57,7 +57,7 @@
 
 - 密钥通过隐藏输入传入，仅用于用户指定的本地服务、模型供应商和 OKX 接口；不写入报告、源码或命令行参数。
 - `.env` 仅保存非秘密设置；本次凭据未出现在待提交/未忽略文件或 `.env` 中。
-- OKX 凭据与 LLM 运行时主密钥位于原有加密库 `data/r20_secrets.enc`。供应商配置仍沿用项目原有的私密 JSON 格式 `data/llm_models.json`，其中可能含明文供应商密钥；**Git 忽略不等于文件已加密**，不要公开整个 `data` 目录或本机截图。
+- OKX 凭据与 LLM 运行时主密钥位于原有加密库 `data/okxquant_secrets.enc`。供应商配置仍沿用项目原有的私密 JSON 格式 `data/llm_models.json`，其中可能含明文供应商密钥；**Git 忽略不等于文件已加密**，不要公开整个 `data` 目录或本机截图。
 - 没有下单、撤单、平仓、创建保护单、启动交易策略、开启模型委员会、保存通知配置、备份恢复或创建用户。
 - 本金基准文件未创建，原账本文件未修改。只读诊断的首页缓存写到临时目录，不覆盖用户持久缓存。
 - 结束时移除检查页面的请求拦截，浏览器及用户的其他标签页保持打开。
@@ -72,7 +72,7 @@
 
 ## 本机证据与复现
 
-报告和截图均被 Git 忽略：`frontend/.ui-artifacts/integration-review/`。
+报告和截图均被 Git 忽略：`okxquant_frontend/.ui-artifacts/integration-review/`。
 
 - `live-readonly-with-model.json`：包含结构化模型请求的第一轮真实检查。
 - `live-readonly.json`：后续 14 项真实只读检查。

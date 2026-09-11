@@ -75,7 +75,7 @@ def check_interactions(page, context, base, output, blocked):
         expect(confirmation).to_be_disabled()
         modal.locator('input').fill('WRONG')
         expect(confirmation).to_be_disabled()
-        modal.locator('input').fill('BACKUP R20')
+        modal.locator('input').fill('BACKUP OKXQuant')
         expect(confirmation).to_be_enabled()
         page.screenshot(path=str(output/f'{width}-confirmation.png'))
         modal.get_by_role('button',name='取消',exact=True).click()
@@ -113,7 +113,7 @@ def check_interactions(page, context, base, output, blocked):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base-url', default='http://127.0.0.1:8080')
-    parser.add_argument('--output', default='frontend/.ui-artifacts')
+    parser.add_argument('--output', default='okxquant_frontend/.ui-artifacts')
     parser.add_argument('--quick', action='store_true')
     parser.add_argument('--fixtures', action='store_true', help='Use browser-only market fixtures to check populated tables/cards')
     parser.add_argument('--interactions-only', action='store_true')
@@ -121,9 +121,9 @@ def main():
     args = parser.parse_args()
     if urlparse(args.base_url).hostname not in {'localhost', '127.0.0.1', '::1'}:
         parser.error('Use a local isolated preview, not a production host.')
-    password = os.environ.get('R20_UI_TEST_PASSWORD')
+    password = os.environ.get('OKXQUANT_UI_TEST_PASSWORD')
     if not password:
-        parser.error('Set R20_UI_TEST_PASSWORD for the temporary preview account.')
+        parser.error('Set OKXQUANT_UI_TEST_PASSWORD for the temporary preview account.')
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     results, js_errors, blocked = [], [], []
@@ -145,17 +145,17 @@ def main():
             context.route('**/api/all?*', lambda route: route.fulfill(status=200, content_type='application/json', body=json.dumps(fixture)))
         for theme in ['light', 'dark']:
             page.goto(args.base_url + '/admin/login')
-            page.evaluate("theme => { localStorage.setItem('r20_theme',theme); document.documentElement.dataset.theme=theme; document.documentElement.classList.toggle('dark',theme==='dark'); }", theme)
+            page.evaluate("theme => { localStorage.setItem('okxquant_theme',theme); document.documentElement.dataset.theme=theme; document.documentElement.classList.toggle('dark',theme==='dark'); }", theme)
             for width, height in [(1440,1000), (390,844)]:
                 page.set_viewport_size({'width':width,'height':height})
                 page.screenshot(path=str(output/f'{theme}-{width}-login.png'))
         page.set_viewport_size({'width':1440,'height':1000})
-        page.get_by_label('管理员账号', exact=True).fill(os.environ.get('R20_UI_TEST_USERNAME','admin'))
+        page.get_by_label('管理员账号', exact=True).fill(os.environ.get('OKXQUANT_UI_TEST_USERNAME','admin'))
         page.locator('#login-password').fill(password)
         page.get_by_role('button', name='登录工作空间').click()
         page.wait_for_url('**/admin/overview')
         for theme in ([] if args.interactions_only else ['light','dark']):
-            page.evaluate("theme => localStorage.setItem('r20_theme',theme)", theme)
+            page.evaluate("theme => localStorage.setItem('okxquant_theme',theme)", theme)
             sizes = [(1440,1000),(390,844)] if args.quick else [(1440,1000),(1024,900),(768,1024),(390,844),(320,740)]
             for width,height in sizes:
                 page.set_viewport_size({'width':width,'height':height})

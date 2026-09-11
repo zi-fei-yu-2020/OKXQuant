@@ -1,0 +1,20 @@
+[Unit]
+Description=OKXQuant Gateway Worker
+After=network.target
+
+[Service]
+Type=simple
+User=okxquant
+Group=okxquant
+Environment=HOME=/home/okxquant
+Environment=PATH=/opt/OKXQuant/.venv/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/opt/OKXQuant
+EnvironmentFile=/opt/OKXQuant/.env
+ExecStart=/usr/bin/python3 -m okxquant_gateway.worker
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

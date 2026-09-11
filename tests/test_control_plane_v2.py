@@ -6,11 +6,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import r20_backend.notifications as notifications
-import r20_backend.okx_trade_service as okx
+import okxquant_backend.notifications as notifications
+import okxquant_backend.okx_trade_service as okx
 import scripts.prompt_library as prompts
-from r20_gateway.events import GatewayEvent
-from r20_gateway.store import GatewayStore
+from okxquant_gateway.events import GatewayEvent
+from okxquant_gateway.store import GatewayStore
 from scripts.okx_runtime import OKXEnvironment
 
 
@@ -47,22 +47,22 @@ class OKXV5Tests(unittest.TestCase):
 
 class ChannelBusinessCodeTests(unittest.TestCase):
     def test_wecom_http_200_error_is_failure(self):
-        env={"R20_WECHAT_WEBHOOK":"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x"}
-        with patch.object(notifications,"validate_outbound_url",return_value=env["R20_WECHAT_WEBHOOK"]), patch.object(notifications,"_post_json",return_value=(True,"HTTP 200",{"errcode":93000,"errmsg":"denied"})):
+        env={"OKXQUANT_WECHAT_WEBHOOK":"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x"}
+        with patch.object(notifications,"validate_outbound_url",return_value=env["OKXQUANT_WECHAT_WEBHOOK"]), patch.object(notifications,"_post_json",return_value=(True,"HTTP 200",{"errcode":93000,"errmsg":"denied"})):
             self.assertFalse(notifications.send_channel("wechat","x",env)[0])
 
     def test_telegram_http_200_error_is_failure(self):
-        env={"R20_TELEGRAM_BOT_TOKEN":"T","R20_TELEGRAM_CHAT_ID":"1"}
+        env={"OKXQUANT_TELEGRAM_BOT_TOKEN":"T","OKXQUANT_TELEGRAM_CHAT_ID":"1"}
         with patch.object(notifications,"_post_json",return_value=(True,"HTTP 200",{"ok":False,"description":"denied"})):
             self.assertFalse(notifications.send_channel("telegram","x",env)[0])
 
     def test_qq_http_200_error_is_failure(self):
-        env={"R20_QQ_APP_ID":"A","R20_QQ_CLIENT_SECRET":"S","R20_QQ_OPENID":"O"}
+        env={"OKXQUANT_QQ_APP_ID":"A","OKXQUANT_QQ_CLIENT_SECRET":"S","OKXQUANT_QQ_OPENID":"O"}
         responses=[(True,"HTTP 200",{"access_token":"T"}),(True,"HTTP 200",{"code":11248,"message":"denied"})]
         with patch.object(notifications,"_post_json",side_effect=responses): self.assertFalse(notifications.send_channel("qq","x",env)[0])
 
     def test_diagnose_never_sends(self):
-        env={"R20_TELEGRAM_BOT_TOKEN":"T","R20_TELEGRAM_CHAT_ID":"1"}
+        env={"OKXQUANT_TELEGRAM_BOT_TOKEN":"T","OKXQUANT_TELEGRAM_CHAT_ID":"1"}
         with patch.object(notifications,"_post_json") as post:
             self.assertEqual(notifications.diagnose_channel("telegram",env)["status"],"ready"); post.assert_not_called()
 

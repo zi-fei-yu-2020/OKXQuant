@@ -61,7 +61,7 @@ async def lifespan(_: FastAPI):
         stop_dashboard_background_worker()
 
 
-app = FastAPI(title="R20 AI Quantitative Matrix", docs_url=None, redoc_url=None, lifespan=lifespan)
+app = FastAPI(title="OKXQuant AI Quantitative Matrix", docs_url=None, redoc_url=None, lifespan=lifespan)
 templates = Jinja2Templates(directory=os.path.join(DASHBOARD_DIR, "templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(DASHBOARD_DIR, "static")), name="static")
 
@@ -77,7 +77,7 @@ def run_json_cmd_status(cmd):
 
 def read_account_resource(resource, environment, inst_id=""):
     if environment.configured or resource == "algos":
-        from r20_backend.okx_read_service import read_private_resource
+        from okxquant_backend.okx_read_service import read_private_resource
         try:
             return True, read_private_resource(resource, environment, inst_id), ""
         except Exception as exc:
@@ -426,7 +426,7 @@ def _inject_local_data_into_stale(stale, positions, timestamp_full):
         except Exception:
             pass
 
-    from r20_backend.macro_status import fields as macro_fields
+    from okxquant_backend.macro_status import fields as macro_fields
     from scripts import ledger_monitor, wait_audit, capital_pool, scenario_shadow, entry_opportunities
     from scripts.okx_runtime import selected_environment
     stale.update(macro_fields(DATA_DIR, history=stale.get('ai_brain_history', []), state=state_data))
@@ -501,7 +501,7 @@ def _dashboard_background_worker_loop():
         time.sleep(2.0)
 
 def start_dashboard_background_worker():
-    if os.getenv("R20_TESTING") == "1":
+    if os.getenv("OKXQUANT_TESTING") == "1":
         return
     global _BG_WORKER_THREAD, _BG_WORKER_RUNNING
     if _BG_WORKER_THREAD is None or not _BG_WORKER_THREAD.is_alive():
@@ -540,7 +540,7 @@ def update_cache_cycle():
 
 def request_cache_refresh():
     """Queue work without making an HTTP reader wait for exchange requests."""
-    if os.getenv("R20_TESTING") == "1" or not CACHE_UPDATE_LOCK.acquire(blocking=False):
+    if os.getenv("OKXQUANT_TESTING") == "1" or not CACHE_UPDATE_LOCK.acquire(blocking=False):
         return False
     try:
         threading.Thread(target=_refresh_owned_cache, name="dashboard_refresh", daemon=True).start()
@@ -829,7 +829,7 @@ def _update_cache_cycle():
     enrich_position_risk_fields(positions, trackers)
 
     # Default seed capital is not a user-confirmed performance baseline.
-    from r20_backend.account_baseline import load_account_baseline
+    from okxquant_backend.account_baseline import load_account_baseline
     baseline = load_account_baseline()
     reset_time_str = baseline["reset_time"]
     initial_capital_val = baseline["initial_capital"]
@@ -1229,7 +1229,7 @@ def _update_cache_cycle():
     total_b, used_b, free_b = shutil.disk_usage("/")
     disk_free_gb = round(free_b / (1024 ** 3), 1)
 
-    from r20_backend.macro_status import fields as macro_fields
+    from okxquant_backend.macro_status import fields as macro_fields
     from scripts import ledger_monitor, wait_audit, capital_pool, scenario_shadow, entry_opportunities
     trades_table = ledger_monitor.project_rows(trades_table, environment.identity)
     published_memory=memory_publication(DATA_DIR,environment.identity)
@@ -1330,7 +1330,7 @@ def _update_cache_cycle():
         "factor_library": factor_lib_snapshot
     }
     try:
-        from r20_backend.llm_manager import get_active_llm_runtime
+        from okxquant_backend.llm_manager import get_active_llm_runtime
         active_llm_info = get_active_llm_runtime()
         CACHE_DATA["llm_runtime"] = {
             "model": active_llm_info.get("model", "gemini-3.8-flash-high"),
@@ -1362,7 +1362,7 @@ async def refresh_cache_if_needed(ttl_seconds: float = 3.0):
 
 # Background work belongs to the ASGI lifespan, never module import.
 
-VUE_DIST_DIR = os.path.join(WORKSPACE_DIR, "frontend", "dist")
+VUE_DIST_DIR = os.path.join(WORKSPACE_DIR, "okxquant_frontend", "dist")
 VUE_ASSETS_DIR = os.path.join(VUE_DIST_DIR, "assets")
 DOCS_IMAGES_DIR = os.path.join(WORKSPACE_DIR, "docs", "images")
 
@@ -1392,8 +1392,8 @@ VUE_ADMIN_LEGACY_FILE = os.path.join(VUE_DIST_DIR, "admin", "legacy.html")
 
 def _vue_build_missing() -> HTMLResponse:
     return HTMLResponse(
-        "Vue build not found (frontend/dist/index.html). "
-        "Run `npm ci` and `npm run build` in frontend/.",
+        "Vue build not found (okxquant_frontend/dist/index.html). "
+        "Run `npm ci` and `npm run build` in okxquant_frontend/.",
         status_code=503,
         headers={"Cache-Control": "no-cache, no-store, must-revalidate, max-age=0"},
     )
@@ -1421,10 +1421,10 @@ async def robots_txt():
     f = os.path.join(VUE_DIST_DIR, "robots.txt")
     if os.path.isfile(f):
         return FileResponse(f, media_type="text/plain", headers={"Cache-Control": "public, max-age=86400, s-maxage=604800"})
-    pf = os.path.join(WORKSPACE_DIR, "frontend", "public", "robots.txt")
+    pf = os.path.join(WORKSPACE_DIR, "okxquant_frontend", "public", "robots.txt")
     if os.path.isfile(pf):
         return FileResponse(pf, media_type="text/plain", headers={"Cache-Control": "public, max-age=86400, s-maxage=604800"})
-    return PlainTextResponse("User-agent: *\nAllow: /\nAllow: /docs\nAllow: /images/\nDisallow: /admin/\nDisallow: /api/\nSitemap: https://www.r20.cn/sitemap.xml\n")
+    return PlainTextResponse("User-agent: *\nAllow: /\nAllow: /docs\nAllow: /images/\nDisallow: /admin/\nDisallow: /api/\nSitemap: https://trade.112102.xyz/sitemap.xml\n")
 
 
 @app.get("/sitemap.xml", include_in_schema=False)
@@ -1432,10 +1432,10 @@ async def sitemap_xml():
     f = os.path.join(VUE_DIST_DIR, "sitemap.xml")
     if os.path.isfile(f):
         return FileResponse(f, media_type="application/xml", headers={"Cache-Control": "public, max-age=86400, s-maxage=604800"})
-    pf = os.path.join(WORKSPACE_DIR, "frontend", "public", "sitemap.xml")
+    pf = os.path.join(WORKSPACE_DIR, "okxquant_frontend", "public", "sitemap.xml")
     if os.path.isfile(pf):
         return FileResponse(pf, media_type="application/xml", headers={"Cache-Control": "public, max-age=86400, s-maxage=604800"})
-    return Response(content="""<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://www.r20.cn/</loc><priority>1.0</priority></url><url><loc>https://www.r20.cn/docs</loc><priority>0.8</priority></url></urlset>""", media_type="application/xml")
+    return Response(content="""<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://trade.112102.xyz/</loc><priority>1.0</priority></url><url><loc>https://trade.112102.xyz/docs</loc><priority>0.8</priority></url></urlset>""", media_type="application/xml")
 
 
 @app.get("/favicon.svg", include_in_schema=False)
@@ -1443,7 +1443,7 @@ async def favicon_svg():
     f = os.path.join(VUE_DIST_DIR, "favicon.svg")
     if os.path.isfile(f):
         return FileResponse(f, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400, s-maxage=2592000, immutable"})
-    pf = os.path.join(WORKSPACE_DIR, "frontend", "public", "favicon.svg")
+    pf = os.path.join(WORKSPACE_DIR, "okxquant_frontend", "public", "favicon.svg")
     if os.path.isfile(pf):
         return FileResponse(pf, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400, s-maxage=2592000, immutable"})
     return Response(status_code=404)

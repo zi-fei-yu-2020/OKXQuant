@@ -10,9 +10,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
-import r20_backend.app as app_module
-import r20_backend.llm_manager as llm_manager
-from r20_backend.admin_auth import AdminAuthStore
+import okxquant_backend.app as app_module
+import okxquant_backend.llm_manager as llm_manager
+from okxquant_backend.admin_auth import AdminAuthStore
 
 
 class LLMMultiProviderTests(unittest.TestCase):
@@ -36,8 +36,8 @@ class LLMMultiProviderTests(unittest.TestCase):
         app_module.admin_auth.initialize_from_legacy("TestAdminPass123456")
 
         # Isolate production environment and secrets from test mutations
-        self.patcher_env = patch("r20_backend.settings_store.update_env")
-        self.patcher_sec = patch("r20_gateway.secrets.save_secrets")
+        self.patcher_env = patch("okxquant_backend.settings_store.update_env")
+        self.patcher_sec = patch("okxquant_gateway.secrets.save_secrets")
         self.mock_update_env = self.patcher_env.start()
         self.mock_save_secrets = self.patcher_sec.start()
 
@@ -56,7 +56,7 @@ class LLMMultiProviderTests(unittest.TestCase):
     def login(self) -> dict[str, str]:
         resp = self.client.post("/api/v1/admin/auth/login", json={"username": "admin", "password": "TestAdminPass123456"})
         self.assertEqual(resp.status_code, 200, resp.text)
-        return {"X-R20-Session": resp.json()["session_token"]}
+        return {"X-OKXQuant-Session": resp.json()["session_token"]}
 
     def test_init_and_load_models_clean_no_bloat(self):
         config = llm_manager.load_llm_config(mask_keys=True)
@@ -72,7 +72,7 @@ class LLMMultiProviderTests(unittest.TestCase):
             self.assertIn("api_format", m)
 
     def test_custom_environment_model_is_visible_without_changing_connection(self):
-        from r20_backend.config import settings
+        from okxquant_backend.config import settings
         with patch.object(settings, 'llm_model', 'operator-demo-model'), \
              patch.object(settings, 'llm_base_url', 'https://example.invalid/v1'), \
              patch.object(settings, 'llm_api_key', 'FAKE-ENVIRONMENT-KEY'), \
@@ -335,7 +335,7 @@ class LLMMultiProviderTests(unittest.TestCase):
 
     def test_activation_stores_key_encrypted_only(self):
         self.add_provider_model("alpha")
-        with patch("r20_backend.settings_store.remove_env") as remove:
+        with patch("okxquant_backend.settings_store.remove_env") as remove:
             llm_manager.activate_provider_model("alpha", "shared-model")
         self.mock_save_secrets.assert_called_with({"LLM_API_KEY": "test-alpha"})
         remove.assert_called_once_with({"LLM_API_KEY"})
@@ -344,7 +344,7 @@ class LLMMultiProviderTests(unittest.TestCase):
     def test_failed_secret_save_does_not_activate_model(self):
         self.add_provider_model("alpha")
         before = llm_manager.load_llm_config()["active_model_id"]
-        with patch("r20_gateway.secrets.save_secrets", side_effect=OSError("store unavailable")):
+        with patch("okxquant_gateway.secrets.save_secrets", side_effect=OSError("store unavailable")):
             with self.assertRaises(OSError):
                 llm_manager.activate_provider_model("alpha", "shared-model")
         self.assertEqual(llm_manager.load_llm_config()["active_model_id"], before)

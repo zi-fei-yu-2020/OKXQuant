@@ -2,30 +2,30 @@
 
 ## 部署位置
 
-- Windows 源码：`D:/wangkai/workspace/r20-quantum-trader`，分支 dev。
-- WSL 发行版：Ubuntu-22.04；Linux 运行副本：`/opt/r20-local/app`。
-- Python 虚拟环境：`/opt/r20-venv`；运行用户：r20local（非 root）。
-- 凭据文件：`/opt/r20-local/config/.env`，0600，位于 Git 仓库之外。
-- 管理员登录信息：`/opt/r20-local/admin-access.txt`；不要提交或粘贴其中的密码。
+- Windows 源码：`D:/wangkai/workspace/OKXQuant`，分支 dev。
+- WSL 发行版：Ubuntu-22.04；Linux 运行副本：`/opt/okxquant-local/app`。
+- Python 虚拟环境：`/opt/okxquant-venv`；运行用户：okxquantlocal（非 root）。
+- 凭据文件：`/opt/okxquant-local/config/.env`，0600，位于 Git 仓库之外。
+- 管理员登录信息：`/opt/okxquant-local/admin-access.txt`；不要提交或粘贴其中的密码。
 - 页面：`http://localhost:8080`；后台：`http://localhost:8080/admin`。
-- 原始测试日志和交易验收报告：`/opt/r20-local/` 及运行副本 logs；浏览器截图在 Windows 源码的 logs/local-acceptance，均不提交。
+- 原始测试日志和交易验收报告：`/opt/okxquant-local/` 及运行副本 logs；浏览器截图在 Windows 源码的 logs/local-acceptance，均不提交。
 
 ## 本机控制命令（PowerShell）
 
 ```powershell
-wsl -d Ubuntu-22.04 -- python3 /opt/r20-local/manage.py status
-wsl -d Ubuntu-22.04 -- python3 /opt/r20-local/manage.py start
-wsl -d Ubuntu-22.04 -- python3 /opt/r20-local/manage.py pause
-wsl -d Ubuntu-22.04 -- python3 /opt/r20-local/manage.py resume
-wsl -d Ubuntu-22.04 -- python3 /opt/r20-local/manage.py restart
-wsl -d Ubuntu-22.04 -- python3 /opt/r20-local/manage.py stop
+wsl -d Ubuntu-22.04 -- python3 /opt/okxquant-local/manage.py status
+wsl -d Ubuntu-22.04 -- python3 /opt/okxquant-local/manage.py start
+wsl -d Ubuntu-22.04 -- python3 /opt/okxquant-local/manage.py pause
+wsl -d Ubuntu-22.04 -- python3 /opt/okxquant-local/manage.py resume
+wsl -d Ubuntu-22.04 -- python3 /opt/okxquant-local/manage.py restart
+wsl -d Ubuntu-22.04 -- python3 /opt/okxquant-local/manage.py stop
 ```
 
 pause 只暂停将来的自动决策周期，不撤销已有订单、不打断运行中的交易周期；运行中的 Gateway 继续持仓保护、账本及其他维护任务。stop 停止本地服务，**不会平掉交易所仓位**。
 
-- R20_GATEWAY_AUTOSTART=0：后端不自动拉起 Gateway，启动时生效；监控仍可执行只读市场及账户请求。
-- R20_AUTOTRADE_ENABLED=0：Gateway 每次 tick 重读配置，不再安排新的 trader 作业。
-- 两项省略时默认 1；只有字面值 1 才启用。R20_TESTING=1 仅用于隔离测试，不用于真实部署。
+- OKXQUANT_GATEWAY_AUTOSTART=0：后端不自动拉起 Gateway，启动时生效；监控仍可执行只读市场及账户请求。
+- OKXQUANT_AUTOTRADE_ENABLED=0：Gateway 每次 tick 重读配置，不再安排新的 trader 作业。
+- 两项省略时默认 1；只有字面值 1 才启用。OKXQUANT_TESTING=1 仅用于隔离测试，不用于真实部署。
 
 ## 本地网络
 
@@ -36,18 +36,18 @@ Windows 代理关闭或 WSL 重启换 IP 后，旧转发会失效。先恢复可
 ## 验收命令（WSL）
 
 ```bash
-cd /mnt/d/wangkai/workspace/r20-quantum-trader
-/opt/r20-venv/bin/python -m pip check
-/opt/r20-venv/bin/python scripts/run_tests.py --verbose
+cd /mnt/d/wangkai/workspace/OKXQuant
+/opt/okxquant-venv/bin/python -m pip check
+/opt/okxquant-venv/bin/python scripts/run_tests.py --verbose
 
 # 在 Linux 副本内安装/构建，不能与 Windows 共用 node_modules
-cd /opt/r20-local/app/frontend
+cd /opt/okxquant-local/app/okxquant_frontend
 npm ci
 npm run test:unit
 npm run build
 ```
 
-运行副本 origin 指向本机源码仓库。拉取本地已提交代码必须使用 r20local 用户，并在更新/重启前确认没有正在执行的交易周期；不推送远端。构建资源由 docs/images 生成，不依赖 Windows Git 软链接权限。
+运行副本 origin 指向本机源码仓库。拉取本地已提交代码必须使用 okxquantlocal 用户，并在更新/重启前确认没有正在执行的交易周期；不推送远端。构建资源由 docs/images 生成，不依赖 Windows Git 软链接权限。
 
 ## 模拟盘执行诊断
 

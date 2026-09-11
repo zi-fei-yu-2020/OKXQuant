@@ -6,7 +6,7 @@ from contextlib import closing
 
 WORKSPACE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(WORKSPACE_DIR, "data")
-DB_PATH = os.path.join(DATA_DIR, "r20_quant.db")
+DB_PATH = os.path.join(DATA_DIR, "okxquant_quant.db")
 LEDGER_JSON_FILE = os.path.join(DATA_DIR, "trading_ledger.json")
 
 def get_db():

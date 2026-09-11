@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import patch, MagicMock
-from r20_backend.council_manager import (
+from okxquant_backend.council_manager import (
     load_council_config,
     save_council_config,
     reset_role_template,
@@ -36,7 +36,7 @@ class TestCouncilManager(unittest.TestCase):
         )
 
     def test_consensus_mode_and_suites(self):
-        from r20_backend.council_manager import get_preset_suites, apply_preset_suite
+        from okxquant_backend.council_manager import get_preset_suites, apply_preset_suite
         suites = get_preset_suites()
         self.assertGreaterEqual(len(suites), 1)
         suite_ids = [s["id"] for s in suites]
@@ -59,7 +59,7 @@ class TestCouncilManager(unittest.TestCase):
             250
         )
 
-        with patch("r20_backend.llm_manager.execute_llm_request") as mock_exec:
+        with patch("okxquant_backend.llm_manager.execute_llm_request") as mock_exec:
             mock_exec.side_effect = [
                 mock_trader_return,
                 mock_trader_return,

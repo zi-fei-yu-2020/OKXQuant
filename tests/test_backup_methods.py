@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import r20_backend.backup_store as store
+import okxquant_backend.backup_store as store
 import scripts.backup_runtime as runtime
 
 

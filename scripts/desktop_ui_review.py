@@ -15,7 +15,7 @@ ADMIN = ['overview','llm','council','promptlib','evolution','interceptors','secu
 REPORTS = []
 ERRORS = []
 BLOCKED = []
-OUTPUT = ROOT / 'frontend' / '.ui-artifacts' / 'windows-review'
+OUTPUT = ROOT / 'okxquant_frontend' / '.ui-artifacts' / 'windows-review'
 
 
 def protect(context, page):
@@ -74,7 +74,7 @@ def visit(page, path, theme='light'):
     # Synchronize on a completed navigation before evaluating the document.
     page.goto(origin+path,wait_until='domcontentloaded')
     page.wait_for_timeout(500)
-    current = page.evaluate('(theme) => { localStorage.setItem("r20_theme", theme); return document.documentElement.dataset.theme }',theme)
+    current = page.evaluate('(theme) => { localStorage.setItem("okxquant_theme", theme); return document.documentElement.dataset.theme }',theme)
     if current != theme:
         page.reload(wait_until='domcontentloaded')
         page.wait_for_timeout(500)

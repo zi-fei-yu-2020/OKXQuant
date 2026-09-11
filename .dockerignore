@@ -16,10 +16,10 @@ data/*
 logs
 backups
 
-# Frontend dependencies and generated output
-frontend/node_modules
-frontend/dist
-frontend/.ui-artifacts
+# OKXQuant Frontend dependencies and generated output
+okxquant_frontend/node_modules
+okxquant_frontend/dist
+okxquant_frontend/.ui-artifacts
 
 # Python and OS caches
 __pycache__

@@ -107,7 +107,7 @@ class PortfolioEntryBoundaryTests(unittest.TestCase):
             stack.enter_context(patch.object(strategy_evidence,'DB_PATH',Path(tmp)/'evidence.db'))
             decision={**selection(plan),'contract_version':trading_prompt.VERSION,'contract_valid':True,'valid_until':now+120}
             identity=strategy_evidence.append(env.identity,'decision',{'instrument':p['instId'],'decision':decision,'features':p,'position_basis':{'size':0}})
-            stack.enter_context(patch('r20_backend.account_connections.assert_current'))
+            stack.enter_context(patch('okxquant_backend.account_connections.assert_current'))
             stack.enter_context(patch.object(entry_gateway,'reconcile_intents'))
             stack.enter_context(patch.object(entry_gateway,'equity_guard',return_value={}))
             stack.enter_context(patch.object(entry_gateway.time,'time',return_value=now))

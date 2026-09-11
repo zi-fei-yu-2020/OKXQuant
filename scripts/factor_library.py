@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-R20 High-Alpha Quantitative Factor Library Engine (factor_library.py)
+OKXQuant High-Alpha Quantitative Factor Library Engine (factor_library.py)
 Calculates and normalizes 5 core factor pillars for crypto perpetuals:
 1. Momentum & Trend (ADX, RSI, EMA slope, KDJ)
 2. Volatility & Channel (ATR%, Bollinger Bandwidth)

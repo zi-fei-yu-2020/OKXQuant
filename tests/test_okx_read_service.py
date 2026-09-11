@@ -4,8 +4,8 @@ import unittest
 from unittest.mock import patch
 from scripts.okx_runtime import OKXEnvironment
 import dashboard.app as dashboard
-from r20_backend.okx_read_service import read_private_resource
-from r20_backend.okx_setup import diagnose_okx_runtime
+from okxquant_backend.okx_read_service import read_private_resource
+from okxquant_backend.okx_setup import diagnose_okx_runtime
 
 
 class OKXReadOnlyTests(unittest.TestCase):
@@ -13,7 +13,7 @@ class OKXReadOnlyTests(unittest.TestCase):
         self.demo = OKXEnvironment('demo', 'fake-key', 'fake-secret', 'fake-pass')
 
     def test_all_resources_are_get_only_and_keep_environment(self):
-        with patch('r20_backend.okx_read_service._request', return_value=[]) as request, patch('r20_backend.okx_read_service.read_algo_orders', return_value=[]) as algos:
+        with patch('okxquant_backend.okx_read_service._request', return_value=[]) as request, patch('okxquant_backend.okx_read_service.read_algo_orders', return_value=[]) as algos:
             for resource in ('balance', 'positions', 'orders', 'bills'):
                 read_private_resource(resource, self.demo)
             read_private_resource('algos', self.demo, 'BTC-USDT-SWAP')
@@ -25,7 +25,7 @@ class OKXReadOnlyTests(unittest.TestCase):
         algos.assert_called_once_with(self.demo, priority='monitor')
 
     def test_arbitrary_resource_or_missing_credentials_never_sends(self):
-        with patch('r20_backend.okx_read_service._request') as request:
+        with patch('okxquant_backend.okx_read_service._request') as request:
             with self.assertRaises(ValueError):
                 read_private_resource('close-position', self.demo)
             with self.assertRaises(ValueError):
@@ -33,7 +33,7 @@ class OKXReadOnlyTests(unittest.TestCase):
         request.assert_not_called()
 
     def test_api_key_dashboard_does_not_require_cli(self):
-        with patch('r20_backend.okx_read_service.read_private_resource', return_value=[{'totalEq': '100'}]) as rest, patch.object(dashboard, 'run_json_cmd_status') as cli:
+        with patch('okxquant_backend.okx_read_service.read_private_resource', return_value=[{'totalEq': '100'}]) as rest, patch.object(dashboard, 'run_json_cmd_status') as cli:
             ok, data, error = dashboard.read_account_resource('balance', self.demo)
         self.assertTrue(ok)
         self.assertEqual(data[0]['totalEq'], '100')
@@ -42,7 +42,7 @@ class OKXReadOnlyTests(unittest.TestCase):
         cli.assert_not_called()
 
     def test_failed_rest_does_not_retry_in_another_environment(self):
-        with patch('r20_backend.okx_read_service.read_private_resource', side_effect=RuntimeError('upstream unavailable')) as rest, patch.object(dashboard, 'run_json_cmd_status') as cli:
+        with patch('okxquant_backend.okx_read_service.read_private_resource', side_effect=RuntimeError('upstream unavailable')) as rest, patch.object(dashboard, 'run_json_cmd_status') as cli:
             ok, data, _ = dashboard.read_account_resource('balance', self.demo)
         self.assertFalse(ok)
         self.assertIsNone(data)
@@ -56,7 +56,7 @@ class OKXReadOnlyTests(unittest.TestCase):
         self.assertIn('--demo', cli.call_args.args[0])
 
     def test_rest_ready_is_distinct_from_execution_ready(self):
-        with patch('r20_backend.okx_setup.shutil.which', return_value=None), patch('scripts.okx_runtime.selected_environment', return_value=self.demo), patch('r20_backend.okx_read_service.read_private_resource', return_value=[]):
+        with patch('okxquant_backend.okx_setup.shutil.which', return_value=None), patch('scripts.okx_runtime.selected_environment', return_value=self.demo), patch('okxquant_backend.okx_read_service.read_private_resource', return_value=[]):
             status = diagnose_okx_runtime('demo', True)
         self.assertTrue(status['read_only_ready'])
         self.assertTrue(status['read_probe']['ok'])
@@ -68,7 +68,7 @@ class OKXReadOnlyTests(unittest.TestCase):
             rows = [{'totalEq': '100000', 'details': [{'ccy': 'USDT', 'eq': '100000', 'availBal': '100000'}]}] if resource == 'balance' else []
             return True, rows, ''
         baseline = {'initial_capital': 10000, 'reset_time': '1970-01-01 00:00:00', 'baseline_configured': False}
-        with patch.object(dashboard, 'CACHE_DATA', {}), patch('scripts.okx_runtime.selected_environment', return_value=self.demo), patch.object(dashboard, 'read_account_resource', side_effect=read), patch('r20_backend.account_baseline.load_account_baseline', return_value=baseline), patch.object(dashboard, 'persist_dashboard_cache'):
+        with patch.object(dashboard, 'CACHE_DATA', {}), patch('scripts.okx_runtime.selected_environment', return_value=self.demo), patch.object(dashboard, 'read_account_resource', side_effect=read), patch('okxquant_backend.account_baseline.load_account_baseline', return_value=baseline), patch.object(dashboard, 'persist_dashboard_cache'):
             dashboard.update_cache_cycle()
             account = dashboard.CACHE_DATA['account']
             self.assertEqual(account['total_eq'], 100000)
@@ -91,7 +91,7 @@ class OKXReadOnlyTests(unittest.TestCase):
                 if resource=='balance': return True,[{'totalEq':'1000','details':[{'ccy':'USDT','eq':'1000','availBal':'900'}]}],''
                 if resource=='algos': return (False,None,'rate_limited') if failed else (True,algos,'')
                 return True,[],''
-            with patch.object(dashboard,'CACHE_DATA',{}), patch('scripts.okx_runtime.selected_environment',return_value=self.demo), patch.object(dashboard,'read_account_resource',side_effect=read), patch.object(dashboard,'load_position_trackers',return_value={}), patch('r20_backend.account_baseline.load_account_baseline',return_value=baseline), patch.object(dashboard,'persist_dashboard_cache'):
+            with patch.object(dashboard,'CACHE_DATA',{}), patch('scripts.okx_runtime.selected_environment',return_value=self.demo), patch.object(dashboard,'read_account_resource',side_effect=read), patch.object(dashboard,'load_position_trackers',return_value={}), patch('okxquant_backend.account_baseline.load_account_baseline',return_value=baseline), patch.object(dashboard,'persist_dashboard_cache'):
                 dashboard.update_cache_cycle()
                 result=dashboard.CACHE_DATA['positions_summary']['items']
                 self.assertEqual(len(result),5)

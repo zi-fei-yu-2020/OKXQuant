@@ -215,13 +215,13 @@ class Offline:
             runtime = module('scripts.okx_runtime', selected_environment=self.selected,
                 freeze_environment=Mock(return_value=self.scenario.get('frozen_env', self.env)),
                 unfreeze_environment=Mock())
-            trade = module('r20_backend.okx_trade_service', _request=Mock(side_effect=self.request),
+            trade = module('okxquant_backend.okx_trade_service', _request=Mock(side_effect=self.request),
                 _create_intent=Mock(side_effect=self.intent), fast_close_confirmed=Mock(side_effect=self.close))
             self.trade, self.runtime = trade, runtime
             public = module('scripts.public_market', get_json=Mock(side_effect=self.public))
-            modules = {'r20_backend': module('r20_backend', __path__=[]),
-                'r20_backend.config':module('r20_backend.config', refresh_settings=Mock()),
-                'r20_backend.okx_trade_service':trade, 'scripts':module('scripts', __path__=[]),
+            modules = {'okxquant_backend': module('okxquant_backend', __path__=[]),
+                'okxquant_backend.config':module('okxquant_backend.config', refresh_settings=Mock()),
+                'okxquant_backend.okx_trade_service':trade, 'scripts':module('scripts', __path__=[]),
                 'scripts.okx_runtime':runtime, 'scripts.risk_policy':risk,
                 'scripts.trade_lock':module('scripts.trade_lock',writer=self.writer),
                 'scripts.public_market':public,

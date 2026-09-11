@@ -18,7 +18,7 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_DIRS = ("r20_backend", "r20_gateway", "scripts", "dashboard", "plugins", "tests", "frontend")
+SOURCE_DIRS = ("okxquant_backend", "okxquant_gateway", "scripts", "dashboard", "plugins", "tests", "okxquant_frontend")
 IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", "node_modules", "dist", ".ui-artifacts", ".env", ".env.*")
 
 
@@ -29,7 +29,7 @@ def copy_sources(destination: Path) -> None:
         shutil.copy2(ROOT / name, destination / name)
     for name in ("data", "logs", "backups", "home"):
         (destination / name).mkdir()
-    (destination / ".r20-test-sandbox").touch()
+    (destination / ".okxquant-test-sandbox").touch()
 
 
 def test_environment(destination: Path) -> dict[str, str]:
@@ -44,17 +44,17 @@ def test_environment(destination: Path) -> dict[str, str]:
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONUNBUFFERED": "1",
         "PYTHONUTF8": "1",
-        "R20_TESTING": "1",
-        "R20_TEST_ROOT": str(destination),
-        "R20_OKX_ENV": "demo",
+        "OKXQUANT_TESTING": "1",
+        "OKXQUANT_TEST_ROOT": str(destination),
+        "OKXQUANT_OKX_ENV": "demo",
     })
     return env
 
 
 def run_isolated(pattern: str, verbosity: int) -> int:
-    if (os.environ.get("R20_TEST_ROOT") != str(ROOT)
-            or not (ROOT / ".r20-test-sandbox").is_file()
-            or os.environ.get("R20_TESTING") != "1"):
+    if (os.environ.get("OKXQUANT_TEST_ROOT") != str(ROOT)
+            or not (ROOT / ".okxquant-test-sandbox").is_file()
+            or os.environ.get("OKXQUANT_TESTING") != "1"):
         raise RuntimeError("Internal test mode requires a disposable sandbox; run without --isolated.")
     sys.path.insert(0, str(ROOT))
     violations: list[str] = []
@@ -102,7 +102,7 @@ def main() -> int:
         parser.error("The suite needs Unix fcntl and POSIX file permissions. Run this script with Python inside WSL or Linux; do not install a fake fcntl module.")
     if args.isolated:
         return run_isolated(args.pattern, 2 if args.verbose else 1)
-    with tempfile.TemporaryDirectory(prefix="r20-tests-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="okxquant-tests-") as temporary:
         destination = Path(temporary).resolve()
         copy_sources(destination)
         print("Running offline tests in a disposable source snapshot; live runtime data is excluded.", flush=True)

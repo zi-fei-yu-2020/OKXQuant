@@ -1,4 +1,4 @@
-# R20 Quantum Trader Docker 部署说明
+# OKXQuant Docker 部署说明
 
 本项目的容器部署面向 Linux 服务器；Windows 开发者应使用 Docker Desktop 的 Linux 容器或 WSL。交易脚本使用 Unix 的 `fcntl` 文件锁，不能在 Windows Python 中通过安装同名包来替代。
 
@@ -34,14 +34,14 @@ LLM_MODEL=replace_with_your_model
 LLM_REASONING_EFFORT=high
 
 # 首次验证使用模拟盘；实盘凭证不要用于构建或测试
-R20_OKX_ENV=demo
+OKXQUANT_OKX_ENV=demo
 OKX_DEMO_API_KEY=
 OKX_DEMO_SECRET_KEY=
 OKX_DEMO_PASSPHRASE=
 
 # 初始化管理员凭证：12～128 位，包含字母和数字
-R20_SETUP_TOKEN=replace_with_a_long_random_setup_token
-R20_HTTP_PORT=8080
+OKXQUANT_SETUP_TOKEN=replace_with_a_long_random_setup_token
+OKXQUANT_HTTP_PORT=8080
 TZ=Asia/Shanghai
 ```
 
@@ -79,17 +79,17 @@ docker compose -f compose.yaml logs -f --tail=100 app
 
 | Volume | 容器路径 | 用途 |
 | --- | --- | --- |
-| `r20_config` | `/app/config` | 管理后台修改后的运行配置 |
-| `r20_data` | `/app/data` | SQLite 数据库、决策、提示词、记忆和加密密钥存储 |
-| `r20_logs` | `/app/logs` | 运行日志 |
-| `r20_backups` | `/app/backups` | 本地备份 |
-| `r20_okx` | `/home/r20/.okx` | 预留给 OKX CLI 的本地配置 |
-| `r20_bypy` | `/home/r20/.bypy` | 预留给网盘备份客户端的配置 |
-| `r20_npm` | `/home/r20/.npm-global` | 预留给 npm 全局安装的目录 |
+| `okxquant_config` | `/app/config` | 管理后台修改后的运行配置 |
+| `okxquant_data` | `/app/data` | SQLite 数据库、决策、提示词、记忆和加密密钥存储 |
+| `okxquant_logs` | `/app/logs` | 运行日志 |
+| `okxquant_backups` | `/app/backups` | 本地备份 |
+| `okxquant_okx` | `/home/okxquant/.okx` | 预留给 OKX CLI 的本地配置 |
+| `okxquant_bypy` | `/home/okxquant/.bypy` | 预留给网盘备份客户端的配置 |
+| `okxquant_npm` | `/home/okxquant/.npm-global` | 预留给 npm 全局安装的目录 |
 
-宿主机 `.env` 用于 Compose 注入初始环境；容器内 `R20_ENV_FILE=/app/config/.env` 用于保存后台配置更新。加载时，持久化配置可覆盖继承的环境变量，加密凭证存储也会参与最终配置解析。因此修改宿主机 `.env` 后，仍应核对后台实际生效值。
+宿主机 `.env` 用于 Compose 注入初始环境；容器内 `OKXQUANT_ENV_FILE=/app/config/.env` 用于保存后台配置更新。加载时，持久化配置可覆盖继承的环境变量，加密凭证存储也会参与最终配置解析。因此修改宿主机 `.env` 后，仍应核对后台实际生效值。
 
-镜像设置 `HOME=/home/r20`，并保留镜像内置的 `/usr/local/bin/okx`。可选的后台 CLI 升级写入 `/home/r20/.npm-global`，其 `bin` 优先加入 PATH；即使该卷为空，内置 CLI 仍可使用。
+镜像设置 `HOME=/home/okxquant`，并保留镜像内置的 `/usr/local/bin/okx`。可选的后台 CLI 升级写入 `/home/okxquant/.npm-global`，其 `bin` 优先加入 PATH；即使该卷为空，内置 CLI 仍可使用。
 
 普通 `down` 不删除 Named Volumes。**不要执行 `down -v`，除非明确要销毁配置、账户数据库和运行数据。**
 
@@ -117,7 +117,7 @@ python -m pip install -r requirements.txt
 python scripts/run_tests.py --verbose
 
 # 前端构建自动包含 Vue 和 Vite 配置的类型检查
-cd frontend
+cd okxquant_frontend
 npm ci
 npm run build
 ```

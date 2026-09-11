@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-R20 Authentic OKX Positions-History Ledger Synchronizer (sync_full_ledger.py)
+OKXQuant Authentic OKX Positions-History Ledger Synchronizer (sync_full_ledger.py)
 Directly reads OKX official `account positions-history` & `account positions` API.
 Eliminates bills heuristic split-error, accurately records real position-level trades!
 """
@@ -53,7 +53,7 @@ def read_cli_list(command):
 
 def read_snapshot(env, path, command, params):
     if env.configured:
-        from r20_backend.okx_trade_service import _request
+        from okxquant_backend.okx_trade_service import _request
         rows = _request('GET',path,params,env,timeout=8)
         if not isinstance(rows,list) or any(not isinstance(x,dict) for x in rows):
             raise RuntimeError('Invalid ledger source; previous ledger preserved')

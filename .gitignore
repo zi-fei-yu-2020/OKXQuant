@@ -55,7 +55,7 @@ id_rsa
 id_rsa.pub
 token.json
 credentials.json
-.r20-admin-bootstrap
+.okxquant-admin-bootstrap
 
 # Live Real-Money Ledger & Private DBs (CRITICAL)
 data/*.json
@@ -90,7 +90,7 @@ backups/
 *.zip
 *.pid
 *_TODO.md
-R20_V600_PREVIEW_TODO.md
+OKXQUANT_V600_PREVIEW_TODO.md
 .github_device_pending.json
 
 # OS & Editor

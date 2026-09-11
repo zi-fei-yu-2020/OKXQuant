@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from fastapi.testclient import TestClient
-import r20_backend.app as app_module
-from r20_backend.admin_auth import AdminAuthStore
+import okxquant_backend.app as app_module
+from okxquant_backend.admin_auth import AdminAuthStore
 from scripts import memory_registry as memory, trade_lock
 
 class MemoryRouteTests(unittest.TestCase):
@@ -23,7 +23,7 @@ class MemoryRouteTests(unittest.TestCase):
         (self.root/'trading_ledger.json').write_text(json.dumps([{'id':v,'status':'closed','environment_id':self.scope,'net_pnl':1} for v in ['t1','t2']]))
     def login(self,name,password):
         r=self.client.post('/api/v1/admin/auth/login',json={'username':name,'password':password});self.assertEqual(r.status_code,200,r.text)
-        return {'X-R20-Session':r.json()['session_token']}
+        return {'X-OKXQuant-Session':r.json()['session_token']}
     def state(self):
         r=self.client.get('/api/v1/admin/memory',headers=self.headers);self.assertEqual(r.status_code,200,r.text);return r.json()['publication']
     def create(self):

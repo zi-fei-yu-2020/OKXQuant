@@ -19,7 +19,7 @@ def settings_for(profile):
     # Operators can bind a stable prompt profile to the capital-aware preset
     # without rewriting prompt text. The exchange leverage remains an observed
     # account setting and order_plan sizes from actual stop distance.
-    requested_mode = str(__import__('os').environ.get('R20_CAPITAL_MODE','')).strip().lower()
+    requested_mode = str(__import__('os').environ.get('OKXQUANT_CAPITAL_MODE','')).strip().lower()
     name = 'small300' if (profile.get('id')=='small300' or requested_mode in {'300','small300','small'}) else profile.get('execution_profile','standard')
     if name not in ('small300','standard'):
         raise ValueError('Unknown execution preset; new risk blocked')

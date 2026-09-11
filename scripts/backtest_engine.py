@@ -79,7 +79,7 @@ def fetch_okx_candles(inst_id,bar='1H',limit=100):
     if not 1<=int(limit)<=300: raise ValueError('Recent candles limited to 300; import archived data for long studies')
     from urllib.parse import urlencode
     url='https://www.okx.com/api/v5/market/candles?'+urlencode({'instId':inst_id,'bar':bar,'limit':limit})
-    req=urllib.request.Request(url,headers={'User-Agent':'R20-Research/2'})
+    req=urllib.request.Request(url,headers={'User-Agent':'OKXQuant-Research/2'})
     with urllib.request.urlopen(req,timeout=10) as response: payload=json.load(response)
     if str(payload.get('code'))!='0': raise ValueError('Historical candle source unavailable')
     rows=closed_candles(payload.get('data',[]),bar,limit=limit)

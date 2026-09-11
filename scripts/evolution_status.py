@@ -27,7 +27,7 @@ def public_status(data_dir=None):
     if not isinstance(candidates, list): candidates = []
     candidates = [c for c in candidates if isinstance(c, dict)]
     last_job = {}
-    db_path = root / 'r20_gateway.db'
+    db_path = root / 'okxquant_gateway.db'
     if db_path.exists():
         try:
             with closing(sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True, timeout=.2)) as db:

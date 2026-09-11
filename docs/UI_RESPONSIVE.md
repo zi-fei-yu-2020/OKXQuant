@@ -12,6 +12,6 @@
 
 Windows 桌面 Edge/Playwright 使用含记录、长连续英文标识、长策略描述及日志的隔离测试数据，覆盖 6 个前台页面、16 个管理页面及登录页；双主题、320/390/768/1440 宽度，另检查模型配置、模型列表、编辑弹窗和交易空状态。
 
-除文档宽度外，还检查可见内容边界；交易表格能独立滚动到最后一列且不带动文档横移，筛选/搜索仍正确。代码回归测试位于 `frontend/tests/mobile-layout.test.mjs`，浏览器审查截图和报告位于本地 `frontend/.ui-artifacts/mobile-overflow/`。
+除文档宽度外，还检查可见内容边界；交易表格能独立滚动到最后一列且不带动文档横移，筛选/搜索仍正确。代码回归测试位于 `okxquant_frontend/tests/mobile-layout.test.mjs`，浏览器审查截图和报告位于本地 `okxquant_frontend/.ui-artifacts/mobile-overflow/`。
 
 后台使用隔离数据，未写入服务器配置或交易数据；生产观察面板另外进行只读验证。截图并非本会话逐像素视觉验收的替代品，检查结果以浏览器布局度量与交互断言为准。

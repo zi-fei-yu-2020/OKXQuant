@@ -83,7 +83,7 @@ class EvidenceStorageTests(unittest.TestCase):
         self.env=OKXEnvironment('demo','fake','fake','fake')
 
     def test_archived_terminal_order_survives_recent_page_aging(self):
-        receipts.archive(self.env.identity,'close_order_receipt',[order(clOrdId='r20close1234567890')],receipts.ORDER_FIELDS)
+        receipts.archive(self.env.identity,'close_order_receipt',[order(clOrdId='okxquantclose1234567890')],receipts.ORDER_FIELDS)
         data=receipts.load_inputs(self.env,[])
         r=attribution.reason(history(),data['orders'])
         self.assertEqual(r['exit_source'],'manual_admin')
@@ -113,7 +113,7 @@ class EvidenceStorageTests(unittest.TestCase):
 class HistoryAdmissionTests(unittest.TestCase):
     def test_history_is_fixed_get_with_monitor_admission(self):
         env=OKXEnvironment('demo','fake','fake','fake')
-        with patch.object(algo_reader,'_turn',return_value=nullcontext()) as turn,patch.object(algo_reader,'_reserve') as reserve,patch.object(algo_reader,'_check'),patch('r20_backend.okx_trade_service._request',return_value=[]) as get:
+        with patch.object(algo_reader,'_turn',return_value=nullcontext()) as turn,patch.object(algo_reader,'_reserve') as reserve,patch.object(algo_reader,'_check'),patch('okxquant_backend.okx_trade_service._request',return_value=[]) as get:
             algo_reader.read_algo_history(env,ord_type='oco')
         self.assertEqual(turn.call_args.args[1],'monitor');self.assertEqual(reserve.call_args.args[1],'monitor')
         self.assertEqual(get.call_args.args[:2],('GET','/api/v5/trade/orders-algo-history'))
@@ -121,7 +121,7 @@ class HistoryAdmissionTests(unittest.TestCase):
 
     def test_history_429_has_no_retry_or_risk_cooldown_poisoning(self):
         env=OKXEnvironment('demo','fake','fake','fake')
-        with patch.object(algo_reader,'_turn',return_value=nullcontext()),patch.object(algo_reader,'_reserve'),patch.object(algo_reader,'_check'),patch.object(algo_reader,'_cooldown') as cooldown,patch('r20_backend.okx_trade_service._request',side_effect=urllib.error.HTTPError('x',429,'rate',{},None)) as get:
+        with patch.object(algo_reader,'_turn',return_value=nullcontext()),patch.object(algo_reader,'_reserve'),patch.object(algo_reader,'_check'),patch.object(algo_reader,'_cooldown') as cooldown,patch('okxquant_backend.okx_trade_service._request',side_effect=urllib.error.HTTPError('x',429,'rate',{},None)) as get:
             with self.assertRaises(algo_reader.AlgoReadError):algo_reader.read_algo_history(env,ord_type='oco')
         self.assertEqual(get.call_count,1);cooldown.assert_not_called()
 

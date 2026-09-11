@@ -32,9 +32,9 @@ class PromptRuntimeTests(unittest.TestCase):
             stack.enter_context(patch.object(brain,'okx_private_command',side_effect=lambda c:c))
             cli=stack.enter_context(patch.object(brain.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=json.dumps(pending or []),stderr='')))
             active=stack.enter_context(patch.object(brain,'active_profile',return_value=copy.deepcopy(profile if profile is not None else prompt_library.PRESETS['stable'])))
-            stack.enter_context(patch('r20_backend.council_manager.load_council_config',return_value={'enabled':False}))
-            stack.enter_context(patch('r20_backend.llm_manager.get_active_llm_runtime',return_value={'model':'test','base_url':'https://example.invalid/v1','api_key':'FAKE','api_format':'openai_chat'}))
-            llm=stack.enter_context(patch('r20_backend.llm_manager.execute_llm_request',return_value=(json.dumps(output),'',{},1),side_effect=[(text,'',{},1) for text in texts] if texts else None))
+            stack.enter_context(patch('okxquant_backend.council_manager.load_council_config',return_value={'enabled':False}))
+            stack.enter_context(patch('okxquant_backend.llm_manager.get_active_llm_runtime',return_value={'model':'test','base_url':'https://example.invalid/v1','api_key':'FAKE','api_format':'openai_chat'}))
+            llm=stack.enter_context(patch('okxquant_backend.llm_manager.execute_llm_request',return_value=(json.dumps(output),'',{},1),side_effect=[(text,'',{},1) for text in texts] if texts else None))
             stack.enter_context(patch.object(brain,'ModelCallTelemetry',return_value=MagicMock()))
             # A fresh old BUY must be cleared even if this response is rejected.
             (root/'AI_DECISION_CACHE_FILE').write_text(json.dumps({'OLD':{'decision':{'action':'BUY_LONG'}}}))
@@ -132,7 +132,7 @@ class PromptRuntimeTests(unittest.TestCase):
 
 class PromptApiProjectionTests(unittest.TestCase):
     def test_legacy_override_preview_keeps_user_text_out_of_system(self):
-        import r20_backend.app as app_module
+        import okxquant_backend.app as app_module
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'override.txt';path.write_text('ONLY_USER_SENTENCE',encoding='utf-8')
             with patch.object(app_module,'require_admin_header'),patch.object(app_module,'refresh_settings'),patch.object(app_module,'PROMPT_OVERRIDE_FILE',path),patch.object(app_module,'active_profile',return_value=copy.deepcopy(prompt_library.PRESETS['stable'])):
@@ -143,8 +143,8 @@ class PromptApiProjectionTests(unittest.TestCase):
             self.assertEqual(result['composition']['contract_version'],trading_prompt.VERSION)
 
     def test_council_test_route_does_not_fake_account_or_authorize_orders(self):
-        import r20_backend.app as app_module
-        from r20_backend import council_manager
+        import okxquant_backend.app as app_module
+        from okxquant_backend import council_manager
         with patch.object(app_module,'require_admin_header'),patch.object(app_module,'active_profile',return_value=copy.deepcopy(prompt_library.PRESETS['stable'])),patch('scripts.ai_brain_trader.get_user_prompt_override',return_value=''),patch('scripts.instrument_pool.load_instruments',return_value=[{'instId':'BTC-USDT-SWAP','name':'BTC'}]),patch.object(council_manager,'load_council_config',return_value={'timeout_seconds':1}),patch.object(council_manager,'execute_council_debate',return_value=(response(),{})) as llm:
             result=app_module.admin_test_council_debate(app_module.CouncilTestRequest(mock_market_prompt='TEST_TEXT_ONLY'))
         self.assertFalse(result['executable'])

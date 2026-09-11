@@ -1,0 +1,16 @@
+[Unit]
+Description=OKXQuant Standalone Scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/OKXQuant
+EnvironmentFile=/opt/OKXQuant/.env
+ExecStart=/usr/bin/env python3 -m okxquant_backend.scheduler
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

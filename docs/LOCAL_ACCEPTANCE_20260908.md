@@ -9,7 +9,7 @@
 ## 环境与配置
 
 - Ubuntu-22.04 / WSL2；Python 3.10.12；Node 22.23.2；OKX CLI 1.4.6。
-- 运行用户 r20local，应用位于 /opt/r20-local/app，Windows dev 是编辑与提交源。
+- 运行用户 okxquantlocal，应用位于 /opt/okxquant-local/app，Windows dev 是编辑与提交源。
 - 用户指定的 gemini-3.8-flash-high / high 已真实调用；Key 未提交。
 - 只配置和调用 demo；没有 live 凭据、live 订单或远端 Git push。
 - 本地风险上限：单笔权益 0.04%、单标的保证金 20 USDT、实际杠杆 3 倍。不是推荐的实盘参数。
