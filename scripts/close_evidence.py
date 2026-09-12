@@ -132,7 +132,14 @@ def local_close_events(scope):
 
 def load_inputs(env,orders):
     # Only completed closing-direction receipts are archived, not every open/canceled entry.
-    closing=[r for r in orders if isinstance(r,dict) and ((r.get('posSide')=='long' and r.get('side')=='sell') or (r.get('posSide')=='short' and r.get('side')=='buy') or str(r.get('reduceOnly','')).lower()=='true')]
+    cycle_start = 0.0
+    try:
+        from datetime import datetime, timezone, timedelta
+        initial = ledger_monitor.load('account_initial_state.json', {})
+        cycle_start = datetime.strptime(initial.get('reset_time','1970-01-01 00:00:00'), '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone(timedelta(hours=8))).timestamp() * 1000
+    except (TypeError, ValueError, OverflowError):
+        cycle_start = 0.0
+    closing=[r for r in orders if isinstance(r,dict) and float(r.get('uTime') or r.get('cTime') or 0) >= cycle_start and ((r.get('posSide')=='long' and r.get('side')=='sell') or (r.get('posSide')=='short' and r.get('side')=='buy') or str(r.get('reduceOnly','')).lower()=='true')]
     archive(env.identity,'close_order_receipt',closing,ORDER_FIELDS)
     scope_key=hashlib.sha256(env.identity.encode()).hexdigest()[:16]
     name='close_history_refresh_'+scope_key+'.json';refresh=ledger_monitor.load(name,{})
