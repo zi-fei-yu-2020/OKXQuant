@@ -27,7 +27,7 @@ def index(scope):
                 horizon=(chosen.get('horizon') if chosen else d.get('horizon')) or ('scalp' if setup=='model_independent' else 'swing')
                 title={'pullback_reclaim':'趋势回踩' if version in {'closed-candle-plans-v3','closed-candle-plans-v4'} else '回收反弹（旧规则）',
                        'closed_range_breakout':'收盘突破','model_independent':'模型独立方案'}.get(setup,'已关联模型方案')
-                for oid in ids:result[oid]={'strategy':title,'strategy_evidence':'opening_fill_order_decision_link','decision_id':did,'setup':setup,'strategy_type':setup,'horizon':horizon,'candidate_version':version,'instId':plan.get('instId'),'side':plan.get('side')}
+                for oid in ids:result[oid]={'strategy':title,'strategy_evidence':'opening_fill_order_decision_link','decision_id':did,'candidate_id':d.get('candidate_id'),'setup':setup,'strategy_type':setup,'horizon':horizon,'candidate_version':version,'strategy_version':record.get('strategy_version'),'opening_features':record.get('features',{}),'news_snapshot':record.get('news_snapshot',{}),'instId':plan.get('instId'),'side':plan.get('side')}
             return result
     except (OSError,ValueError,TypeError,sqlite3.Error):return {}
 

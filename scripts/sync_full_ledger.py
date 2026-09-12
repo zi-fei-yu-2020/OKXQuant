@@ -220,6 +220,12 @@ def build_lifecycle_ledger(*, notify=True):
         allocation = reconcile_fill_fees(h, fill_archive, peers=pos_history, active_positions=pos_data)
         origin = strategy_origin(h,fill_archive,origins,allocation.get("fee_reconciliation"))
         strat_tag = origin["strategy"]
+        opening_order_ids = list((allocation.get("fee_reconciliation") or {}).get("opening_order_ids") or [])
+        opening_trade_ids = [str(f.get("tradeId")) for f in fill_archive if isinstance(f, dict)
+                             and str(f.get("ordId") or "") in set(opening_order_ids) and f.get("tradeId")]
+        linked_decisions = [origin.get("decision_id")] if origin.get("decision_id") else []
+        evidence_status = "complete" if origin.get("strategy_evidence") == "opening_fill_order_decision_link" and opening_order_ids and linked_decisions else "partial"
+        exit_snapshot = {k: h.get(k) for k in ("instId", "direction", "openAvgPx", "closeAvgPx", "closeTotalPos", "lever", "cTime", "uTime", "pnl", "fee", "fundingFee") if h.get(k) is not None}
         trades_lifecycle.append({
             "id": f"pos_hist_{u_ts}_{inst}",
             "instId":inst_id,"pos_id":str(h.get("posId") or ""),"closed_size":close_pos_sz,"environment_id":env.identity,"environment":env.mode,
@@ -229,6 +235,15 @@ def build_lifecycle_ledger(*, notify=True):
             "strategy": strat_tag,
             "strategy_evidence": origin["strategy_evidence"],
             "strategy_decision_id": origin.get("decision_id"),
+            "decision_id": origin.get("decision_id"),
+            "candidate_id": origin.get("candidate_id"),
+            "strategy_version": origin.get("strategy_version") or origin.get("candidate_version"),
+            "setup": origin.get("setup") or origin.get("strategy_type"),
+            "opening_order_ids": opening_order_ids,
+            "opening_trade_ids": sorted(set(opening_trade_ids)),
+            "opening_features": origin.get("opening_features") or {},
+            "news_snapshot": origin.get("news_snapshot") or {},
+            "evidence_status": evidence_status,
             "strategy_type": origin.get("strategy_type") or origin.get("setup") or "unknown",
             "horizon": origin.get("horizon", "unknown"),
             "margin": margin_usdt,
@@ -237,6 +252,7 @@ def build_lifecycle_ledger(*, notify=True):
             "open_px": round(open_px, 4),
             "close_time": close_time,
             "close_px": round(close_px, 4),
+            "exit_snapshot": exit_snapshot,
             "gross_pnl": gross_pnl,
             "open_fee": None,
             "close_fee": None,
