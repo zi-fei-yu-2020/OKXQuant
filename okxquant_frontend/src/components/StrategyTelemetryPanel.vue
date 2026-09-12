@@ -17,12 +17,24 @@ const localize = (v: unknown) => statusMap[String(v || '')] || String(v || '')
 const statusLabel = computed(() => localize(wait.value?.status || 'WAIT') || '等待')
 const profileLabel = computed(() => { const id = execution.value.id; return id === 'standard' ? '标准风控' : id === 'small300' ? '300U 小资金' : execution.value.label || id || '未设置' })
 const waitLabel = computed(() => localize(waitState.value?.detail || wait.value?.unavailable_reason) || '等待新的短线或波段候选')
+const dailyLossPct = computed(() => {
+  const pnl = Number(store.data?.today_stats?.total_pnl)
+  const initial = Number(store.data?.account?.initial_capital)
+  if (!Number.isFinite(pnl) || !Number.isFinite(initial) || initial <= 0) return null
+  return (pnl / initial) * 100
+})
+const dailyLimitPct = computed(() => {
+  const value = Number(execution.value.daily_drawdown_pct)
+  return Number.isFinite(value) ? value * 100 : null
+})
+const dailyCircuitTriggered = computed(() => dailyLossPct.value !== null && dailyLimitPct.value !== null && dailyLossPct.value <= -dailyLimitPct.value)
+const signedPct = (value: number | null) => value === null ? '--' : `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
 </script>
 <template>
   <div class="strategy-telemetry" data-strategy-telemetry>
     <AppCard class="telemetry-card telemetry-card--profile"><div class="telemetry-card__heading"><div><p class="telemetry-card__eyebrow">执行模式</p><h3>{{ profileLabel }}</h3></div><AppBadge tone="brand">{{ execution.id || '标准' }}</AppBadge></div><div class="telemetry-card__body telemetry-card__params"><div><span>单笔风险</span><strong>{{ pct(execution.per_trade_equity_pct) }}</strong></div><div><span>最大杠杆</span><strong>{{ execution.max_leverage ?? '--' }}x</strong></div><div><span>持仓上限</span><strong>{{ execution.max_active_instruments ?? '--' }} 个</strong></div><div><span>保证金上限</span><strong>{{ execution.total_margin_usdt ?? '--' }}U</strong></div></div></AppCard>
     <AppCard class="telemetry-card telemetry-card--stats"><div class="telemetry-card__heading"><div><p class="telemetry-card__eyebrow">策略统计</p><h3>短线 / 波段</h3></div><AppBadge tone="neutral">实时更新</AppBadge></div><div class="telemetry-card__body telemetry-card__stats"><div class="telemetry-stat"><span>短线净盈亏</span><strong :style="{color:Number(stat('scalp').net_pnl || 0)>=0?'var(--color-up)':'var(--color-down)'}">{{ money(stat('scalp').net_pnl) }}</strong><small>{{ stat('scalp').closed || 0 }} 笔 · {{ stat('scalp').wins || 0 }} 胜</small></div><div class="telemetry-stat"><span>波段净盈亏</span><strong :style="{color:Number(stat('swing').net_pnl || 0)>=0?'var(--color-up)':'var(--color-down)'}">{{ money(stat('swing').net_pnl) }}</strong><small>{{ stat('swing').closed || 0 }} 笔 · {{ stat('swing').wins || 0 }} 胜</small></div></div></AppCard>
-    <AppCard class="telemetry-card telemetry-card--decision"><div class="telemetry-card__heading"><div><p class="telemetry-card__eyebrow">决策状态</p><h3>WAIT 当前状态</h3></div><AppBadge :tone="waitState?.code === 'AI_UNAVAILABLE' || waitState?.code === 'DATA_UNAVAILABLE' ? 'warning' : 'neutral'">{{ statusLabel }}</AppBadge></div><div class="telemetry-card__body telemetry-card__decision"><div class="telemetry-decision__copy"><p>{{ waitLabel }}</p><small>下一步：{{ localize(waitState?.next_trigger) || '等待新的候选' }}</small></div><div class="telemetry-decision__meta"><span>已审查 <strong>{{ wait?.evaluated_count ?? '--' }}</strong></span><span>候选 <strong>{{ wait?.counts?.entry_candidate ?? 0 }}</strong></span><span>日内熔断 <strong>{{ pct(execution.daily_drawdown_pct) }}</strong></span></div></div></AppCard>
+    <AppCard class="telemetry-card telemetry-card--decision"><div class="telemetry-card__heading"><div><p class="telemetry-card__eyebrow">决策状态</p><h3>WAIT 当前状态</h3></div><AppBadge :tone="waitState?.code === 'AI_UNAVAILABLE' || waitState?.code === 'DATA_UNAVAILABLE' ? 'warning' : 'neutral'">{{ statusLabel }}</AppBadge></div><div class="telemetry-card__body telemetry-card__decision"><div class="telemetry-decision__copy"><p>{{ waitLabel }}</p></div><div class="telemetry-decision__meta"><span>已审查 <strong>{{ wait?.evaluated_count ?? '--' }}</strong></span><span>候选 <strong>{{ wait?.counts?.entry_candidate ?? 0 }}</strong></span><span>日内亏损 <strong>{{ signedPct(dailyLossPct) }}</strong></span><span>熔断阈值 <strong>{{ dailyLimitPct === null ? '--' : dailyLimitPct.toFixed(1) + '%' }}</strong></span><span>状态 <strong :style="{ color: dailyCircuitTriggered ? 'var(--color-down)' : 'var(--color-up)' }">{{ dailyCircuitTriggered ? '已触发' : '未触发' }}</strong></span></div></div></AppCard>
   </div>
 </template>
 <style scoped>
