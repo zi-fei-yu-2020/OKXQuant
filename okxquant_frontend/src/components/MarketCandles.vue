@@ -3,7 +3,7 @@
 // No private chart internals, synthetic candles, trading commands or strategy writes.
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import type { Chart, DeepPartial, KLineData, Styles } from 'klinecharts'
-import { ChartCandlestick, RefreshCw, SlidersHorizontal, RotateCcw, Plus, Minus } from 'lucide-vue-next'
+import { ChartCandlestick, RefreshCw, SlidersHorizontal, RotateCcw, Plus, Minus, LoaderCircle } from 'lucide-vue-next'
 import AppCard from './ui/AppCard.vue'
 import AppBadge from './ui/AppBadge.vue'
 import AppButton from './ui/AppButton.vue'
@@ -235,7 +235,12 @@ onUnmounted(() => {
     </div>
     <div class="relative min-w-0 overflow-hidden" :style="{ height: chartHeight + 'px' }">
       <div ref="canvas" class="h-full w-full min-w-0" role="img" :aria-label="instrument + ' ' + period + ' K线与技术指标'" :data-chart-ready="chartReady" :data-chart-bars="loadedCount" :data-chart-symbol="instrument" :data-chart-period="period" />
-      <div v-if="!chartReady" class="absolute inset-0 flex items-center justify-center px-5 text-center text-sm pointer-events-none" style="color:var(--text-muted)">暂未取得可用 K 线，自动重试中</div>
+      <div v-if="!chartReady" class="market-chart__loading absolute inset-0 flex items-center justify-center px-5 text-center pointer-events-none" role="status" aria-live="polite">
+        <div class="market-chart__loading-panel">
+          <LoaderCircle class="market-chart__loading-icon size-5 animate-spin" aria-hidden="true" />
+          <div><div class="text-sm font-medium">正在加载 K 线</div><div class="mt-1 text-xs" style="color:var(--text-muted)">行情连接中，系统会自动重试</div></div>
+        </div>
+      </div>
     </div>
     <footer class="px-4 py-3 border-t space-y-2 text-[11px]" style="border-color:var(--border-subtle);color:var(--text-muted)">
       <div v-if="lines.length" class="flex flex-wrap gap-x-4 gap-y-1"><span v-for="line in lines" :key="line.id" class="num-tabular">{{ line.label }} {{ formatPrice(line.price) }}</span></div>
@@ -259,4 +264,6 @@ onUnmounted(() => {
 .market-chart__select { min-height: 44px; max-width: 100%; width: 11rem; }
 .market-chart__period { min-width: 44px; min-height: 44px; padding-inline: 9px; }
 .market-chart__control { min-width: 44px; min-height: 44px; }
+.market-chart__loading-panel { display: inline-flex; align-items: center; gap: 12px; padding: 14px 18px; border: 1px solid var(--border-subtle); border-radius: 14px; background: color-mix(in srgb, var(--bg-card) 88%, transparent); box-shadow: 0 10px 30px rgb(15 23 42 / 8%); }
+.market-chart__loading-icon { color: var(--color-brand); }
 </style>
