@@ -65,7 +65,16 @@ function clean(v: any, fallback = '--'): string {
   return v || fallback
 }
 
-function horizonLabel(v: unknown): string {
+function isUnlinkedHolding(t: any): boolean {
+  return t?.status === 'holding' && /来源未关联|未关联/.test(String(t?.strategy || ''))
+}
+
+function strategyLabel(t: any): string {
+  return isUnlinkedHolding(t) ? '持仓来源待确认' : clean(t.strategy, '观望')
+}
+
+function horizonLabel(v: unknown, t?: any): string {
+  if (isUnlinkedHolding(t)) return '待确认'
   return v === 'scalp' ? '短线' : v === 'swing' ? '波段' : '未知'
 }
 </script>
@@ -246,11 +255,11 @@ function horizonLabel(v: unknown): string {
                     color: var(--text-muted);
                   "
                 >
-                  {{ clean(t.strategy, '观望') }}
+                  {{ strategyLabel(t) }}
                 </span>
               </td>
               <td class="py-3 px-3 text-xs" style="color: var(--text-muted)">
-                <span class="px-2 py-0.5 rounded border" style="border-color: var(--border-subtle); background: var(--bg-badge)">{{ horizonLabel(t.horizon) }}</span><span v-if="t.duration_bucket && t.duration_bucket.endsWith('overdue')" class="ml-1 text-[10px]" style="color:var(--color-warn)">持仓超计划</span>
+                <span class="px-2 py-0.5 rounded border" style="border-color: var(--border-subtle); background: var(--bg-badge)">{{ horizonLabel(t.horizon, t) }}</span><span v-if="t.duration_bucket && t.duration_bucket.endsWith('overdue')" class="ml-1 text-[10px]" style="color:var(--color-warn)">持仓超计划</span>
               </td>
               <td class="py-3 px-3 font-bold num-tabular" style="color: var(--text-main)">
                 {{ marginText(t.margin) }}
