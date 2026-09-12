@@ -250,7 +250,7 @@ function horizonLabel(v: unknown): string {
                 </span>
               </td>
               <td class="py-3 px-3 text-xs" style="color: var(--text-muted)">
-                <span class="px-2 py-0.5 rounded border" style="border-color: var(--border-subtle); background: var(--bg-badge)">{{ horizonLabel(t.horizon) }}</span>
+                <span class="px-2 py-0.5 rounded border" style="border-color: var(--border-subtle); background: var(--bg-badge)">{{ horizonLabel(t.horizon) }}</span><span v-if="t.duration_bucket && t.duration_bucket.endsWith('overdue')" class="ml-1 text-[10px]" style="color:var(--color-warn)">持仓超计划</span>
               </td>
               <td class="py-3 px-3 font-bold num-tabular" style="color: var(--text-main)">
                 {{ marginText(t.margin) }}
