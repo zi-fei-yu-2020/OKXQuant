@@ -16,7 +16,10 @@ def collect_fills(env,*,max_pages=5):
         db.execute('CREATE TABLE IF NOT EXISTS sync_state(scope TEXT PRIMARY KEY, payload TEXT NOT NULL)')
         row=db.execute('SELECT payload FROM sync_state WHERE scope=?',(env.identity,)).fetchone()
     state=json.loads(row[0]) if row else {}
-    since=float(state.get('since',max(0,float(state.get('covered_until',0))-300)))
+    cycle_file=ROOT/'data'/'account_initial_state.json'
+    try: cycle=json.loads(cycle_file.read_text(encoding='utf8')); cycle_start=float(__import__('datetime').datetime.strptime(cycle.get('reset_time','1970-01-01 00:00:00'),'%Y-%m-%d %H:%M:%S').replace(tzinfo=__import__('datetime').timezone(__import__('datetime').timedelta(hours=8))).timestamp())
+    except Exception: cycle_start=0.0
+    since=max(cycle_start, float(state.get('since',max(0,float(state.get('covered_until',0))-300))))
     cursor=state.get('cursor');seen=set();count=0;complete=False
     started=float(state.get('started_at',time.time()))
     for _ in range(max_pages):
@@ -29,6 +32,8 @@ def collect_fills(env,*,max_pages=5):
             if not identity or not item.get('ordId') or not item.get('instId'):
                 raise ValueError('Incomplete exchange fill identity')
             if identity in seen:continue
+            ts=float(item.get('ts',0) or 0)/1000
+            if ts < cycle_start: continue
             seen.add(identity)
             batch.append(('fill:'+env.identity+':'+identity,item))
             count+=1

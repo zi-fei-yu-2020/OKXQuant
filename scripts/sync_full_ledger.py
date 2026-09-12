@@ -97,6 +97,8 @@ def build_lifecycle_ledger(*, notify=True):
 
     # 1. Fetch OKX Official Positions History (Official position-level closed trades)
     pos_history=read_snapshot(env,'/api/v5/account/positions-history','okx account positions-history --limit 100 --json',{'instType':'SWAP','limit':'100'})
+    cycle_start=datetime.datetime.strptime(reset_time,'%Y-%m-%d %H:%M:%S').replace(tzinfo=tz_bj).timestamp()*1000
+    pos_history=[row for row in pos_history if float(row.get('uTime') or row.get('cTime') or 0) >= cycle_start]
     pos_data=read_snapshot(env,'/api/v5/account/positions','okx account positions --json',{'instType':'SWAP'})
     orders_history=read_snapshot(env,'/api/v5/trade/orders-history','okx swap orders --history --limit 100 --json',{'instType':'SWAP','limit':'100'})
 
