@@ -223,7 +223,8 @@ def build_lifecycle_ledger(*, notify=True):
         origin = strategy_origin(h,fill_archive,origins,allocation.get("fee_reconciliation"))
         strat_tag = origin["strategy"]
         opening_order_ids = list((allocation.get("fee_reconciliation") or {}).get("opening_order_ids") or [])
-        opening_trade_ids = [str(f.get("tradeId")) for f in fill_archive if isinstance(f, dict)
+        archived_fills = [fill for rows in fill_archive.by_instrument.values() for fill in rows]
+        opening_trade_ids = [str(f.get("tradeId")) for f in archived_fills if isinstance(f, dict)
                              and str(f.get("ordId") or "") in set(opening_order_ids) and f.get("tradeId")]
         linked_decisions = [origin.get("decision_id")] if origin.get("decision_id") else []
         evidence_status = "complete" if origin.get("strategy_evidence") == "opening_fill_order_decision_link" and opening_order_ids and linked_decisions else "partial"
