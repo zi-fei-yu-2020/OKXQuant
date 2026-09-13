@@ -539,6 +539,19 @@ def prune_trackers(trackers: Dict[str, Any], real_pos_dict: Dict[str, Any]) -> i
 
 
 @trade_lock.serialized
+
+def record_entry_rejection(inst_id, ai_info, reason, **details):
+    """Persist why a selected AI entry did not reach entry_gateway."""
+    try:
+        strategy_evidence.best_effort(market._selected().identity, 'entry_rejection', {
+            'instrument': inst_id, 'decision_id': (ai_info or {}).get('decision_id'),
+            'candidate_id': ((ai_info or {}).get('decision') or {}).get('candidate_id'),
+            'action': ((ai_info or {}).get('decision') or {}).get('action'),
+            'reason': reason, 'details': details, 'at': time.time(),
+        })
+    except Exception:
+        pass
+
 def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: float, price: float, tp_px: float, sl_px: float, *, risk_budget_usdt=15, decision_id=None, decision_at=None, allow_demo_translation=True, horizon='swing') -> Tuple[bool, str]:
     """Submit a protected limit order; acceptance is not treated as a fill."""
     # Check if we are running in simulated/demo mode and price diverged significantly from demo orderbook
@@ -2177,6 +2190,10 @@ def execute_portfolio():
                         elif not calculus_accel_ok:
                             print(f"[Pyramiding 拦截] {f['name']} 数理数据无效、动能衰竭或延续概率偏低 (加速度={c_accel:+.2f}, 概率={p_cont:.1f}%)，禁止追多加仓")
 
+                if not allow_entry:
+                    record_entry_rejection(inst_id, ai_info, "entry_gate_blocked", active_position=bool(curr_pos), pending_order=inst_id in pending_inst_ids, slots_full=reserved_slot_count >= max_active_positions, action=action)
+                if not allow_entry:
+                    record_entry_rejection(inst_id, ai_info, "entry_gate_blocked", active_position=bool(curr_pos), pending_order=inst_id in pending_inst_ids, slots_full=reserved_slot_count >= max_active_positions, action=action)
                 if allow_entry:
                     limit_px = float(ai_decision.get("entry_price") or f.get("bidPx") or f["price"])
                     tp_px = float(ai_decision.get("take_profit_price") or (limit_px + tp_dist))
