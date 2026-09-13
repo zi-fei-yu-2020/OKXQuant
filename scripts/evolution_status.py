@@ -41,6 +41,8 @@ def public_status(data_dir=None):
                 db.row_factory = sqlite3.Row
                 row = db.execute("SELECT status,started_at,finished_at,return_code FROM job_runs WHERE job_name='self_improvement' ORDER BY id DESC LIMIT 1").fetchone()
                 if row: last_job = dict(row)
+                if reset_time and str(last_job.get('started_at') or '').replace('T',' ')[:19] < reset_time:
+                    last_job = {}
         except sqlite3.Error: pass
     if attempt.get('account_scope') and attempt['account_scope']!=scope:attempt={}
     if scope_mismatch:last_job={}
@@ -66,8 +68,8 @@ def public_status(data_dir=None):
         'insights': report.get('insights') or [],
         # Legacy actions_taken are recommendations, not proof of executed changes.
         'recommendations': report.get('recommendations') or report.get('actions_taken') or [],
-        'pending_candidates': published.get('pending_count',0) if published.get('managed') else sum(c.get('audit_passed') is True and c.get('status') != 'approved' for c in candidates),
-        'rejected_candidates': published.get('rejected_count',0) if published.get('managed') else sum(c.get('audit_passed') is False for c in candidates),
+        'pending_candidates': sum(c.get('status') == 'pending' for c in candidates),
+        'rejected_candidates': sum(c.get('status') == 'rejected' or c.get('audit_passed') is False for c in candidates),
         'review_markdown': '' if scope_mismatch else report['review_markdown'] if isinstance(report.get('review_markdown'), str) else text('self_improvement_review.md'),
         'message': '复盘结果与运行记忆分开保存；NO_CHANGE 或候选未审核通过时，运行记忆日期不推进。',
     }
