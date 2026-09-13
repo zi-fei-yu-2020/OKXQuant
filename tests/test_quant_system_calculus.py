@@ -6,6 +6,9 @@ factor library integration, multi-factor scoring and pyramiding gateways.
 """
 
 import os
+import io
+import json
+from types import SimpleNamespace
 import sys
 import unittest
 from unittest.mock import patch
@@ -168,7 +171,49 @@ class FactorLibraryIntegrationTest(unittest.TestCase):
 
     def test_factor_library_structure_contains_math_prob_foundations(self):
         item = {"instId": "BTC-USDT-SWAP", "name": "BTC", "type": "crypto", "precision": 1}
-        factors = factor_library.compute_instrument_factors(item, {})
+        # Deterministic market fixtures: never query OKX or execute its CLI.
+        candles = [
+            [str(1700000000000 + i * 900000), str(60000 + i * 10),
+             str(60020 + i * 10), str(59980 + i * 10), str(60010 + i * 10),
+             str(100 + i), "0", "0", "1"]
+            for i in range(24)
+        ][::-1]
+
+        def response(request, **kwargs):
+            url = request.full_url
+            if "/ticker?" in url:
+                data = [{"last": "60240", "bidPx": "60239", "askPx": "60241", "open24h": "60000"}]
+            elif "/candles?" in url:
+                data = candles[::4] if "bar=1H" in url else candles
+            elif "/books?" in url:
+                data = [{"bids": [["60239", "20"]], "asks": [["60241", "10"]]}]
+            elif "/aigc/mcp/indicators" in url:
+                data = [{"data": [{"timeframes": {"1H": {"indicators": {
+                    "ADX": [{"values": {"adx": "24.3"}}], "KDJ": [{"values": {"j": "55"}}],
+                    "BBWIDTH": [{"values": {"bbWidth": "1.4"}}], "CMF": [{"values": {"cmf": "0.12"}}],
+                }}}}]}]
+            elif "/funding-rate?" in url:
+                data = [{"fundingRate": "0.0001"}]
+            elif "/open-interest?" in url:
+                data = [{"oiUsd": "1000000"}]
+            else:
+                data = []
+            return io.BytesIO(json.dumps({"code": "0", "data": data}).encode())
+
+        def cli_response(command, **kwargs):
+            data = [{"bids": [["60239", "20"]], "asks": [["60241", "10"]]}] if "orderbook" in command else []
+            return SimpleNamespace(returncode=0, stdout=json.dumps(data), stderr="")
+
+        with patch.object(factor_library.market, "signal_as_of", return_value=(1700000000000 + 24*900000)/1000), \
+             patch.object(factor_library.urllib.request, "urlopen", side_effect=response) as http, \
+             patch.object(factor_library.subprocess, "run", side_effect=cli_response) as cli:
+            factors = factor_library.compute_instrument_factors(item, {})
+        self.assertGreater(http.call_count, 0)
+        self.assertEqual(cli.call_count, 0)
+        self.assertEqual(factors["trend_momentum"]["adx_1h"], 24.3)
+        self.assertEqual(factors["volatility_channel"]["bb_width_1h"], 1.4)
+        self.assertEqual(factors["price"], 60240)
+        self.assertEqual(factors["microstructure"]["bid_ask_depth_ratio"], 2.0)
         self.assertIn("calculus_dynamics", factors)
         self.assertIn("definite_integrals", factors)
         self.assertIn("probability_theory", factors)
@@ -238,6 +283,12 @@ class AiFactorTraderMathProbTest(unittest.TestCase):
 
 
 class AiFactorTraderPositionProtectionTest(unittest.TestCase):
+    def setUp(self):
+        # These tests isolate protection thresholds, with lifecycle admission
+        # covered separately by test_entry_safety.LifecycleTests.
+        guard=patch('scripts.position_lifecycle.reconcile',return_value='same')
+        guard.start();self.addCleanup(guard.stop)
+
     def _factor(self, price=99.0):
         return {
             "market_data_valid": True, "instId": "SOL-USDT-SWAP", "name": "SOL",
@@ -251,11 +302,11 @@ class AiFactorTraderPositionProtectionTest(unittest.TestCase):
         with patch.object(ai_factor_trader,"close_position_confirmed",return_value=(True,"exchange position closed")) as close, patch.object(ai_factor_trader,"record_trade"), patch.object(ai_factor_trader,"add_stop_cooldown"), patch.object(ai_factor_trader,"notify_trade_close") as notify_close:
             closed,reason=ai_factor_trader.manage_position_tp_and_trailing(self._factor(),position,trackers,"2026-09-02 15:00:00",actions)
         self.assertTrue(closed); self.assertEqual(reason,"已硬止损")
-        close.assert_called_once_with("SOL-USDT-SWAP","long",4.0)
+        close.assert_called_once_with("SOL-USDT-SWAP","long",4.0,exit_reason="hard_stop",position=position)
         self.assertNotIn("SOL-USDT-SWAP_long",trackers)
         self.assertTrue(any("触发硬止损" in item for item in actions))
         if notify_close is not None:
-            notify_close.assert_called_once_with("SOL", -18.0, "硬止损平仓", 99.0)
+            notify_close.assert_called_once_with(inst="SOL", pnl=-18.0, stage="硬止损平仓", exit_px=99.0)
 
     def test_losing_position_above_hard_stop_remains_open(self):
         position={"pos":4.0,"side":"long","avgPx":103.55,"upl":-4.0}
@@ -267,16 +318,29 @@ class AiFactorTraderPositionProtectionTest(unittest.TestCase):
         self.assertFalse(closed); self.assertEqual(reason,"持仓监控中"); close.assert_not_called()
 
     def test_cloud_oco_gap_is_repaired_and_verified(self):
-        responses=[
-            {"ok":True,"data":[],"stderr":"","stdout":"[]"},
-            {"ok":True,"data":{"algoId":"88"},"stderr":"","stdout":"{}"},
-            {"ok":True,"data":[{"state":"live","posSide":"long","side":"sell","reduceOnly":"true","sz":"4","tpTriggerPx":"106","slTriggerPx":"101"}],"stderr":"","stdout":"[]"},
-        ]
-        with patch.object(ai_factor_trader,"run_cmd_result",side_effect=responses) as run, patch.object(ai_factor_trader.time,"sleep"):
-            ok,detail=ai_factor_trader.ensure_cloud_position_protection("SOL-USDT-SWAP","long",4,106,101)
-        self.assertTrue(ok); self.assertIn("repaired and verified",detail)
-        self.assertIn("--ordType oco",run.call_args_list[1].args[0])
-        self.assertIn("--reduceOnly",run.call_args_list[1].args[0])
+        covered = [{"algoId": "88", "instId": "SOL-USDT-SWAP", "ordType": "oco",
+                    "state": "live", "posSide": "long", "side": "sell", "reduceOnly": "true",
+                    "sz": "4", "tpTriggerPx": "106", "slTriggerPx": "101"}]
+        position = {"instId": "SOL-USDT-SWAP", "posSide": "long", "pos": "4",
+                    "markPx": "104", "avgPx": "103"}
+        env = SimpleNamespace(identity="offline-protection-test", simulated=True)
+        with (
+            patch.object(ai_factor_trader.market, "_selected", return_value=env),
+            patch.object(ai_factor_trader, "okx_private_command", side_effect=lambda command: command),
+            patch.object(ai_factor_trader.algo_reader, "read_algo_orders", side_effect=[[], covered]) as read,
+            patch.object(ai_factor_trader, "query_positions", return_value=(True, [position], "")) as positions,
+            patch.object(ai_factor_trader, "run_cmd_result", return_value={"ok": True, "data": {"algoId": "88"}, "stderr": "", "stdout": "{}"}) as run,
+            patch.object(ai_factor_trader.time, "sleep"),
+        ):
+            ok, detail = ai_factor_trader.ensure_cloud_position_protection("SOL-USDT-SWAP", "long", 4, 106, 101)
+        self.assertTrue(ok, detail)
+        self.assertIn("repaired and verified", detail)
+        run.assert_called_once()
+        self.assertIn("--ordType oco", run.call_args.args[0])
+        self.assertIn("--reduceOnly", run.call_args.args[0])
+        self.assertEqual(read.call_count, 2)
+        self.assertEqual(positions.call_count, 2)
+        self.assertTrue(all(call.kwargs["force"] for call in read.call_args_list))
 
     def test_stale_order_query_failure_aborts_cleanup(self):
         with patch.object(ai_factor_trader,"run_cmd_result",return_value={"ok":False,"data":None,"stderr":"timeout","stdout":""}):
@@ -298,11 +362,11 @@ class AiFactorTraderPositionProtectionTest(unittest.TestCase):
         actions=[]
         with patch.object(ai_factor_trader,"ensure_cloud_position_protection",return_value=(False,"repair failed")), patch.object(ai_factor_trader,"close_position_confirmed",return_value=(True,"closed")) as close, patch.object(ai_factor_trader,"record_trade"), patch.object(ai_factor_trader,"add_stop_cooldown"), patch.object(ai_factor_trader,"notify_trade_close") as notify_close:
             closed,reason=ai_factor_trader.manage_position_tp_and_trailing(self._factor(102.5),position,trackers,"2026-09-02 15:00:00",actions)
-        self.assertTrue(closed); self.assertEqual(reason,"保护失效安全退出")
-        close.assert_called_once_with("SOL-USDT-SWAP","long",4.0)
+        self.assertTrue(closed); self.assertEqual(reason,"保护核验安全退出")
+        close.assert_called_once_with("SOL-USDT-SWAP","long",4.0,exit_reason="oco_unverified",position=position)
         self.assertNotIn("SOL-USDT-SWAP_long",trackers)
         if notify_close is not None:
-            notify_close.assert_called_once_with("SOL", -4.0, "云端保护失效退出", 102.5)
+            notify_close.assert_called_once_with(inst="SOL", pnl=-4.0, stage="云端保护核验未知退出", exit_px=102.5)
 
 
 if __name__ == "__main__":

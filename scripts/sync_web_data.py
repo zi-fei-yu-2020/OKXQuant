@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Generate local R20 dashboard cache without an external console dependency."""
+"""Generate local OKXQuant dashboard cache without an external console dependency."""
 
 import os
 from okx_runtime import replace_cli_prefix as okx_private_command
 import json
+import public_market as market
 import time
 import subprocess
 import datetime
@@ -189,7 +190,10 @@ def generate_trading_data():
     for item in TARGET_INSTRUMENTS:
         inst_id = item["instId"]
         name = item["name"]
-        ticker_res = run_json_cmd(f"okx market ticker {inst_id} --json") or []
+        try:
+            ticker_res = market.get_json(f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}")["data"]
+        except Exception:
+            ticker_res = []
         ticker = ticker_res[0] if isinstance(ticker_res, list) and ticker_res else (ticker_res if isinstance(ticker_res, dict) else {})
         last_px = float(ticker.get("last", 0) or 0)
         open24h = float(ticker.get("open24h", 0) or 0)

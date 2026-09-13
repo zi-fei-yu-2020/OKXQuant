@@ -24,18 +24,18 @@ if [ ! -f "$ROOT/.env" ]; then
   cp "$ROOT/env.example" "$ROOT/.env"
 fi
 chmod 600 "$ROOT/.env"
-chmod +x "$ROOT/scripts/r20_okx_setup.py"
+chmod +x "$ROOT/scripts/okxquant_okx_setup.py"
 
 cat <<EOF
 
-R20 dependencies installed.
+OKXQuant dependencies installed.
 Next:
-  1. Edit $ROOT/.env and keep R20_OKX_ENV=demo initially.
+  1. Edit $ROOT/.env and keep OKXQUANT_OKX_ENV=demo initially.
   2. Configure OKX using ONE method:
      - Recommended standalone path: enter a DEMO API Key in /admin.
      - CLI OAuth path: run OAuth login as the SAME Linux user that runs both services.
   3. Verify without placing an order:
-     $VENV_DIR/bin/python $ROOT/scripts/r20_okx_setup.py
+     $VENV_DIR/bin/python $ROOT/scripts/okxquant_okx_setup.py
 
 OAuth site must be explicitly selected: global / eea / us / tr.
 Do not copy another user's ~/.okx directory or commit credentials.

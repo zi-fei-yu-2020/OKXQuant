@@ -1,0 +1,16 @@
+{
+  "enabled": false,
+  "mode": "shadow_only",
+  "order_authorized": false,
+  "scope": "REPLACE_WITH_CURRENT_ACCOUNT_SCOPE",
+  "simulated": true,
+  "support_source": "local_catalog",
+  "instruments": [
+    { "instId": "BTC-USDT-SWAP" },
+    { "instId": "ETH-USDT-SWAP" },
+    { "instId": "SOL-USDT-SWAP" },
+    { "instId": "DOGE-USDT-SWAP" },
+    { "instId": "SUI-USDT-SWAP" },
+    { "instId": "WLD-USDT-SWAP" }
+  ]
+}

@@ -4,10 +4,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from fastapi.testclient import TestClient
-import r20_backend.app as app_module
-import r20_backend.backup_store as backups
+import okxquant_backend.app as app_module
+import okxquant_backend.backup_store as backups
 import scripts.prompt_library as prompts
-from r20_backend.admin_auth import AdminAuthStore
+from okxquant_backend.admin_auth import AdminAuthStore
 
 
 class ControlPlaneV2ApiTests(unittest.TestCase):
@@ -18,7 +18,7 @@ class ControlPlaneV2ApiTests(unittest.TestCase):
         prompts.LIBRARY_FILE=root/"prompt_library.json"; backups.CONFIG_FILE=root/"backup_methods.json"
         self.client=TestClient(app_module.app)
         response=self.client.post('/api/v1/admin/auth/login',json={'username':'admin','password':'InitialAdmin123456'})
-        self.headers={'X-R20-Session':response.json()['session_token']}
+        self.headers={'X-OKXQuant-Session':response.json()['session_token']}
 
     def tearDown(self):
         app_module.admin_auth=self.original_auth; prompts.LIBRARY_FILE=self.original_prompt; backups.CONFIG_FILE=self.original_backup; self.temp.cleanup()

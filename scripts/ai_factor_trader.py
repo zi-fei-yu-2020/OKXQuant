@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-R20 High-Alpha Quantitative Multi-Factor Trading Matrix & Execution Engine (R20 Quantum Trader v6.5.2)
+OKXQuant High-Alpha Quantitative Multi-Factor Trading Matrix & Execution Engine (OKXQuant v0.1.0)
 Architecture:
 1. Multi-Dimensional Quant Factor Sub-Engine:
    - Trend Momentum: EMA Slope (9/21/55), Multi-Timeframe Alignment (15M, 1H, 4H)
@@ -19,13 +19,28 @@ Architecture:
 4. Dynamic Adaptive Position Sizing, Volatility-Trailing Exits & Cooldown Protection.
 """
 
+# Standalone scheduler children must not depend on an inherited PYTHONPATH.
+import sys as _sys
+from pathlib import Path as _Path
+_project_root = str(_Path(__file__).resolve().parents[1])
+if _project_root not in _sys.path:
+    _sys.path.insert(0, _project_root)
+
+
 import os
-from okx_runtime import freeze_environment as freeze_okx_environment, replace_cli_prefix as okx_private_command, unfreeze_environment as unfreeze_okx_environment
+from okx_runtime import freeze_environment as freeze_okx_environment, replace_cli_prefix as okx_private_command, unfreeze_environment as unfreeze_okx_environment, selected_environment
 import json
 import time
 import datetime
+import math
+import re
 import subprocess
 import urllib.request
+import public_market as market
+import instrument_support as support
+import algo_reader
+from scripts import trade_lock, risk_policy, entry_gateway, strategy_evidence, exit_policy
+from scripts.execution_profiles import runtime as execution_runtime
 import fcntl
 from typing import Tuple, Dict, Any, List, Optional
 from concurrent.futures import ThreadPoolExecutor
@@ -43,18 +58,22 @@ NEWS_SENTIMENT_FILE = os.path.join(DATA_DIR, "news_sentiment.json")
 AI_POSITION_MANAGEMENT_FILE = os.path.join(DATA_DIR, "ai_position_management.json")
 TRADER_LOCK_FILE = os.path.join(DATA_DIR, ".ai_factor_trader.lock")
 TRADER_SLOT_FILE = os.path.join(DATA_DIR, ".ai_factor_trader_slot.json")
+HORIZON_INTENTS_FILE = os.path.join(DATA_DIR, 'horizon_intents.json')
+HORIZON_STATS_FILE = os.path.join(DATA_DIR, 'horizon_stats.json')
+CURRENT_HORIZON = 'unknown'
 
 try:
     import sys
     sys.path.append(os.path.join(WORKSPACE_DIR, "scripts"))
     from db_manager import record_trade_sqlite
     from qq_notifier import notify_trade_open, notify_trade_close
-    from ai_brain_trader import execute_batch_ai_brain_cycle, get_latest_ai_decision
+    from ai_brain_trader import execute_batch_ai_brain_cycle, get_latest_ai_decision, get_last_inference_error
 except Exception:
     record_trade_sqlite = None
     notify_trade_open = None
     notify_trade_close = None
     execute_batch_ai_brain_cycle = None
+    get_last_inference_error = lambda: "统一推理模块未加载"
     get_latest_ai_decision = None
 
 from instrument_pool import load_instruments
@@ -89,24 +108,34 @@ ASSET_CLASS_PROFILES = {
     "crypto": {
         "entry_threshold": 2.2,
         "min_profit_ratio": 0.0250,
-        "tp_atr_mult": 2.8,
-        "sl_atr_mult": 1.4,
-        "trailing_kick_in": 2.2,
-        "trailing_pullback": 0.80
+        "tp_atr_mult": 3.5,
+        "sl_atr_mult": 1.5,
+        "trailing_kick_in": 2.5,
+        "trailing_pullback": 1.2
     }
 }
 
 MAX_CONCURRENT_POSITIONS = len(TARGET_INSTRUMENTS)
 MAX_SAME_DIRECTION_POSITIONS = 6
+LAST_ENTRY_PLAN = {}
 TAKER_FEE_RATE = 0.0005
 MAKER_FEE_RATE = 0.0002 # Limit Order Maker Fee (60% Lower Than Market Taker)
-MAX_DAILY_LOSS_USDT = 150.0
+MAX_DAILY_LOSS_USDT = 75.0
 
 # 🚀 Pyramiding Scale-In Hard Risk Gateways (顺势浮盈金字塔加仓风控硬门禁)
 MAX_SINGLE_ASSET_MARGIN = 600.0   # 单标的最大累计占用保证金上限 (USDT)
 MAX_SCALE_IN_COUNT = 1            # 单标的最大顺势加仓次数 (底仓+最多1次顺势追加)
 MIN_SCALE_IN_PROFIT_RATIO = 0.008 # 允许顺势加仓的最小底仓浮盈率 (+0.8%)
-MIN_SCALE_IN_CONFIDENCE = 75.0    # 顺势加仓必须达到的最低 AI 置信度门槛
+
+def _exit_preset(tracker, executed_actions, name):
+    """Keep last verified selection across restarts; warn once per degraded state."""
+    previous = tracker.get('exitPolicyStatus')
+    settings, status = exit_policy.resolve(tracker, execution_runtime)
+    if status['source'] != 'active_profile' and status != previous:
+        source = '沿用最近核验预设' if status['source'] == 'last_verified' else '采用保守保护参数'
+        executed_actions.append(f"[{name}] 退出预设读取异常({status['error_type']})，{source} {status['preset_id']}；硬止损与云端保护继续")
+    return settings
+
 
 def is_tradfi_market_liquid(asset_type: str) -> bool:
     """Strict US Regular Trading Window (BJ 21:30 ~ 次日 04:00)"""
@@ -132,7 +161,10 @@ def is_tradfi_market_liquid(asset_type: str) -> bool:
 def run_cmd_result(cmd, timeout=15):
     """Return process metadata; callers must inspect returncode before mutating local state."""
     try:
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        from okxquant_backend.account_connections import assert_current
+        assert_current(market._selected())
+        with algo_reader.command_barrier(cmd, market._selected()):
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
         parsed = None
         if res.stdout.strip():
             try:
@@ -163,7 +195,8 @@ def run_cmd(cmd, timeout=15):
 
 def run_json_cmd(cmd, timeout=15):
     try:
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        with algo_reader.command_barrier(cmd, market._selected()):
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
         if res.returncode == 0 and res.stdout.strip():
             return json.loads(res.stdout.strip())
         return None
@@ -171,20 +204,34 @@ def run_json_cmd(cmd, timeout=15):
         return None
 
 def fetch_candles_direct(inst_id: str, bar: str = "15m", limit: int = 45):
-    """Direct fetch from OKX Official Market REST API with fallback"""
+    """Public REST + bounded shared cache; never fall back to spawning Node."""
     try:
-        url = f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar={bar}&limit={limit}"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=4) as response:
-            data = json.loads(response.read().decode("utf-8"))
-            if data.get("code") == "0" and "data" in data:
-                return data["data"]
+        return market.candles(inst_id, bar, limit)
     except Exception:
-        pass
-    res = run_json_cmd(f"okx market candles {inst_id} --bar {bar} --limit {limit} --json")
-    if res and isinstance(res, list):
-        return res
-    return []
+        return []
+
+def fetch_signal_candles(inst_id, bar, limit):
+    try: return market.signal_candles(inst_id, bar, limit)
+    except Exception: return []
+
+
+def load_horizon_intents():
+    try:
+        with open(HORIZON_INTENTS_FILE, encoding='utf-8') as f: return json.load(f)
+    except Exception: return {}
+
+def save_horizon_intent(inst_id, side, horizon, decision_id=None):
+    data=load_horizon_intents(); data[f'{inst_id}_{side}']={'horizon': horizon if horizon in {'scalp','swing'} else 'swing','decision_id':decision_id,'ts':int(time.time())}
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(HORIZON_INTENTS_FILE,'w',encoding='utf-8') as f: json.dump(data,f,ensure_ascii=False,indent=2)
+
+def consume_horizon_intent(inst_id, side):
+    data=load_horizon_intents(); key=f'{inst_id}_{side}'; item=data.pop(key,None)
+    if item:
+        try:
+            with open(HORIZON_INTENTS_FILE,'w',encoding='utf-8') as f: json.dump(data,f,ensure_ascii=False,indent=2)
+        except Exception: pass
+    return item.get('horizon','swing') if isinstance(item,dict) else 'swing'
 
 def load_trackers():
     if os.path.exists(POSITION_TRACKER_FILE):
@@ -196,11 +243,16 @@ def load_trackers():
     return {}
 
 def save_trackers(trackers):
+    import tempfile
+    fd, temporary = tempfile.mkstemp(prefix='.position-trackers-',suffix='.tmp',dir=DATA_DIR)
     try:
-        with open(POSITION_TRACKER_FILE, "w", encoding="utf-8") as f:
-            json.dump(trackers, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+        with os.fdopen(fd,'w',encoding='utf-8') as handle:
+            json.dump(trackers,handle,ensure_ascii=False,indent=2,allow_nan=False)
+            handle.flush();os.fsync(handle.fileno())
+        os.replace(temporary,POSITION_TRACKER_FILE)
+    finally:
+        if os.path.exists(temporary):os.unlink(temporary)
+
 
 def load_stop_cooldowns():
     if os.path.exists(STOP_COOLDOWN_FILE):
@@ -214,11 +266,15 @@ def load_stop_cooldowns():
 def add_stop_cooldown(inst_id: str, side: str, reason: str = "止损冷却"):
     cooldowns = load_stop_cooldowns()
     key = f"{inst_id}_{side}"
+    previous = cooldowns.get(key) if isinstance(cooldowns.get(key), dict) else {}
+    count = int(previous.get('count', 0) or 0) + 1
     cooldowns[key] = {
         "instId": inst_id,
         "side": side,
         "ts": int(time.time()),
-        "reason": reason
+        "reason": reason,
+        "count": count,
+        "cooldown_seconds": 7200 if count >= 2 else 1800,
     }
     try:
         with open(STOP_COOLDOWN_FILE, "w", encoding="utf-8") as f:
@@ -230,7 +286,8 @@ def is_in_stop_cooldown(inst_id: str, side: str) -> bool:
     cooldowns = load_stop_cooldowns()
     key = f"{inst_id}_{side}"
     if key in cooldowns:
-        rem_sec = 1800 - (int(time.time()) - cooldowns[key].get("ts", 0))
+        seconds = int(cooldowns[key].get('cooldown_seconds', 1800) or 1800)
+        rem_sec = seconds - (int(time.time()) - int(cooldowns[key].get("ts", 0) or 0))
         if rem_sec > 0:
             return True
     return False
@@ -245,6 +302,23 @@ def clamp(value, lower, upper, default):
 def load_adaptive_config():
     """Fallback config reader maintaining compatibility."""
     return {}
+
+def execution_limits():
+    """Resolve portfolio limits from the active execution binding.
+
+    The old trader loop kept 6 slots/600U per asset even when the 300U
+    profile was active; the gateway later clipped the order, but the strategy
+    still over-traded. Keep planning and final authorization on one budget.
+    """
+    try:
+        cfg=execution_runtime()['execution']
+    except Exception:
+        cfg={}
+    return {
+        'max_positions': int(cfg.get('max_active_instruments', MAX_CONCURRENT_POSITIONS)),
+        'max_same_direction': int(cfg.get('max_same_direction_positions', cfg.get('max_active_instruments', MAX_SAME_DIRECTION_POSITIONS))),
+        'single_asset_margin': float(cfg.get('single_asset_margin_usdt', MAX_SINGLE_ASSET_MARGIN)),
+    }
 
 def clean_stale_open_orders() -> Tuple[bool, str]:
     """Cancel stale entry orders; any inability to verify/cancel blocks the trading cycle."""
@@ -312,34 +386,31 @@ def is_circuit_breaker_active():
         except Exception as e:
             return True, f"熔断状态文件损坏，安全暂停开仓: {e}"
 
-    # 3. Daily Max Loss Limit Check from lifecycle ledger using Beijing close_time.
-    if os.path.exists(LEDGER_JSON_FILE):
-        try:
-            with open(LEDGER_JSON_FILE, "r", encoding="utf-8") as f:
-                ledger = json.load(f)
-            tz_bj = datetime.timezone(datetime.timedelta(hours=8))
-            today_str = datetime.datetime.now(tz_bj).strftime("%Y-%m-%d")
-            today_pnl = sum(
-                float(t.get("pnl", 0) or 0)
-                for t in ledger
-                if t.get("status") == "closed" and str(t.get("close_time", "")).startswith(today_str)
-            )
-            if today_pnl < -MAX_DAILY_LOSS_USDT:
-                return True, f"今日累计回撤 ({today_pnl:.2f}U) 触及单日最大风控熔断限额 ({MAX_DAILY_LOSS_USDT}U)"
-        except Exception as e:
-            return True, f"日亏损风控数据读取失败，安全暂停开仓: {e}"
+    # 3. Daily/peak loss gate uses the authoritative reconciled equity state.
+    try:
+        from scripts import strategy_evidence
+        from scripts.okx_runtime import selected_environment
+        env = selected_environment()
+        with strategy_evidence.connection() as db:
+            row = db.execute('SELECT payload FROM equity_state WHERE scope=?', (env.identity,)).fetchone()
+        if row:
+            state = json.loads(row[0])
+            if state.get('blocked'):
+                return True, f"权威权益状态触发亏损熔断: daily={float(state.get('daily_drawdown', 0)):.2%}, peak={float(state.get('peak_drawdown', 0)):.2%}"
+    except Exception as e:
+        return True, f"权威权益风控数据读取失败，安全暂停开仓: {e}"
 
     return False, ""
 
-def query_positions() -> Tuple[bool, List[Dict[str, Any]], str]:
+def query_positions(timeout=20) -> Tuple[bool, List[Dict[str, Any]], str]:
     """Distinguish an exchange-confirmed empty account from a failed query."""
-    result = run_cmd_result(okx_private_command("okx account positions --json"), timeout=20)
+    result = run_cmd_result(okx_private_command("okx account positions --json"), timeout=timeout)
     if not result["ok"] or not isinstance(result.get("data"), list):
         return False, [], result["stderr"] or result["stdout"] or "invalid positions response"
     return True, result["data"], ""
 
 
-def close_position_confirmed(inst_id: str, pos_side: str, before_size: float) -> Tuple[bool, str]:
+def close_position_confirmed(inst_id: str, pos_side: str, before_size: float, *, exit_reason='strategy_close', position=None) -> Tuple[bool, str]:
     """Close a position and verify at the exchange before changing local state."""
     # Pre-cancel any conflicting pending/reduce-only orders for this instrument to release available size
     try:
@@ -354,30 +425,102 @@ def close_position_confirmed(inst_id: str, pos_side: str, before_size: float) ->
     except Exception as e:
         print(f"[Close Pre-Clean] Warning cancelling pending orders for {inst_id}: {e}")
 
+    close_started = time.time()
+    import uuid
+    attempt_id = uuid.uuid4().hex
+    transport_code = None
+    def journal(status, response):
+        try:
+            from scripts.close_evidence import record_close
+            record_close(market._selected(),inst_id=inst_id,side=pos_side,size=before_size,
+                started_at=close_started,confirmed_at=time.time(),reason=exit_reason,position=position,
+                result=response,status=status,attempt_id=attempt_id,transport_code=transport_code)
+        except Exception:
+            pass  # Never retry or suppress a protective close because audit storage failed.
+    journal('submitted', None)
     result = run_cmd_result(
         okx_private_command(f"okx swap close --instId {inst_id} --mgnMode cross --posSide {pos_side} --autoCxl --json"),
         timeout=20,
     )
-    if not result["ok"]:
-        return False, result["stderr"] or result["stdout"] or "close command failed"
-
+    accepted = bool(result.get('ok'))
+    if not accepted:
+        code = re.search(r'(?:Code:|OKX|HTTP)\s*(\d{3,6})', str(result.get('stderr') or result.get('stdout') or ''))
+        transport_code = code.group(1) if code else 'unconfirmed_transport'
+    journal('accepted' if accepted else 'unconfirmed', result.get('data'))
     saw_successful_query = False
+    deadline = time.monotonic() + 8
     for _ in range(6):
+        remaining_budget = deadline - time.monotonic()
+        if remaining_budget <= .6:
+            break
         time.sleep(0.6)
-        query_ok, positions, query_error = query_positions()
+        query_ok, positions, query_error = query_positions(timeout=min(2., max(.1, deadline - time.monotonic())))
         if not query_ok:
             continue
         saw_successful_query = True
         remaining = 0.0
-        for position in positions:
-            if position.get("instId") == inst_id and str(position.get("posSide", "net")).lower() == pos_side:
-                remaining = abs(float(position.get("pos", 0) or 0))
+        for current_position in positions:
+            if current_position.get("instId") == inst_id and str(current_position.get("posSide", "net")).lower() == pos_side:
+                remaining = abs(float(current_position.get("pos", 0) or 0))
                 break
         if remaining < max(1e-12, abs(before_size) * 0.001):
-            return True, "exchange position closed"
+            journal('confirmed' if accepted else 'flat_observed',result.get('data'))
+            return True, ('exchange position closed' if accepted else 'position flat after uncertain close response; execution source requires order evidence')
+    journal('unconfirmed', result.get('data'))
     if not saw_successful_query:
-        return False, "position verification failed: no successful exchange response"
-    return False, f"exchange still reports an open position after close request (before={before_size})"
+        return False, "position verification failed: no successful exchange response; no write retry"
+    return False, f"exchange still reports an open position after one close request (before={before_size}); no write retry"
+
+
+def reconcile_scale_trackers(trackers: Dict[str, Any], real_pos_dict: Dict[str, Any]) -> None:
+    """Reconcile scale reservations from exchange order fills, once per fill delta.
+
+    ACKs are not fills: unresolved reads leave the reservation in place and block
+    another scale attempt rather than guessing or incrementing local state.
+    """
+    result = run_cmd_result(okx_private_command("okx swap orders --history --limit 100 --json"), timeout=20)
+    if not result.get("ok") or not isinstance(result.get("data"), list):
+        return
+    for key, tracker in trackers.items():
+        if not isinstance(tracker, dict):
+            continue
+        pending = tracker.get("pending_scale_orders") or []
+        if not isinstance(pending, list):
+            continue
+        side = key.rsplit("_", 1)[-1]
+        inst_id = key.rsplit("_", 1)[0]
+        position = real_pos_dict.get(inst_id)
+        if not position or str(position.get("side", position.get("posSide", ""))).lower() != side:
+            continue
+        position_binding = {str(position.get(field) or "") for field in ("posId", "cTime")}
+        remaining = []
+        changed = False
+        for item in pending:
+            if not isinstance(item, dict) or not item.get("order_id"):
+                remaining.append(item); continue
+            row = next((o for o in result["data"] if str(o.get("ordId")) == str(item["order_id"])), None)
+            if row is None:
+                remaining.append(item); continue
+            state = str(row.get("state") or "").lower()
+            if state in {"live", "partially_filled"}:
+                remaining.append(item); continue
+            if state not in {"filled", "canceled", "mmp_canceled"}:
+                remaining.append(item); continue
+            filled = abs(float(row.get("accFillSz") or 0))
+            counted = abs(float(item.get("counted_fill") or 0))
+            delta = max(0.0, filled - counted)
+            if delta > 0 and position_binding:
+                tracker["scale_count"] = int(tracker.get("scale_count", 0)) + 1
+                item["counted_fill"] = filled
+                item["position_binding"] = sorted(position_binding)
+                changed = True
+            if filled < abs(float(item.get("requested_size") or 0)) and state not in {"canceled", "mmp_canceled"}:
+                remaining.append(item)
+            elif delta <= 0 and state == "filled":
+                remaining.append(item)
+        tracker["pending_scale_orders"] = remaining
+        if changed:
+            tracker["last_scale_reconciled_at"] = time.time()
 
 
 def prune_trackers(trackers: Dict[str, Any], real_pos_dict: Dict[str, Any]) -> int:
@@ -395,16 +538,68 @@ def prune_trackers(trackers: Dict[str, Any], real_pos_dict: Dict[str, Any]) -> i
     return removed
 
 
-def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: int, price: float, tp_px: float, sl_px: float) -> Tuple[bool, str]:
+@trade_lock.serialized
+def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: float, price: float, tp_px: float, sl_px: float, *, risk_budget_usdt=15, decision_id=None, decision_at=None, allow_demo_translation=True, horizon='swing') -> Tuple[bool, str]:
     """Submit a protected limit order; acceptance is not treated as a fill."""
+    # Check if we are running in simulated/demo mode and price diverged significantly from demo orderbook
+    env = market._selected()
+    availability = support.opening_status(inst_id, env.mode)
+    if not availability["can_open"]:
+        return False, availability["message"]
+    effective_px = price
+    effective_tp = tp_px
+    effective_sl = sl_px
+
+    if env.simulated:
+        try:
+            demo_ticker = run_json_cmd(f"okx --demo market ticker {inst_id} --json")
+            if demo_ticker and isinstance(demo_ticker, list) and demo_ticker[0].get("last"):
+                demo_last = float(demo_ticker[0]["last"])
+                if demo_last > 0 and price > 0:
+                    divergence = abs(price - demo_last) / demo_last
+                    # If live market price diverged from demo sandbox by more than 5% (e.g. ASTER / illiquid demo pair)
+                    if divergence > 0.05:
+                        if not allow_demo_translation:
+                            return False, '程序候选与模拟盘报价偏离，禁止平移价格计划，等待重新采集'
+                        scale = demo_last / price
+                        prec = len(str(demo_ticker[0]["last"]).split(".")[1]) if "." in str(demo_ticker[0]["last"]) else 4
+                        effective_px = round(price * scale, prec)
+                        effective_tp = round(tp_px * scale, prec)
+                        effective_sl = round(sl_px * scale, prec)
+                        # Re-verify boundary constraints for demo sandbox
+                        if pos_side == "long":
+                            if effective_sl >= effective_px:
+                                effective_sl = round(effective_px * 0.98, prec)
+                            if effective_tp <= effective_px:
+                                effective_tp = round(effective_px * 1.04, prec)
+                        else:
+                            if effective_sl <= effective_px:
+                                effective_sl = round(effective_px * 1.02, prec)
+                            if effective_tp >= effective_px:
+                                effective_tp = round(effective_px * 0.96, prec)
+        except Exception:
+            pass
+
+    try:
+        plan, client_id = entry_gateway.prepare(market._selected(), inst_id=inst_id, side=pos_side,
+            entry=effective_px, stop=effective_sl, take_profit=effective_tp, requested_size=size,
+            budget=risk_budget_usdt, decision_id=decision_id, decision_at=decision_at, horizon=horizon)
+    except Exception as exc:
+        return False, f"Final risk preflight rejected: {type(exc).__name__}: {exc}"
+    LAST_ENTRY_PLAN.clear(); LAST_ENTRY_PLAN.update(plan)
+    save_horizon_intent(inst_id, pos_side, horizon, decision_id)
+    size = plan['size']
+    effective_px, effective_sl, effective_tp = plan['entry'], plan['stop'], plan['take_profit']
     command = okx_private_command(
-        f"okx swap place --instId {inst_id} --tdMode cross --side {side} "
-        f"--posSide {pos_side} --ordType limit --px {price} --sz {size} "
-        f"--tpTriggerPx {tp_px} --tpOrdPx=-1 --slTriggerPx {sl_px} --slOrdPx=-1 --json"
+        f"okx swap place --instId {inst_id} --tdMode cross --side {side} --clOrdId {client_id} "
+        f"--posSide {pos_side} --ordType limit --px {effective_px} --sz {size} "
+        f"--tpTriggerPx {effective_tp} --tpOrdPx=-1 --slTriggerPx {effective_sl} --slOrdPx=-1 --json"
     )
     result = run_cmd_result(command, timeout=20)
+    strategy_evidence.best_effort(market._selected().identity, 'entry_submission',
+        {'client_id': client_id, 'plan': plan, 'transport_ok': result['ok'], 'response': result.get('data')})
     if not result["ok"]:
-        return False, result["stderr"] or result["stdout"] or "order command failed"
+        return False, "Entry outcome unknown; durable reservation retained for read-only reconciliation"
     payload = result.get("data")
     order_id = None
     if isinstance(payload, dict):
@@ -418,68 +613,124 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: i
         order_id = payload[0].get("ordId")
     if not order_id:
         return False, "exchange accepted response without a verifiable order id"
+    strategy_evidence.finish_intent(client_id, 'acknowledged', {'order_id': str(order_id), 'size': size})
     return True, str(order_id)
 
 
 def _float_or_zero(value: Any) -> float:
     try:
-        return abs(float(value or 0.0))
+        parsed = abs(float(value or 0.0))
+        return parsed if math.isfinite(parsed) else 0.0
     except (TypeError, ValueError):
         return 0.0
 
 
-def _live_oco_coverage(orders: List[Dict[str, Any]], pos_side: str) -> float:
-    """Return contract size covered by live, reduce-only OCO TP/SL orders."""
-    coverage = 0.0
-    close_side = "sell" if pos_side == "long" else "buy"
-    for order in orders:
-        if str(order.get("state", "live")).lower() not in {"live", "effective"}:
-            continue
-        if str(order.get("posSide", "net")).lower() not in {pos_side, "net"}:
-            continue
-        if str(order.get("side", close_side)).lower() != close_side:
-            continue
-        if not order.get("tpTriggerPx") or not order.get("slTriggerPx"):
-            continue
-        reduce_only = str(order.get("reduceOnly", "true")).lower() in {"true", "1", "yes"}
-        if not reduce_only:
-            continue
-        coverage += _float_or_zero(order.get("sz") or order.get("actualSz"))
-    return coverage
+def _live_oco_coverage(orders: List[Dict[str, Any]], pos_side: str, *, mark_px=None, entry_px=None) -> float:
+    """Only explicitly proven live OCO rows count; never infer missing fields."""
+    from scripts.protection_policy import oco_coverage
+    snapshot = oco_coverage(orders, pos_side, mark_px, entry_px)
+    return 0.0 if snapshot.unknown else snapshot.size
 
 
 def ensure_cloud_position_protection(inst_id: str, pos_side: str, size: float, tp_px: float, sl_px: float) -> Tuple[bool, str]:
-    """Verify 100% live cloud OCO coverage, repair any gap, and verify again."""
-    query = run_cmd_result(okx_private_command(f"okx swap algo orders --instId {inst_id} --json"), timeout=20)
-    if not query["ok"] or not isinstance(query.get("data"), list):
-        return False, f"unable to verify cloud OCO: {query['stderr'] or query['stdout'] or 'invalid response'}"
-    coverage = _live_oco_coverage(query["data"], pos_side)
-    missing = max(0.0, float(size) - coverage)
-    if missing <= max(1e-12, float(size) * 0.001):
+    """Unknown/triggered protection never becomes a gap eligible for blind repair."""
+    from decimal import Decimal
+    from scripts.protection_policy import oco_coverage, positive, trigger_geometry
+    size = positive(size)
+    if size is None or pos_side not in ('long', 'short'):
+        return False, "UNKNOWN: invalid position side or size"
+    env = market._selected()
+    try:
+        orders = algo_reader.orders_for_instrument(algo_reader.read_algo_orders(env, priority="risk", force=True), inst_id)
+        position_ok, positions, _ = query_positions()
+        matching = [p for p in positions if p.get('instId') == inst_id and p.get('posSide') == pos_side]
+        if not position_ok or len(matching) != 1 or positive(matching[0].get('pos')) != size:
+            return False, "UNKNOWN: position changed or current position snapshot unavailable"
+        position = matching[0]
+        mark_px, entry_px = positive(position.get('markPx')), positive(position.get('avgPx'))
+        if mark_px is None and entry_px is None:
+            return False, "UNKNOWN: no position price reference for protection geometry"
+    except Exception as exc:
+        detail = str(exc) if isinstance(exc, algo_reader.AlgoReadError) else type(exc).__name__
+        return False, f"UNKNOWN: unable to verify cloud OCO after bounded reads: {detail}"
+    snapshot = oco_coverage(orders, pos_side, mark_px, entry_px)
+    if snapshot.unknown:
+        return False, "UNKNOWN: ambiguous or possibly triggered protection; no repair sent"
+    coverage = snapshot.size
+    if coverage >= size:
         return True, f"cloud OCO coverage verified ({coverage:g}/{size:g})"
-
+    if not trigger_geometry(pos_side, tp_px, sl_px, mark_px, entry_px):
+        return False, "UNKNOWN: proposed repair triggers cross the position price reference"
+    missing = Decimal(str(size)) - sum(Decimal(str(row['sz'])) for row in snapshot.orders)
     close_side = "sell" if pos_side == "long" else "buy"
     command = okx_private_command(
         f"okx swap algo place --instId {inst_id} --side {close_side} --posSide {pos_side} "
-        f"--tdMode cross --ordType oco --sz {missing:g} --tpTriggerPx {tp_px} --tpOrdPx=-1 "
+        f"--tdMode cross --ordType oco --sz {missing:f} --tpTriggerPx {tp_px} --tpOrdPx=-1 "
         f"--slTriggerPx {sl_px} --slOrdPx=-1 --reduceOnly --cxlOnClosePos --json"
     )
-    placed = run_cmd_result(command, timeout=20)
-    if not placed["ok"]:
-        return False, f"cloud OCO repair failed: {placed['stderr'] or placed['stdout'] or 'order rejected'}"
-
+    try:
+        placed = run_cmd_result(command, timeout=20)  # Exactly one write attempt.
+        write_confirmed = placed["ok"]
+    except Exception:
+        write_confirmed = False
+    # An ambiguous write is NOT repeated. Reconcile by fresh reads only.
+    deadline = time.monotonic() + 6
+    last_detail = "UNKNOWN: no fresh post-repair snapshot obtained before deadline"
     for _ in range(4):
-        time.sleep(0.5)
-        verify = run_cmd_result(okx_private_command(f"okx swap algo orders --instId {inst_id} --json"), timeout=20)
-        if not verify["ok"] or not isinstance(verify.get("data"), list):
-            continue
-        verified_coverage = _live_oco_coverage(verify["data"], pos_side)
-        if verified_coverage + max(1e-12, float(size) * 0.001) >= float(size):
-            return True, f"cloud OCO repaired and verified ({verified_coverage:g}/{size:g})"
-    return False, "cloud OCO repair was submitted but full coverage could not be verified"
+        remaining = deadline - time.monotonic()
+        if remaining <= .5: break
+        time.sleep(.5)
+        try:
+            orders = algo_reader.orders_for_instrument(algo_reader.read_algo_orders(
+                env, priority="risk", force=True, timeout=deadline - time.monotonic()), inst_id)
+        except Exception as exc:
+            detail = str(exc) if isinstance(exc, algo_reader.AlgoReadError) else type(exc).__name__
+            last_detail = f"UNKNOWN: post-repair verification unavailable: {detail}"
+            break  # Reader already applied bounded retry/Retry-After; no outer retry storm.
+        try:
+            position_ok, positions, _ = query_positions()
+            matching = [p for p in positions if p.get('instId') == inst_id and p.get('posSide') == pos_side]
+            if not position_ok or len(matching) != 1 or positive(matching[0].get('pos')) != size:
+                return False, "UNKNOWN: position changed during protection repair"
+            mark_px, entry_px = positive(matching[0].get('markPx')), positive(matching[0].get('avgPx'))
+            if mark_px is None and entry_px is None:
+                return False, "UNKNOWN: post-repair price reference unavailable"
+        except Exception:
+            return False, "UNKNOWN: post-repair position snapshot unavailable"
+        snapshot = oco_coverage(orders, pos_side, mark_px, entry_px)
+        if snapshot.unknown:
+            return False, "UNKNOWN: ambiguous or possibly executing post-repair protection"
+        if snapshot.size >= size:
+            label = "repaired and verified" if write_confirmed else "reconciled after uncertain write"
+            return True, f"cloud OCO {label} ({snapshot.size:g}/{size:g})"
+        last_detail = "INSUFFICIENT: fresh post-repair snapshot still shows incomplete coverage"
+    return False, last_detail
 
 
 def record_trade(trade_data):
+    # Keep independent scalp/swing outcome statistics alongside the raw ledger.
+    # The ledger remains the source of truth; this is an additive read model.
+    horizon = str(trade_data.get('horizon') or '').lower()
+    if horizon not in {'scalp','swing'}:
+        inst=str(trade_data.get('inst') or trade_data.get('name') or '')
+        direction=str(trade_data.get('direction') or trade_data.get('side') or '').lower()
+        side='long' if '?' in direction or 'long' in direction else 'short' if '?' in direction or 'short' in direction else ''
+        tracked=load_trackers().get(f'{inst}-USDT-SWAP_{side}',{}) if inst and side else {}
+        horizon=str(tracked.get('horizon') or CURRENT_HORIZON or 'unknown').lower()
+    if horizon not in {'scalp','swing'}: horizon = 'unknown'
+    trade_data.setdefault('horizon', horizon)
+    try:
+        stats={}
+        if os.path.exists(HORIZON_STATS_FILE):
+            with open(HORIZON_STATS_FILE,encoding='utf-8') as f: stats=json.load(f)
+        bucket=stats.setdefault(horizon, {'closed':0,'wins':0,'losses':0,'net_pnl':0.0,'fees':0.0})
+        pnl=float(trade_data.get('net_pnl',trade_data.get('pnl',0.0)) or 0.0)
+        fee=float(trade_data.get('fee',0.0) or 0.0)
+        bucket['closed']+=1; bucket['wins']+=int(pnl>0); bucket['losses']+=int(pnl<=0)
+        bucket['net_pnl']=round(float(bucket.get('net_pnl',0.0))+pnl,8); bucket['fees']=round(float(bucket.get('fees',0.0))+fee,8)
+        with open(HORIZON_STATS_FILE,'w',encoding='utf-8') as f: json.dump(stats,f,ensure_ascii=False,indent=2)
+    except Exception as e:
+        print(f"Failed to record horizon stats: {e}")
     try:
         ledger = []
         if os.path.exists(LEDGER_JSON_FILE):
@@ -637,6 +888,43 @@ def calc_bollinger_squeeze(closes, period=20, mult=2.0):
 # =============================================================================
 # 🚀 High-Alpha Multi-Factor Extraction & Quantitative Feature Assembly
 # =============================================================================
+def _execution_calculus_candles(rows):
+    """Strip OKX timestamps/metadata, preserving newest-first calculator order."""
+    normalized = []
+    for row in rows:
+        candle = [float(row[i]) for i in range(1, 6)]
+        if not all(math.isfinite(value) for value in candle):
+            raise ValueError("Non-finite execution calculus candle")
+        normalized.append(candle)
+    return normalized
+
+
+def _scale_in_calculus_gate(calculus, side):
+    """Fail closed on unavailable momentum/probability evidence; retain thresholds."""
+    unavailable = (False, math.nan, math.nan)
+    if not isinstance(calculus, dict) or calculus.get("valid") is not True:
+        return unavailable
+    probability = calculus.get("probability_theory")
+    # The aggregate calculator does not currently emit a nested valid flag.
+    if not isinstance(probability, dict) or probability.get("valid", True) is not True:
+        return unavailable
+    if side not in ("long", "short"):
+        return unavailable
+    key = "continuation_prob_pct" if side == "long" else "breakdown_prob_pct"
+    try:
+        acceleration = calculus["acceleration"]
+        chance = probability[key]
+        if isinstance(acceleration, bool) or isinstance(chance, bool):
+            return unavailable
+        acceleration, chance = float(acceleration), float(chance)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return unavailable
+    if not math.isfinite(acceleration) or not math.isfinite(chance) or not 0 <= chance <= 100:
+        return unavailable
+    momentum_ok = acceleration >= -0.25 if side == "long" else acceleration <= 0.25
+    return momentum_ok and chance >= 40.0, acceleration, chance
+
+
 def fetch_single_instrument_data(item, all_positions, usdt_available):
     inst_id = item["instId"]
     name = item["name"]
@@ -697,6 +985,7 @@ def fetch_single_instrument_data(item, all_positions, usdt_available):
                 f["position"] = {
                     "instId": inst_id,
                     "name": name,
+                    "posId": p.get("posId"), "cTime": p.get("cTime"),
                     "side": p.get("posSide", p.get("side", "")),
                     "pos": pos_val,
                     "avgPx": float(p.get("avgPx", 0)),
@@ -707,8 +996,28 @@ def fetch_single_instrument_data(item, all_positions, usdt_available):
                 }
                 break
 
-    # 1. Fetch 15M Candles
-    raw_15m = fetch_candles_direct(inst_id, "15m", 45)
+    # Collect the complete frame before any arithmetic. A missing/short 15M
+    # frame used to leave price=0 while 1H ATR divided by it, aborting every
+    # instrument in the portfolio. Incomplete data is a per-symbol WAIT.
+    raw_15m = fetch_signal_candles(inst_id, "15m", 45)
+    raw_1h = fetch_signal_candles(inst_id, "1H", 35)
+    raw_4h = fetch_signal_candles(inst_id, "4H", 25)
+    f["calculus"] = {"valid": False}
+    try:
+        for rows, minimum in ((raw_15m, 30), (raw_1h, 20), (raw_4h, 20)):
+            if not isinstance(rows, list) or len(rows) < minimum:
+                raise ValueError("Missing or insufficient closed candles")
+            for row in rows:
+                o, h, l, c, v = [float(row[i]) for i in range(1, 6)]
+                if (not all(math.isfinite(x) for x in (o,h,l,c,v))
+                        or not 0 < l <= min(o,c) <= max(o,c) <= h or v < 0):
+                    raise ValueError("Invalid OHLCV geometry")
+    except (TypeError, ValueError, IndexError, OverflowError):
+        f["sz"] = 0
+        f["data_quality_reason"] = "Closed candle frame unavailable or invalid"
+        return f
+
+    # 1. Compute 15M factors from verified candles.
     if raw_15m:
         candles_15m = list(reversed(raw_15m))
         closes = [float(c[4]) for c in candles_15m]
@@ -754,17 +1063,22 @@ def fetch_single_instrument_data(item, all_positions, usdt_available):
         # Latest 15M Candle Geometry
         last_c = candles_15m[-1]
         c_open, c_high, c_low, c_close = float(last_c[1]), float(last_c[2]), float(last_c[3]), float(last_c[4])
-        f["bidPx"] = f["price"]
-        f["askPx"] = f["price"]
+        f["signal_close"] = f["price"]
+        f["bidPx"] = 0.0
+        f["askPx"] = 0.0
+        f["quote_as_of_ms"] = 0
         # Fetch Real-time Orderbook Ticker BBO (Best Bid & Ask) for Precision Limit Placement
         try:
-            req_t = urllib.request.Request(f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}", headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req_t, timeout=3) as response_t:
-                d_t = json.loads(response_t.read().decode("utf-8"))
-                if d_t.get("code") == "0" and "data" in d_t and len(d_t["data"]) > 0:
-                    t_item = d_t["data"][0]
-                    f["bidPx"] = float(t_item.get("bidPx", f["price"]) or f["price"])
-                    f["askPx"] = float(t_item.get("askPx", f["price"]) or f["price"])
+            d_t = market.get_json(f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}")
+            if d_t.get("code") == "0" and "data" in d_t and len(d_t["data"]) > 0:
+                t_item = d_t["data"][0]
+                last, bid, ask = [float(t_item.get(key) or 0) for key in ("last", "bidPx", "askPx")]
+                stamp = int(t_item.get("ts") or 0)
+                if (not all(math.isfinite(x) and x > 0 for x in (last,bid,ask))
+                        or ask < bid or not 0 <= time.time()*1000-stamp <= 15000):
+                    raise ValueError("Invalid execution quote")
+                f["quote_as_of_ms"] = stamp
+                f["price"], f["bidPx"], f["askPx"] = last, bid, ask
         except Exception:
             pass
 
@@ -782,7 +1096,6 @@ def fetch_single_instrument_data(item, all_positions, usdt_available):
         f["vol_ratio"] = round(f["vol_15m"] / f["vol_ma20"], 2) if f["vol_ma20"] > 0 else 1.0
 
     # 2. Fetch 1H & 4H Trend Confluence
-    raw_1h = fetch_candles_direct(inst_id, "1H", 35)
     if raw_1h:
         c_1h = list(reversed(raw_1h))
         closes_1h = [float(c[4]) for c in c_1h]
@@ -814,7 +1127,6 @@ def fetch_single_instrument_data(item, all_positions, usdt_available):
         else:
             f["structure_1h"] = "CHOP"
     
-    raw_4h = fetch_candles_direct(inst_id, "4H", 25)
     if raw_4h:
         c_4h = list(reversed(raw_4h))
         closes_4h = [float(c[4]) for c in c_4h]
@@ -839,22 +1151,34 @@ def fetch_single_instrument_data(item, all_positions, usdt_available):
     # 4. Load Real-time News Sentiment
     if os.path.exists(NEWS_SENTIMENT_FILE):
         try:
-            with open(NEWS_SENTIMENT_FILE, "r", encoding="utf-8") as f_news:
-                n_data = json.load(f_news)
-                coins_s = n_data.get("coins_sentiment", {})
-                if name in coins_s:
-                    f["sentiment_score"] = float(coins_s[name].get("sentiment_factor_score", 0.0) or 0.0)
+            from scripts.news_connection import load_strategy_snapshot
+            coin = name.split('-')[0]
+            snapshot = load_strategy_snapshot(NEWS_SENTIMENT_FILE, [coin])
+            f['news_context'] = {
+                'fresh': bool(snapshot and snapshot.get('connection_status') in {'fresh', 'partial'}),
+                'macro_sentiment': (snapshot or {}).get('macro_sentiment', 'UNKNOWN'),
+                'updated_at': (snapshot or {}).get('captured_at'),
+                'sentiment_fresh': bool((snapshot or {}).get('sentiment_fresh')),
+                'article_count': len((snapshot or {}).get('items') or []),
+                'digest': (snapshot or {}).get('digest'),
+            }
+            row = ((snapshot or {}).get('coins_sentiment') or {}).get(coin) or {}
+            if row.get('available') is True and snapshot.get('sentiment_fresh'):
+                f['sentiment_score'] = float(row.get('sentiment_factor_score'))
+            else:
+                f.pop('sentiment_score', None)
         except Exception:
-            pass
+            f['news_context'] = {'fresh': False, 'macro_sentiment': 'UNKNOWN', 'sentiment_fresh': False}
+            f.pop('sentiment_score', None)
 
     # 5. Causal Multi-Timeframe Calculus Dynamics
     f["calculus"] = {"valid": False, "regime": "RANGE_LOW_VELOCITY", "velocity": 0.0, "acceleration": 0.0, "impulse": 0.0, "max_abs_jerk": 0.0, "quality": 0.0}
     try:
         from calculus_engine import calculate_multi_timeframe
         f["calculus"] = calculate_multi_timeframe({
-            "15M": raw_15m,
-            "1H": raw_1h,
-            "4H": raw_4h
+            "15M": _execution_calculus_candles(raw_15m),
+            "1H": _execution_calculus_candles(raw_1h),
+            "4H": _execution_calculus_candles(raw_4h)
         })
     except Exception:
         pass
@@ -878,6 +1202,7 @@ def fetch_single_instrument_data(item, all_positions, usdt_available):
         and len(raw_4h) >= 20
         and f["price"] > 0
         and f["atr"] > 0
+        and 0 <= time.time()*1000 - f.get("quote_as_of_ms", 0) <= 15000
         and f.get("bidPx", 0) > 0
         and f.get("askPx", 0) >= f.get("bidPx", 0)
     )
@@ -908,14 +1233,48 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
     entry_px = float(curr_pos["avgPx"])
     pos_key = f"{inst_id}_{curr_pos['side']}"
 
+    from scripts.position_lifecycle import reconcile as reconcile_lifecycle, identity as position_identity
+    lifecycle=reconcile_lifecycle(trackers,pos_key,curr_pos,market._selected().identity)
+    if lifecycle=='unknown':
+        from scripts.initial_protection import verify as verify_initial_protection
+        initial=verify_initial_protection(market._selected(),inst_id,'long' if is_long else 'short',pos_sz,curr_pos,query_positions)
+        if initial['status'] not in ('verified','flat','changed'):
+            closed,detail=close_position_confirmed(inst_id,'long' if is_long else 'short',pos_sz,exit_reason='oco_unverified',position=curr_pos)
+            executed_actions.append(f"[{name}] 持仓身份与云端保护未确认，安全退出确认={closed}；{detail}")
+            return closed, '初始保护核验未知'
+        executed_actions.append(f"[{name}] 持仓生命周期身份缺失，未修改云端保护，跳过本地动态止损")
+        return False, '持仓身份待核验'
     now_ts = int(time.time())
     if pos_key not in trackers:
+        # Completed but insufficient snapshots get one fresh recheck; read errors
+        # have already exhausted their reader budget. No guessed repair or write retry.
+        from scripts.initial_protection import verify as verify_initial_protection
+        side_name = 'long' if is_long else 'short'
+        initial = verify_initial_protection(market._selected(), inst_id, side_name, pos_sz, curr_pos, query_positions)
+        if initial['status'] == 'flat':
+            executed_actions.append(f"[{name}] 新持仓复查已归零，未发送平仓指令；等待账本回执")
+            return True, '持仓已归零'
+        if initial['status'] == 'changed':
+            executed_actions.append(f"[{name}] 新持仓身份或数量已变化，保留云端保护并等待新快照")
+            return False, '持仓快照已变化'
+        if initial['status'] != 'verified':
+            closed, detail = close_position_confirmed(inst_id, side_name, pos_sz, exit_reason='oco_unverified', position=curr_pos)
+            executed_actions.append(f"[{name}] 新持仓保护经有界复查仍未确认（{initial['detail']}），安全退出确认={closed}；{detail}")
+            return closed, '初始保护核验未知'
+        rows = initial['orders']
+        adopted_stop = (min if is_long else max)(float(o['slTriggerPx']) for o in rows)
+        adopted_tp = float(rows[0]['tpTriggerPx'])
+        strategy_evidence.best_effort(market._selected().identity,'position_protection_adoption',{
+            'identity':position_identity(curr_pos,market._selected().identity),'orders':rows,
+            'adopted_stop':adopted_stop,'source':'trader','cloud_stop_changed':False})
         score, action, reasons, strat_tag, strat_desc = evaluate_asset_signal(f)
         trackers[pos_key] = {
+            "horizon": consume_horizon_intent(inst_id, side_name),
             "instId": inst_id,
             "name": name,
             "side": curr_pos["side"],
-            "strategy_tag": strat_tag if strat_tag != "⚪ 观望" else ("🌊 顺势回踩" if is_long else "⚡ 阻力抛压"),
+            "strategy_tag": "多头持仓" if is_long else "空头持仓",
+            "positionIdentity": position_identity(curr_pos,market._selected().identity),
             "entryPx": entry_px,
             "entryTs": now_ts,
             "entryTime": timestamp_full,
@@ -923,12 +1282,20 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
             "currentSz": pos_sz,
             "highWaterMark": cur_px,
             "lowWaterMark": cur_px,
-            "trailingStopPx": round((entry_px - atr * profile["sl_atr_mult"]) if is_long else (entry_px + atr * profile["sl_atr_mult"]), prec),
-            "takeProfitPx": round((entry_px + max(atr * profile["tp_atr_mult"], entry_px * profile["min_profit_ratio"])) if is_long else (entry_px - max(atr * profile["tp_atr_mult"], entry_px * profile["min_profit_ratio"])), prec),
+            "trailingStopPx": adopted_stop,
+            "exchangeStopPx": adopted_stop,
+            "initialRiskStopPx": adopted_stop,
+            "takeProfitPx": adopted_tp,
             "stage_desc": "持有监控中"
         }
 
     t = trackers[pos_key]
+    global CURRENT_HORIZON
+    CURRENT_HORIZON = str(t.get('horizon','swing')).lower()
+    ex = _exit_preset(t, executed_actions, name)
+    volatility = exit_policy.volatility(f)
+    exit_atr = volatility['value']
+    t['exitVolatility'] = {**volatility, 'observed_at': now_ts}
     t["currentSz"] = pos_sz
     if "entryTs" not in t:
         t["entryTs"] = now_ts
@@ -943,6 +1310,25 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
         cur_profit_px = entry_px - cur_px
         peak_profit_px = entry_px - t["lowWaterMark"]
 
+    # One activation gate for cost floor, tier floors and kinetic exits.
+    from scripts.profit_protection import floor_plan
+    from scripts.risk_policy import load_policy
+    try: policy=load_policy()
+    except (ValueError, OSError, TypeError): policy=None
+    if not t.get('initialRiskStopPx'):
+        original=float(t.get('exchangeStopPx') or t.get('trailingStopPx') or 0)
+        if original>0 and ((is_long and original<entry_px) or (not is_long and original>entry_px)):
+            t['initialRiskStopPx']=original
+    protection=floor_plan('long' if is_long else 'short',entry_px,cur_px,
+        t['highWaterMark'] if is_long else t['lowWaterMark'],t.get('initialRiskStopPx'),
+        exit_atr,taker_fee=policy.taker_fee,slippage=policy.slippage,thresholds=ex) if policy is not None else {'active':False,'reason':'cost_policy_unavailable'}
+    t['exitEvaluation'] = {**protection, 'policy': dict(t['exitPolicyStatus']), 'atr': dict(t['exitVolatility'])}
+    if protection.get('active'):
+        desired=protection['stop'];old=float(t.get('trailingStopPx') or 0)
+        if not old or (desired>old if is_long else desired<old):
+            t['trailingStopPx']=desired;t['localTrailingStopPx']=desired
+            t['profitProtection']=protection;t['stage_desc']='成本覆盖后的浮盈保护'
+
     # 1. Hard Stop Loss (loss protection is independent of profit-lock activation).
     # The tracker stop is the exchange-protection source of truth; if a legacy or
     # partially migrated position has no live cloud OCO, the local 15-minute
@@ -950,13 +1336,14 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
     hard_stop_px = float(t.get("trailingStopPx", 0.0) or 0.0)
     hard_stop_hit = hard_stop_px > 0 and ((is_long and cur_px <= hard_stop_px) or (not is_long and cur_px >= hard_stop_px))
     if hard_stop_hit:
-        closed, close_detail = close_position_confirmed(inst_id, "long" if is_long else "short", pos_sz)
+        protection_label = '浮盈保护' if t.get('profitProtection',{}).get('active') else '硬止损'
+        closed, close_detail = close_position_confirmed(inst_id, "long" if is_long else "short", pos_sz, exit_reason='profit_lock' if t.get('profitProtection',{}).get('active') else 'hard_stop', position=curr_pos)
         if not closed:
             executed_actions.append(f"[{name}] 硬止损平仓失败，仓位仍保留: {close_detail}")
             return False, "硬止损平仓失败"
         close_fee = (pos_sz * ct_val * cur_px) * TAKER_FEE_RATE
         pnl_val = curr_pos["upl"]
-        executed_actions.append(f"[{name}] 🛑 触发硬止损 {hard_stop_px} 并确认平仓 (净盈亏: {pnl_val:+.2f}U)")
+        executed_actions.append(f"[{name}] 触发{protection_label} {hard_stop_px} 并确认平仓 (平仓前浮盈参考: {pnl_val:+.2f}U，结算以账本为准)")
         record_trade({
             "is_trade": True,
             "time": timestamp_full,
@@ -975,9 +1362,9 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
         })
         add_stop_cooldown(inst_id, "long" if is_long else "short", "硬止损")
         if notify_trade_close:
-            notify_trade_close(name, pnl_val, "硬止损平仓", cur_px)
+            notify_trade_close(inst=name, pnl=pnl_val, stage="硬止损平仓", exit_px=cur_px)
         trackers.pop(pos_key, None)
-        return True, "已硬止损"
+        return True, "已" + protection_label
 
     default_tp_dist = max(atr * profile["tp_atr_mult"], entry_px * profile["min_profit_ratio"])
     if not _float_or_zero(t.get("takeProfitPx")):
@@ -986,36 +1373,46 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
         inst_id, "long" if is_long else "short", pos_sz, float(t["takeProfitPx"]), hard_stop_px
     )
     if not protected:
-        closed, close_detail = close_position_confirmed(inst_id, "long" if is_long else "short", pos_sz)
+        closed, close_detail = close_position_confirmed(inst_id, "long" if is_long else "short", pos_sz, exit_reason='oco_unverified', position=curr_pos)
         if not closed:
-            executed_actions.append(f"[{name}] 🚨 云端 OCO 缺失且安全退出失败: {protection_detail}; {close_detail}")
+            executed_actions.append(f"[{name}] 🚨 云端 OCO 核验未通过且安全退出失败: {protection_detail}; {close_detail}")
             return False, "保护与退出均失败"
         pnl_val = curr_pos["upl"]
-        executed_actions.append(f"[{name}] 🧯 云端 OCO 无法确认，已安全平仓: {protection_detail}")
+        check_status = "insufficient" if protection_detail.startswith("INSUFFICIENT:") else "unknown"
+        check_label = "确认保护不足" if check_status == "insufficient" else "保护核验未知"
+        executed_actions.append(f"[{name}] 🧯 {check_label}，已按安全策略确认平仓: {protection_detail}")
         record_trade({
             "is_trade": True, "time": timestamp_full, "inst": name, "name": name,
-            "action": "平仓", "action_type": "保护失效退出",
-            "direction": f"平{'多' if is_long else '空'}", "side": f"{'多' if is_long else '空'}单保护失效退出",
+            "action": "平仓", "action_type": f"{check_label}退出", "protection_check_status": check_status,
+            "direction": f"平{'多' if is_long else '空'}", "side": f"{'多' if is_long else '空'}单{check_label}退出",
             "size": pos_sz, "sz": pos_sz, "price": cur_px,
             "fee": (pos_sz * ct_val * cur_px) * TAKER_FEE_RATE, "pnl": pnl_val,
-            "remark": f"云端 OCO 无法达到全仓覆盖，交易所确认安全平仓：{protection_detail}"
+            "remark": f"未能确认云端 OCO 全仓覆盖，按安全策略确认平仓：{protection_detail}"
         })
-        add_stop_cooldown(inst_id, "long" if is_long else "short", "云端保护失效")
+        add_stop_cooldown(inst_id, "long" if is_long else "short", "云端保护核验失败")
         if notify_trade_close:
-            notify_trade_close(name, pnl_val, "云端保护失效退出", cur_px)
+            notify_trade_close(inst=name, pnl=pnl_val, stage=f"云端{check_label}退出", exit_px=cur_px)
         trackers.pop(pos_key, None)
-        return True, "保护失效安全退出"
+        return True, "保护核验安全退出"
     t["cloudProtection"] = {"verifiedAt": timestamp_full, "detail": protection_detail}
 
-    # 2. Volatility Time-Stop Exit (After 8 Hours dead consolidation without expansion)
+    # 2. Time exit: signed price profit below the selected ATR allowance.
+    # This includes losses and small gains, not necessarily sideways/no volatility.
     hold_duration_sec = now_ts - t["entryTs"]
-    if hold_duration_sec > 28800 and abs(cur_profit_px) < 0.15 * atr:
-        closed, close_detail = close_position_confirmed(inst_id, "long" if is_long else "short", pos_sz)
+    if exit_atr > 0 and hold_duration_sec > ex['time_stop_seconds'] and cur_profit_px < ex['time_stop_profit_atr'] * exit_atr:
+        exit_evidence = {'rule': 'time_exit', 'policy': dict(t['exitPolicyStatus']),
+                         'hold_seconds': hold_duration_sec, 'threshold_seconds': ex['time_stop_seconds'],
+                         'profit_price': cur_profit_px, 'profit_atr': cur_profit_px / exit_atr,
+                         'profit_threshold_atr': ex['time_stop_profit_atr'], 'atr': dict(t['exitVolatility'])}
+        time_reason = (f"预设 {t['exitPolicyStatus']['preset_id']}：持仓 {hold_duration_sec/3600:.2f}h > {ex['time_stop_seconds']/3600:g}h，"
+                       f"价格浮盈 {cur_profit_px/exit_atr:.3f} ATR < {ex['time_stop_profit_atr']:g} ATR，时间退出")
+        t['lastExitAttempt'] = exit_evidence
+        closed, close_detail = close_position_confirmed(inst_id, "long" if is_long else "short", pos_sz, exit_reason='time_exit', position=curr_pos)
         if not closed:
-            executed_actions.append(f"[{name}] 时间止损平仓失败，仓位仍保留: {close_detail}")
+            executed_actions.append(f"[{name}] {time_reason}，平仓失败，仓位仍保留: {close_detail}")
             return False, "平仓失败"
         close_fee = (pos_sz * ct_val * cur_px) * TAKER_FEE_RATE
-        executed_actions.append(f"[{name}] ⌛ 超过 8 小时无波动横盘，时间止损平仓释放保证金")
+        executed_actions.append(f"[{name}] ⌛ {time_reason}，交易所确认平仓")
         record_trade({
             "is_trade": True,
             "time": timestamp_full,
@@ -1024,173 +1421,51 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
             "action": "平仓",
             "action_type": "时间止损",
             "direction": f"平{'多' if is_long else '空'}",
-            "side": f"{'多' if is_long else '空'}单无波动出场",
+            "side": f"{'多' if is_long else '空'}单时间退出",
             "size": pos_sz,
             "sz": pos_sz,
             "price": cur_px,
             "fee": close_fee,
             "pnl": curr_pos["upl"],
-            "remark": "持仓超 3.5 小时无突破，主动平仓释放配比"
+            "remark": time_reason,
+            "exit_evidence": exit_evidence
         })
         if notify_trade_close:
-            notify_trade_close(name, curr_pos["upl"], "时间止损平仓", cur_px)
+            notify_trade_close(inst=name, pnl=float(curr_pos.get("upl", 0.0) or 0.0), stage="时间止损平仓", exit_px=cur_px)
         if pos_key in trackers: del trackers[pos_key]
         return True, "时间止损"
 
-    # 3. Three-Tier Ratchet Profit-Locking & Momentum Take-Profit Engine
-    # Tier 1: Breakeven Lock at +1.0x ATR profit (Guarantee 100% risk-free trade)
-    # Tier 2: 50% Profit Lock-In at +1.8x ATR profit (Lock in at least +0.9x ATR solid profit)
-    # Tier 3: Kinetic Reversal Exit from Peak (Protect accumulated big wins)
-    
-    tier1_breakeven_trigger = 1.5 * atr
-    tier2_lock_trigger = 2.2 * atr
-    
-    if is_long:
-        # Dynamic Ratchet Stop Calculation
-        dynamic_floor_sl = t["trailingStopPx"]
-        if peak_profit_px >= tier2_lock_trigger:
-            dynamic_floor_sl = max(dynamic_floor_sl, entry_px + 1.0 * atr)
-            t["stage_desc"] = f"锁定大波段利润 (保底止损 {dynamic_floor_sl})"
-        elif peak_profit_px >= tier1_breakeven_trigger:
-            dynamic_floor_sl = max(dynamic_floor_sl, entry_px + 0.0020 * entry_px)
-            t["stage_desc"] = f"已推保本无风险 (保底止损 {dynamic_floor_sl})"
-        t["trailingStopPx"] = dynamic_floor_sl
-
-        # A. Hit Ratchet Floor Stop (Locked Profit Trigger)
-        if cur_px <= dynamic_floor_sl and peak_profit_px >= tier1_breakeven_trigger:
-            closed, close_detail = close_position_confirmed(inst_id, "long", pos_sz)
-            if not closed:
-                executed_actions.append(f"[{name}] 锁利平多失败，仓位仍保留: {close_detail}")
-                return False, "平仓失败"
-            close_fee = (pos_sz * ct_val * cur_px) * TAKER_FEE_RATE
-            pnl_val = curr_pos["upl"]
-            executed_actions.append(f"[{name}] 🛡️ 触发阶梯动态锁利平仓 (净盈亏: {pnl_val:+.2f}U)")
-            record_trade({
-                "is_trade": True,
-                "time": timestamp_full,
-                "inst": name,
-                "name": name,
-                "action": "平仓",
-                "action_type": "阶梯锁利",
-                "direction": "平多",
-                "side": "多单阶梯锁利平仓",
-                "size": pos_sz,
-                "sz": pos_sz,
-                "price": cur_px,
-                "fee": close_fee,
-                "pnl": pnl_val,
-                "remark": f"最高 {t['highWaterMark']} 触发阶梯利润锁定线 {dynamic_floor_sl}"
-            })
-            if notify_trade_close:
-                notify_trade_close(name, pnl_val, "阶梯锁利平仓", cur_px)
-            if pos_key in trackers: del trackers[pos_key]
-            return True, "已阶梯锁利"
-
-        # B. Kinetic Momentum Pullback Exit from Peak (Pullback >= 0.75x ATR when profit >= 2.0x ATR)
-        if peak_profit_px >= 2.0 * atr and cur_px <= (t["highWaterMark"] - 0.75 * atr):
-            closed, close_detail = close_position_confirmed(inst_id, "long", pos_sz)
-            if not closed:
-                executed_actions.append(f"[{name}] 动能见顶移动止盈失败，仓位仍保留: {close_detail}")
-                return False, "平仓失败"
-            close_fee = (pos_sz * ct_val * cur_px) * TAKER_FEE_RATE
-            pnl_val = curr_pos["upl"]
-            executed_actions.append(f"[{name}] 🎯 触发高点回撤动能止盈 (净盈亏: {pnl_val:+.2f}U)")
-            record_trade({
-                "is_trade": True,
-                "time": timestamp_full,
-                "inst": name,
-                "name": name,
-                "action": "平仓",
-                "action_type": "移动止盈",
-                "direction": "平多",
-                "side": "多单高点回撤止盈",
-                "size": pos_sz,
-                "sz": pos_sz,
-                "price": cur_px,
-                "fee": close_fee,
-                "pnl": pnl_val,
-                "remark": f"最高 {t['highWaterMark']} 动能回撤触及移动止盈线"
-            })
-            if notify_trade_close:
-                notify_trade_close(name, pnl_val, "移动止盈", cur_px)
-            if pos_key in trackers: del trackers[pos_key]
-            return True, "已移动止盈"
-
-    else:
-        # Dynamic Ratchet Stop Calculation for Short
-        dynamic_floor_sl = t["trailingStopPx"]
-        if peak_profit_px >= tier2_lock_trigger:
-            dynamic_floor_sl = min(dynamic_floor_sl, entry_px - 1.0 * atr)
-            t["stage_desc"] = f"锁定大波段利润 (保底止损 {dynamic_floor_sl})"
-        elif peak_profit_px >= tier1_breakeven_trigger:
-            dynamic_floor_sl = min(dynamic_floor_sl, entry_px - 0.0020 * entry_px)
-            t["stage_desc"] = f"已推保本无风险 (保底止损 {dynamic_floor_sl})"
-        t["trailingStopPx"] = dynamic_floor_sl
-
-        # A. Hit Ratchet Floor Stop (Locked Profit Trigger)
-        if cur_px >= dynamic_floor_sl and peak_profit_px >= tier1_breakeven_trigger:
-            closed, close_detail = close_position_confirmed(inst_id, "short", pos_sz)
-            if not closed:
-                executed_actions.append(f"[{name}] 锁利平空失败，仓位仍保留: {close_detail}")
-                return False, "平仓失败"
-            close_fee = (pos_sz * ct_val * cur_px) * TAKER_FEE_RATE
-            pnl_val = curr_pos["upl"]
-            executed_actions.append(f"[{name}] 🛡️ 触发阶梯动态锁利平仓 (净盈亏: {pnl_val:+.2f}U)")
-            record_trade({
-                "is_trade": True,
-                "time": timestamp_full,
-                "inst": name,
-                "name": name,
-                "action": "平仓",
-                "action_type": "阶梯锁利",
-                "direction": "平空",
-                "side": "空单阶梯锁利平仓",
-                "size": pos_sz,
-                "sz": pos_sz,
-                "price": cur_px,
-                "fee": close_fee,
-                "pnl": pnl_val,
-                "remark": f"最低 {t['lowWaterMark']} 触发阶梯利润锁定线 {dynamic_floor_sl}"
-            })
-            if notify_trade_close:
-                notify_trade_close(name, pnl_val, "阶梯锁利平仓", cur_px)
-            if pos_key in trackers: del trackers[pos_key]
-            return True, "已阶梯锁利"
-
-        # B. Kinetic Momentum Pullback Exit from Peak
-        if peak_profit_px >= 1.5 * atr and cur_px >= (t["lowWaterMark"] + 0.5 * atr):
-            closed, close_detail = close_position_confirmed(inst_id, "short", pos_sz)
-            if not closed:
-                executed_actions.append(f"[{name}] 动能见底移动止盈失败，仓位仍保留: {close_detail}")
-                return False, "平仓失败"
-            close_fee = (pos_sz * ct_val * cur_px) * TAKER_FEE_RATE
-            pnl_val = curr_pos["upl"]
-            executed_actions.append(f"[{name}] 🎯 触发低点反弹动能止盈 (净盈亏: {pnl_val:+.2f}U)")
-            record_trade({
-                "is_trade": True,
-                "time": timestamp_full,
-                "inst": name,
-                "name": name,
-                "action": "平仓",
-                "action_type": "移动止盈",
-                "direction": "平空",
-                "side": "空单低点反弹止盈",
-                "size": pos_sz,
-                "sz": pos_sz,
-                "price": cur_px,
-                "fee": close_fee,
-                "pnl": pnl_val,
-                "remark": f"最低 {t['lowWaterMark']} 动能反弹触及移动止盈线"
-            })
-            if notify_trade_close:
-                notify_trade_close(name, pnl_val, "移动止盈", cur_px)
-            if pos_key in trackers: del trackers[pos_key]
-            return True, "已移动止盈"
+    # 3. Kinetic exit uses the same preset, ATR and cost activation as the
+    # unified floor above. Hard/previously tightened stops always take priority.
+    if protection.get('kinetic_exit'):
+        exit_evidence = {**t['exitEvaluation'], 'rule': 'trailing_exit'}
+        t['lastExitAttempt'] = exit_evidence
+        closed, close_detail = close_position_confirmed(inst_id, "long" if is_long else "short", pos_sz, exit_reason='trailing_exit', position=curr_pos)
+        if not closed:
+            executed_actions.append(f"[{name}] 动能回撤止盈失败，仓位仍保留: {close_detail}")
+            return False, "平仓失败"
+        close_fee = (pos_sz * ct_val * cur_px) * TAKER_FEE_RATE
+        pnl_val = curr_pos["upl"]
+        reason = (f"预设 {t['exitPolicyStatus']['preset_id']}：峰值浮盈 {peak_profit_px/exit_atr:.3f} ATR，"
+                  f"回撤 {protection['pullback']/exit_atr:.3f} ATR >= {ex['kinetic_pullback_atr']:g} ATR")
+        executed_actions.append(f"[{name}] 🎯 {reason}，动能止盈已确认 (平仓前浮盈参考 {pnl_val:+.2f}U，结算以账本为准)")
+        record_trade({
+            "is_trade": True, "time": timestamp_full, "inst": name, "name": name,
+            "action": "平仓", "action_type": "移动止盈",
+            "direction": f"平{'多' if is_long else '空'}", "side": f"{'多' if is_long else '空'}单动能回撤止盈",
+            "size": pos_sz, "sz": pos_sz, "price": cur_px, "fee": close_fee, "pnl": pnl_val,
+            "remark": reason, "exit_evidence": exit_evidence,
+        })
+        if notify_trade_close:
+            notify_trade_close(inst=name, pnl=pnl_val, stage="移动止盈", exit_px=cur_px)
+        trackers.pop(pos_key, None)
+        return True, "已移动止盈"
 
     return False, "持仓监控中"
 
 def execute_ai_position_management(real_pos_dict, trackers, timestamp_full, executed_actions):
     """Execute only fresh, high-confidence and risk-reducing AI position instructions."""
+    from scripts.protection_policy import oco_coverage, positive, rounded_stop
     if not os.path.exists(AI_POSITION_MANAGEMENT_FILE):
         return
     try:
@@ -1213,15 +1488,15 @@ def execute_ai_position_management(real_pos_dict, trackers, timestamp_full, exec
             continue
 
         pos_side = str(position.get("posSide", "net")).lower()
-        current_px = float(position.get("markPx", position.get("last", 0)) or 0)
-        avg_px = float(position.get("avgPx", 0) or 0)
+        current_px = positive(position.get("markPx")) or positive(position.get("last")) or 0
+        avg_px = positive(position.get("avgPx")) or 0
         name = inst_id.replace("-USDT-SWAP", "")
 
         if action == "CLOSE_MARKET":
             if confidence < 85:
                 executed_actions.append(f"[{name}] AI平仓置信度{confidence:.0f}<85，拒绝执行")
                 continue
-            closed, close_detail = close_position_confirmed(inst_id, pos_side, float(position.get("pos", 0) or 0))
+            closed, close_detail = close_position_confirmed(inst_id, pos_side, float(position.get("pos", 0) or 0), exit_reason='ai_exit', position=position)
             if closed:
                 executed_actions.append(f"[{name}] AI高置信度整仓退出: {reason}")
                 trackers.pop(f"{inst_id}_{pos_side}", None)
@@ -1229,42 +1504,148 @@ def execute_ai_position_management(real_pos_dict, trackers, timestamp_full, exec
                 executed_actions.append(f"[{name}] AI平仓请求未获交易所确认，仓位保持不变: {close_detail}")
 
         elif action == "UPDATE_SL":
-            new_sl = float(instruction.get("suggested_sl_price", 0) or 0)
-            atr_val = max(float(position.get("atr_1h", 0) or 0), float(position.get("atr", 0) or 0), current_px * 0.012)
+            new_sl = positive(instruction.get("suggested_sl_price")) or 0
+            if positive(current_px) is None or positive(avg_px) is None:
+                executed_actions.append(f"[{name}] UNKNOWN: current or entry price unavailable; amendment not sent")
+                continue
+            tracker = trackers.get(f"{inst_id}_{pos_side}")
+            if tracker is None:
+                executed_actions.append(f"[{name}] 缺少持仓保护状态，未发送止盈改单，原云端保护保持不变")
+                continue
+            ex = _exit_preset(tracker, executed_actions, name)
+            volatility = tracker.get('exitVolatility') or {}
+            observed_at = positive(volatility.get('observed_at')) or 0
+            atr_val = positive(volatility.get('value')) or 0
+            if not atr_val or not 0 <= time.time() - observed_at <= 300:
+                executed_actions.append(f"[{name}] 退出ATR缺失或过期，未发送止盈改单，原云端保护保持不变")
+                continue
             
-            # Anti-premature trailing fix:
-            # 1. Do NOT move SL up until price is at least +1.2x ATR above entry (meaningful profit)
-            # 2. Maintain at least 0.8x ATR breathing buffer between current price and new SL to prevent tagging by noise
-            if pos_side == "long":
-                min_profit_reached = (current_px - avg_px) >= 1.2 * atr_val
-                safe_buffer_from_current = (current_px - new_sl) >= 0.7 * atr_val
-                tightens_risk = new_sl > 0 and avg_px <= new_sl < current_px and min_profit_reached and safe_buffer_from_current
-            elif pos_side == "short":
-                min_profit_reached = (avg_px - current_px) >= 1.2 * atr_val
-                safe_buffer_from_current = (new_sl - current_px) >= 0.7 * atr_val
-                tightens_risk = new_sl > 0 and current_px < new_sl <= avg_px and min_profit_reached and safe_buffer_from_current
-            else:
-                tightens_risk = False
+            from scripts.profit_protection import allow_ai_tightening
+            from scripts.risk_policy import load_policy
+            try: policy=load_policy()
+            except (ValueError, OSError, TypeError):
+                executed_actions.append(f"[{name}] Cost policy unavailable; retain existing cloud stop")
+                continue
+            tightens_risk=allow_ai_tightening(pos_side,avg_px,current_px,new_sl,atr_val,
+                taker_fee=policy.taker_fee,slippage=policy.slippage,thresholds=ex)
 
             if not tightens_risk:
-                executed_actions.append(f"[{name}] 浮盈空间不足或与现价缓冲过近({current_px} vs 拟调SL {new_sl})，拒绝过早收紧止损")
+                executed_actions.append(f"[{name}] 浮盈空间不足或与现价缓冲过近({current_px} vs 拟调SL {new_sl})，未满足预设浮盈启动、成本保本或最小行情缓冲")
                 continue
-            algo_orders = run_json_cmd(okx_private_command(f"okx swap algo orders --instId {inst_id} --json")) or []
-            live_algo = next((o for o in algo_orders if o.get("state") == "live" and o.get("posSide") == pos_side and o.get("slTriggerPx")), None)
-            if not live_algo:
-                executed_actions.append(f"[{name}] 未找到真实云端止损单，无法更新")
+            try:
+                algo_orders = algo_reader.orders_for_instrument(
+                    algo_reader.read_algo_orders(market._selected(), priority="risk", force=True), inst_id)
+            except Exception as exc:
+                detail = str(exc) if isinstance(exc, algo_reader.AlgoReadError) else type(exc).__name__
+                executed_actions.append(f"[{name}] 止损单核验暂不可用，未发送改单，原保护单保持不变: {detail}")
                 continue
-            result = run_json_cmd(okx_private_command(f"okx swap algo amend --instId {inst_id} --algoId {live_algo['algoId']} --newSlTriggerPx {new_sl} --newSlOrdPx=-1 --json"))
-            if result is not None:
-                executed_actions.append(f"[{name}] 云端止损收紧至 {new_sl}: {reason}")
-                tracker = trackers.get(f"{inst_id}_{pos_side}")
-                if tracker:
-                    tracker["trailingStopPx"] = new_sl
-            else:
-                executed_actions.append(f"[{name}] 云端止损更新失败，原保护单保持不变")
+            snapshot = oco_coverage(algo_orders, pos_side, current_px, avg_px)
+            position_size = positive(position.get('pos'))
+            tracker = trackers.get(f"{inst_id}_{pos_side}")
+            if snapshot.unknown or position_size is None or snapshot.size < position_size or tracker is None:
+                executed_actions.append(f"[{name}] UNKNOWN: full cloud coverage or local verification state unavailable; amendment not sent")
+                continue
+            if tracker.get('pendingStopAmendment') or tracker.get('cloudProtection', {}).get('status') == 'unknown':
+                executed_actions.append(f"[{name}] UNKNOWN: previous stop amendment unresolved; no blind retry")
+                continue
+            try:
+                metadata = market.get_json(
+                    f"https://www.okx.com/api/v5/public/instruments?instType=SWAP&instId={inst_id}",
+                    simulated=market._selected().simulated)['data']
+                ticks = [r.get('tickSz') for r in metadata if r.get('instId') == inst_id]
+                if len(ticks) != 1 or positive(ticks[0]) is None:
+                    raise ValueError('Missing tick size')
+                tick = ticks[0]
+            except Exception:
+                executed_actions.append(f"[{name}] UNKNOWN: tick metadata unavailable; amendment not sent")
+                continue
+            # Include every segment; an already tighter segment must never be loosened.
+            planned = [(row, rounded_stop(pos_side, new_sl, row['slTriggerPx'], current_px, tick))
+                       for row in snapshot.orders]
+            planned = [(row, target) for row, target in planned if target is not None]
+            if not planned:
+                executed_actions.append(f"[{name}] Stop unchanged: would loosen, repeat or cross current price after tick rounding")
+                continue
+            all_verified = True
+            for live_algo, target in planned:
+                try:
+                    position_ok, positions, _ = query_positions()
+                    matching = [p for p in positions if p.get('instId') == inst_id and p.get('posSide') == pos_side]
+                    if not position_ok or len(matching) != 1 or positive(matching[0].get('pos')) != position_size:
+                        raise ValueError('Position changed')
+                    current_px = positive(matching[0].get('markPx'))
+                    if current_px is None or oco_coverage(list(snapshot.orders), pos_side, current_px, avg_px).unknown:
+                        raise ValueError('Protection may already be triggering')
+                    live_algo = next(o for o in snapshot.orders if o['algoId'] == live_algo['algoId'])
+                    target = rounded_stop(pos_side, new_sl, live_algo['slTriggerPx'], current_px, tick)
+                    if target is None:
+                        # A concurrent tightening is safe to retain, but a crossed market is not.
+                        if ((new_sl >= current_px) if pos_side == 'long' else (new_sl <= current_px)):
+                            raise ValueError('Suggested stop now crosses market')
+                        continue
+                except Exception:
+                    tracker['cloudProtection'] = {'status': 'unknown', 'detail': 'position/protection changed during amendment'}
+                    executed_actions.append(f"[{name}] UNKNOWN: position or current price changed; remaining amendments stopped")
+                    all_verified = False
+                    break
+                old_sl = float(live_algo['slTriggerPx'])
+                # Retain uncertainty before writing; acknowledgement is not verification.
+                tracker['pendingStopAmendment'] = {'algoId': live_algo['algoId'], 'requestedStop': target}
+                tracker['cloudProtection'] = {'status': 'unknown', **tracker['pendingStopAmendment'],
+                    'detail': 'stop amendment awaiting read-back'}
+                try:
+                    result = run_cmd_result(okx_private_command(
+                        f"okx swap algo amend --instId {inst_id} --algoId {live_algo['algoId']} "
+                        f"--newSlTriggerPx {target} --newSlOrdPx=-1 --json"))
+                    transport_ok = result['ok']
+                except Exception:
+                    transport_ok = False
+                # Reconcile each individual write before attempting the next segment.
+                try:
+                    fresh = algo_reader.orders_for_instrument(algo_reader.read_algo_orders(
+                        market._selected(), priority='risk', force=True, timeout=6), inst_id)
+                    position_ok, positions, _ = query_positions()
+                    matching = [p for p in positions if p.get('instId') == inst_id and p.get('posSide') == pos_side]
+                    if not position_ok or len(matching) != 1 or positive(matching[0].get('pos')) != position_size:
+                        raise ValueError('Position changed after amendment')
+                    current_px = positive(matching[0].get('markPx'))
+                    if current_px is None:
+                        raise ValueError('Current mark unavailable after amendment')
+                    fresh_snapshot = oco_coverage(fresh, pos_side, current_px, avg_px)
+                    confirmed = next((o for o in fresh_snapshot.orders if o['algoId'] == live_algo['algoId']), None)
+                    actual = positive(confirmed.get('slTriggerPx')) if confirmed else None
+                    verified = (not fresh_snapshot.unknown and fresh_snapshot.size >= position_size
+                                and {o['algoId'] for o in fresh_snapshot.orders} == {o['algoId'] for o in snapshot.orders}
+                                and confirmed is not None and positive(confirmed['sz']) == positive(live_algo['sz'])
+                                and actual is not None and ((float(target) <= actual < current_px)
+                                    if pos_side == 'long' else (current_px < actual <= float(target))))
+                    # Concurrent removal, resizing or loosening of another segment is unknown.
+                    for previous in snapshot.orders:
+                        observed = next((o for o in fresh_snapshot.orders if o['algoId'] == previous['algoId']), None)
+                        if (observed is None or positive(observed['sz']) != positive(previous['sz'])
+                                or (float(observed['slTriggerPx']) < float(previous['slTriggerPx']) if pos_side == 'long'
+                                    else float(observed['slTriggerPx']) > float(previous['slTriggerPx']))):
+                            verified = False
+                except Exception:
+                    verified = False
+                strategy_evidence.best_effort(market._selected().identity, 'stop_amendment', {
+                    'instrument': inst_id, 'algo_id': live_algo['algoId'], 'old_stop': old_sl,
+                    'requested_stop': float(target), 'verified': verified, 'transport_ok': transport_ok})
+                if not verified:
+                    executed_actions.append(f"[{name}] UNKNOWN: amendment outcome uncertain; batch stopped without retry or local confirmation")
+                    all_verified = False
+                    break
+                snapshot = fresh_snapshot
+                tracker.pop('pendingStopAmendment', None)
+            if all_verified:
+                actual = (min if pos_side == 'long' else max)(float(o['slTriggerPx']) for o in snapshot.orders)
+                tracker['trailingStopPx'] = actual
+                tracker['cloudProtection'] = {'status': 'verified', 'verifiedAt': timestamp_full,
+                    'detail': 'all stop segments read-back confirmed'}
+                executed_actions.append(f"[{name}] All stop segments read-back confirmed; weakest protection {actual}: {reason}")
 
 # =============================================================================
-# 🧠 R20 Quantum Trader v6.5.2 Multi-Factor Scoring & Strategy Setup Classifier
+# 🧠 OKXQuant v0.1.0 Multi-Factor Scoring & Strategy Setup Classifier
 # =============================================================================
 def evaluate_asset_signal(f):
     """
@@ -1522,6 +1903,7 @@ def single_trader_cycle(func):
 # Master Portfolio Execution Loop
 # =============================================================================
 @single_trader_cycle
+@trade_lock.serialized
 def execute_portfolio():
     tz_bj = datetime.timezone(datetime.timedelta(hours=8))
     now_dt = datetime.datetime.now(tz_bj)
@@ -1566,6 +1948,10 @@ def execute_portfolio():
     active_pos_count = len(real_pos_dict)
     long_count = real_long_count
     short_count = real_short_count
+    limits = execution_limits()
+    max_active_positions = limits['max_positions']
+    max_same_direction = limits['max_same_direction']
+    single_asset_margin = limits['single_asset_margin']
 
     pending_result = run_cmd_result(okx_private_command("okx swap orders --json"), timeout=20)
     if not pending_result["ok"] or not isinstance(pending_result.get("data"), list):
@@ -1602,14 +1988,17 @@ def execute_portfolio():
                 usdt_available = float(d.get("availBal", 0.0))
                 break
 
+    market.begin_signal_frame()
     # 2. Parallel fetch for the configured crypto universe
     with ThreadPoolExecutor(max_workers=len(TARGET_INSTRUMENTS)) as executor:
         all_factors = list(executor.map(lambda item: fetch_single_instrument_data(item, all_positions, usdt_available), TARGET_INSTRUMENTS))
 
     # 3. Process Positions & Dynamic Trailing Exits
     executed_actions = []
+    environment_notices = []
     trackers = load_trackers()
     stale_tracker_count = prune_trackers(trackers, real_pos_dict)
+    reconcile_scale_trackers(trackers, real_pos_dict)
     if stale_tracker_count:
         executed_actions.append(f"清理 {stale_tracker_count} 条已失效持仓追踪记录")
     for f in all_factors:
@@ -1635,7 +2024,10 @@ def execute_portfolio():
                 tracker = trackers.get(f"{f['instId']}_{position.get('side', '')}", {})
                 position_payload["trailingStopPx"] = tracker.get("trailingStopPx")
                 active_pos_list.append(position_payload)
-            brain_cache = execute_batch_ai_brain_cycle(pos_desc, active_pos_list, usdt_available=usdt_available) or {}
+            with trade_lock.inference_window():
+                brain_cache = execute_batch_ai_brain_cycle(pos_desc, active_pos_list, usdt_available=usdt_available) or {}
+            # The independent guard may have changed positions while the model ran.
+            trackers = load_trackers()
             if brain_cache:
                 refreshed_ok, refreshed_positions, refreshed_error = query_positions()
                 if not refreshed_ok:
@@ -1645,15 +2037,30 @@ def execute_portfolio():
                         p.get("instId"): p for p in refreshed_positions
                         if float(p.get("pos", 0) or 0) > 0
                     }
+                    all_positions = refreshed_positions
+                    for item in all_factors:
+                        raw = refreshed_pos_dict.get(item['instId'])
+                        item['position'] = ({**raw, 'side': raw.get('posSide'), 'pos': float(raw['pos']),
+                                             'avgPx': float(raw.get('avgPx') or 0), 'upl': float(raw.get('upl') or 0),
+                                             'uplRatio': float(raw.get('uplRatio') or 0)} if raw else None)
                     execute_ai_position_management(refreshed_pos_dict, trackers, timestamp_full, executed_actions)
                     save_trackers(trackers)
             else:
-                executed_actions.append("本轮AI推理失败或并发跳过，禁止复用旧持仓指令")
+                reason = get_last_inference_error() or "未取得有效新鲜AI决策"
+                executed_actions.append(f"本轮AI未就绪：{reason}；禁止复用旧持仓指令")
         except Exception as e:
             print(f"[AI Brain Batch Scan Warning] {e}")
 
     if not cb_active:
+        availability = support.pool_support(TARGET_INSTRUMENTS, market._selected().mode, refresh=True)
         for f in all_factors:
+            state = availability["items"][f["instId"]]
+            if not state["can_open"]:
+                environment_notices.append(f"{f['name']}：{state['label']}，仅观察")
+                continue
+            if not f.get("market_data_valid"):
+                environment_notices.append(f"{f['name']}：执行行情不可用，本轮不新增风险")
+                continue
             asset_type = f.get("type", "crypto")
             if not is_tradfi_market_liquid(asset_type):
                 continue
@@ -1675,7 +2082,7 @@ def execute_portfolio():
             sl_dist = atr * sl_mult
 
             # Gate 1: LLM AI Brain Full Execution Authority
-            # When AI Brain is active, AI Brain is the SOLE decider for action, leverage, margin, and TP/SL.
+            # The model proposes direction/geometry. Final price, quantity, account risk and exchange leverage are revalidated by entry_gateway.
             ai_info = brain_cache.get(inst_id) if isinstance(brain_cache, dict) else None
             if not ai_info or "decision" not in ai_info:
                 print(f"[AI Brain 全权拦截] {f['name']} 本轮无有效新鲜 AI 决策，禁止开仓")
@@ -1702,10 +2109,15 @@ def execute_portfolio():
                 strat_desc = f"AI大脑判定当前无高确定性机会({ai_reason})"
                 continue
 
-            # Dynamic Equal-Risk Position Size with AI Custom Margin Allocation
+            # Requested quantity only; final quantity is floored by the deterministic risk gateway.
             actual_sz = f["sz"]
             ai_margin = float(ai_decision.get("margin_usdt", 0.0) or 0.0)
-            ai_lever = float(ai_decision.get("leverage", 3) or 3)
+            horizon = str(ai_decision.get("horizon", "swing")).lower()
+            # The model may suggest a value, but the default is horizon-aware:
+            # short trades use capital more efficiently; swing trades leave more
+            # room for noise. Final risk is still calculated from stop distance.
+            default_leverage = 5.0 if horizon == "scalp" else 3.0
+            ai_lever = float(ai_decision.get("leverage", default_leverage) or default_leverage)
             
             # If AI planned margin & leverage, calculate custom contract size
             if ai_margin > 0 and ai_lever >= 1.0 and f["price"] > 0 and ct_val > 0:
@@ -1726,11 +2138,8 @@ def execute_portfolio():
                 allow_entry = False
 
                 # Case A: Standard Initial Entry (No existing position & slot available)
-                if not curr_pos and inst_id not in pending_inst_ids and reserved_slot_count < MAX_CONCURRENT_POSITIONS and reserved_long_count < MAX_SAME_DIRECTION_POSITIONS:
-                    if ai_conf >= 80.0:
-                        allow_entry = True
-                    else:
-                        print(f"[首发开多拦截] {f['name']} AI置信度 {ai_conf:.1f}% 未达 80% 门禁，宁缺毋滥，拦截入场")
+                if not curr_pos and inst_id not in pending_inst_ids and reserved_slot_count < max_active_positions and reserved_long_count < max_same_direction:
+                    allow_entry = True  # Evidence/geometry and account risk, never model score.
 
                 # Case B: Strict Pyramiding Scale-In (Existing long position in profit/breakeven)
                 elif curr_pos and str(curr_pos.get("side", "")).lower() == "long" and inst_id not in pending_inst_ids:
@@ -1746,19 +2155,15 @@ def execute_portfolio():
                     # 1. Base position must be in profit (ROI >= +0.8%) OR stop-loss already moved to/above avg entry px (No-risk trade).
                     # 2. Maximum 1 scale-in per position to prevent overconcentration.
                     # 3. Combined margin must not exceed MAX_SINGLE_ASSET_MARGIN.
-                    # 4. AI Confidence must be >= 75%.
+                    # 4. Model score is diagnostic only; final account risk is authoritative.
                     # 5. Calculus Momentum & Probability Gateway: Acceleration a >= -0.25 and Continuation Prob >= 40%
-                    c_dyn = f.get("calculus", {})
-                    c_accel = float(c_dyn.get("acceleration", 0.0) or 0.0)
-                    p_th = c_dyn.get("probability_theory", {})
-                    p_cont = float(p_th.get("continuation_prob_pct", 50.0) or 50.0)
-                    calculus_accel_ok = (c_accel >= -0.25 and p_cont >= 40.0)
+                    calculus_accel_ok, c_accel, p_cont = _scale_in_calculus_gate(f.get("calculus"), "long")
 
                     is_profit_or_breakeven = (pos_upl > 0 and pos_upl_ratio >= MIN_SCALE_IN_PROFIT_RATIO) or (trailing_sl > 0 and trailing_sl >= pos_avg_px)
                     planned_margin = ai_margin if ai_margin > 0 else (actual_sz * ct_val * f["price"] / max(1.0, ai_lever))
-                    within_margin_cap = (curr_margin + planned_margin) <= MAX_SINGLE_ASSET_MARGIN
+                    within_margin_cap = (curr_margin + planned_margin) <= single_asset_margin
 
-                    if is_profit_or_breakeven and scale_count < MAX_SCALE_IN_COUNT and within_margin_cap and ai_conf >= MIN_SCALE_IN_CONFIDENCE and calculus_accel_ok:
+                    if is_profit_or_breakeven and scale_count < MAX_SCALE_IN_COUNT and within_margin_cap and calculus_accel_ok:
                         allow_entry = True
                         is_scale_in = True
                         print(f"[Pyramiding] {f['name']} 满足顺势浮盈加多条件: 底仓浮盈={pos_upl:+.2f}U ({pos_upl_ratio*100:+.1f}%), 已加仓{scale_count}次, 微积分加速度={c_accel:+.2f}, 延续概率={p_cont:.1f}%, 计划加仓{actual_sz}张")
@@ -1768,33 +2173,67 @@ def execute_portfolio():
                         elif scale_count >= MAX_SCALE_IN_COUNT:
                             print(f"[Pyramiding 拦截] {f['name']} 已达最大加仓次数 ({scale_count}/{MAX_SCALE_IN_COUNT})")
                         elif not within_margin_cap:
-                            print(f"[Pyramiding 拦截] {f['name']} 加仓后总保证金将超限 ({curr_margin + planned_margin:.1f} > {MAX_SINGLE_ASSET_MARGIN}U)")
-                        elif ai_conf < MIN_SCALE_IN_CONFIDENCE:
-                            print(f"[Pyramiding 拦截] {f['name']} AI加仓置信度不足 ({ai_conf:.0f}% < {MIN_SCALE_IN_CONFIDENCE}%)")
+                            print(f"[Pyramiding 拦截] {f['name']} 加仓后总保证金将超限 ({curr_margin + planned_margin:.1f} > {single_asset_margin}U)")
                         elif not calculus_accel_ok:
-                            print(f"[Pyramiding 拦截] {f['name']} 数理动能衰竭或延续概率偏低 (加速度={c_accel:+.2f}, 概率={p_cont:.1f}%)，禁止追多加仓")
+                            print(f"[Pyramiding 拦截] {f['name']} 数理数据无效、动能衰竭或延续概率偏低 (加速度={c_accel:+.2f}, 概率={p_cont:.1f}%)，禁止追多加仓")
 
                 if allow_entry:
-                    limit_px = round(ai_decision.get("entry_price") if (ai_decision and ai_decision.get("entry_price", 0) > 0) else (f.get("bidPx") or f["price"]), prec)
-                    tp_px = round(ai_decision.get("take_profit_price") if (ai_decision and ai_decision.get("take_profit_price", 0) > 0) else (limit_px + tp_dist), prec)
-                    sl_px = round(ai_decision.get("stop_loss_price") if (ai_decision and ai_decision.get("stop_loss_price", 0) > 0) else (limit_px - sl_dist), prec)
+                    limit_px = float(ai_decision.get("entry_price") or f.get("bidPx") or f["price"])
+                    tp_px = float(ai_decision.get("take_profit_price") or (limit_px + tp_dist))
+                    sl_px = float(ai_decision.get("stop_loss_price") or (limit_px - sl_dist))
 
-                    accepted, order_ref = submit_protected_limit_order(inst_id, "buy", "long", actual_sz, limit_px, tp_px, sl_px)
+                    candidate_id = ai_decision.get('candidate_id')
+                    # Program-selected plans may be rounded to ticks, never silently repaired into another setup.
+                    if candidate_id and not 0 < sl_px < limit_px < tp_px:
+                        executed_actions.append(f"[{f['name']}] 程序候选取整后价格结构失效，拒绝重写止损或目标")
+                        continue
+                    # Model-independent proposals may be repaired to a valid
+                    # side geometry; immutable program candidates may not.
+                    if not candidate_id and sl_px >= limit_px:
+                        sl_px = round(limit_px - max(sl_dist, f["price"] * 0.012), prec)
+                    if not candidate_id and tp_px <= limit_px:
+                        tp_px = round(limit_px + max(tp_dist, f["price"] * 0.024), prec)
+
+                    accepted, order_ref = submit_protected_limit_order(inst_id, "buy", "long", actual_sz, limit_px, tp_px, sl_px, risk_budget_usdt=f["risk_per_trade_usd"], decision_id=ai_info.get("decision_id"), decision_at=ai_info.get("data_as_of"), allow_demo_translation=not bool(ai_decision.get('candidate_id')), horizon=horizon)
                     if accepted:
+                        actual_sz = LAST_ENTRY_PLAN['size']
+                        limit_px, sl_px, tp_px = LAST_ENTRY_PLAN['entry'], LAST_ENTRY_PLAN['stop'], LAST_ENTRY_PLAN['take_profit']
                         if is_scale_in:
                             tracker = trackers.get(f"{inst_id}_long", {})
-                            tracker["scale_count"] = tracker.get("scale_count", 0) + 1
+                            pending = tracker.setdefault("pending_scale_orders", [])
+                            if str(order_ref) not in {str(item.get("order_id")) for item in pending if isinstance(item, dict)}:
+                                pending.append({"order_id": str(order_ref), "requested_size": actual_sz, "submitted_at": time.time()})
                             save_trackers(trackers)
-                            executed_actions.append(f"[{f['name']}] 🚀 AI顺势浮盈金字塔加多挂单已提交 {actual_sz}张@{limit_px} (order={order_ref}, TP={tp_px}, SL={sl_px})")
+                            executed_actions.append(f"[{f['name']}] 🚀 AI顺势浮盈金字塔加多委托已提交，等待成交确认后计入加仓次数（数量经最终风险预算裁剪）@{limit_px} (order={order_ref}, TP={tp_px}, SL={sl_px})")
                             if notify_trade_open:
-                                notify_trade_open(f["name"], "多 (顺势加仓)", actual_sz, limit_px, "🚀 顺势金字塔加多", f"TP={tp_px}, SL={sl_px} | {ai_reason}")
+                                notify_trade_open(
+                                    inst=f["name"],
+                                    side="多 (顺势加多)",
+                                    sz=actual_sz,
+                                    px=limit_px,
+                                    strategy="🚀 顺势金字塔加多",
+                                    reason=str(ai_reason),
+                                    tp_px=tp_px,
+                                    sl_px=sl_px,
+                                    leverage=LAST_ENTRY_PLAN.get("leverage", 3),
+                                )
                         else:
-                            executed_actions.append(f"[{f['name']}] AI限价多单已提交待成交 {actual_sz}张@{limit_px} (order={order_ref}, TP={tp_px}, SL={sl_px})")
+                            executed_actions.append(f"[{f['name']}] AI限价多单已提交待成交（数量经最终风险预算裁剪）@{limit_px} (order={order_ref}, TP={tp_px}, SL={sl_px})")
                             pending_inst_ids.add(inst_id)
                             reserved_slot_count += 1
                             reserved_long_count += 1
                             if notify_trade_open:
-                                notify_trade_open(f["name"], "多", actual_sz, limit_px, strat_tag, f"TP={tp_px}, SL={sl_px} | {ai_reason}")
+                                notify_trade_open(
+                                    inst=f["name"],
+                                    side="多",
+                                    sz=actual_sz,
+                                    px=limit_px,
+                                    strategy=strat_tag,
+                                    reason=str(ai_reason),
+                                    tp_px=tp_px,
+                                    sl_px=sl_px,
+                                    leverage=LAST_ENTRY_PLAN.get("leverage", 3),
+                                )
                     else:
                         executed_actions.append(f"[{f['name']}] AI限价多单提交失败: {order_ref}")
 
@@ -1804,11 +2243,8 @@ def execute_portfolio():
                 allow_entry = False
 
                 # Case A: Standard Initial Entry
-                if not curr_pos and inst_id not in pending_inst_ids and reserved_slot_count < MAX_CONCURRENT_POSITIONS and reserved_short_count < MAX_SAME_DIRECTION_POSITIONS:
-                    if ai_conf >= 80.0:
-                        allow_entry = True
-                    else:
-                        print(f"[首发开空拦截] {f['name']} AI置信度 {ai_conf:.1f}% 未达 80% 门禁，宁缺毋滥，拦截入场")
+                if not curr_pos and inst_id not in pending_inst_ids and reserved_slot_count < max_active_positions and reserved_short_count < max_same_direction:
+                    allow_entry = True  # Evidence/geometry and account risk, never model score.
 
                 # Case B: Strict Pyramiding Scale-In (Existing short position in profit/breakeven)
                 elif curr_pos and str(curr_pos.get("side", "")).lower() == "short" and inst_id not in pending_inst_ids:
@@ -1822,15 +2258,11 @@ def execute_portfolio():
 
                     is_profit_or_breakeven = (pos_upl > 0 and pos_upl_ratio >= MIN_SCALE_IN_PROFIT_RATIO) or (trailing_sl > 0 and trailing_sl <= pos_avg_px)
                     planned_margin = ai_margin if ai_margin > 0 else (actual_sz * ct_val * f["price"] / max(1.0, ai_lever))
-                    within_margin_cap = (curr_margin + planned_margin) <= MAX_SINGLE_ASSET_MARGIN
+                    within_margin_cap = (curr_margin + planned_margin) <= single_asset_margin
 
-                    c_dyn = f.get("calculus", {})
-                    c_accel = float(c_dyn.get("acceleration", 0.0) or 0.0)
-                    p_th = c_dyn.get("probability_theory", {})
-                    p_break = float(p_th.get("breakdown_prob_pct", 50.0) or 50.0)
-                    calculus_accel_ok = (c_accel <= 0.25 and p_break >= 40.0)
+                    calculus_accel_ok, c_accel, p_break = _scale_in_calculus_gate(f.get("calculus"), "short")
 
-                    if is_profit_or_breakeven and scale_count < MAX_SCALE_IN_COUNT and within_margin_cap and ai_conf >= MIN_SCALE_IN_CONFIDENCE and calculus_accel_ok:
+                    if is_profit_or_breakeven and scale_count < MAX_SCALE_IN_COUNT and within_margin_cap and calculus_accel_ok:
                         allow_entry = True
                         is_scale_in = True
                         print(f"[Pyramiding] {f['name']} 满足顺势浮盈加空条件: 底仓浮盈={pos_upl:+.2f}U ({pos_upl_ratio*100:+.1f}%), 已加仓{scale_count}次, 微积分加速度={c_accel:+.2f}, 击穿概率={p_break:.1f}%, 计划加仓{actual_sz}张")
@@ -1840,45 +2272,93 @@ def execute_portfolio():
                         elif scale_count >= MAX_SCALE_IN_COUNT:
                             print(f"[Pyramiding 拦截] {f['name']} 已达最大加仓次数 ({scale_count}/{MAX_SCALE_IN_COUNT})")
                         elif not within_margin_cap:
-                            print(f"[Pyramiding 拦截] {f['name']} 加仓后总保证金将超限 ({curr_margin + planned_margin:.1f} > {MAX_SINGLE_ASSET_MARGIN}U)")
-                        elif ai_conf < MIN_SCALE_IN_CONFIDENCE:
-                            print(f"[Pyramiding 拦截] {f['name']} AI加仓置信度不足 ({ai_conf:.0f}% < {MIN_SCALE_IN_CONFIDENCE}%)")
+                            print(f"[Pyramiding 拦截] {f['name']} 加仓后总保证金将超限 ({curr_margin + planned_margin:.1f} > {single_asset_margin}U)")
                         elif not calculus_accel_ok:
-                            print(f"[Pyramiding 拦截] {f['name']} 数理动能失速企稳或击穿概率偏低 (加速度={c_accel:+.2f}, 概率={p_break:.1f}%)，禁止追空加仓")
+                            print(f"[Pyramiding 拦截] {f['name']} 数理数据无效、动能失速企稳或击穿概率偏低 (加速度={c_accel:+.2f}, 概率={p_break:.1f}%)，禁止追空加仓")
 
                 if allow_entry:
-                    limit_px = round(ai_decision.get("entry_price") if (ai_decision and ai_decision.get("entry_price", 0) > 0) else (f.get("askPx") or f["price"]), prec)
-                    tp_px = round(ai_decision.get("take_profit_price") if (ai_decision and ai_decision.get("take_profit_price", 0) > 0) else (limit_px - tp_dist), prec)
-                    sl_px = round(ai_decision.get("stop_loss_price") if (ai_decision and ai_decision.get("stop_loss_price", 0) > 0) else (limit_px + sl_dist), prec)
+                    limit_px = float(ai_decision.get("entry_price") or f.get("askPx") or f["price"])
+                    tp_px = float(ai_decision.get("take_profit_price") or (limit_px - tp_dist))
+                    sl_px = float(ai_decision.get("stop_loss_price") or (limit_px + sl_dist))
 
-                    accepted, order_ref = submit_protected_limit_order(inst_id, "sell", "short", actual_sz, limit_px, tp_px, sl_px)
+                    candidate_id = ai_decision.get("candidate_id")
+                    # Hard check: For SELL SHORT, OKX strictly requires tp_px < limit_px < sl_px
+                    if candidate_id and not 0 < tp_px < limit_px < sl_px:
+                        executed_actions.append(f"[{f['name']}] 程序候选取整后价格结构失效，拒绝重写止损或目标")
+                        continue
+                    # Model-independent proposals may be repaired to a valid
+                    # side geometry; immutable program candidates may not.
+                    if not candidate_id and sl_px <= limit_px:
+                        sl_px = round(limit_px + max(sl_dist, f["price"] * 0.012), prec)
+                    if not candidate_id and tp_px >= limit_px:
+                        tp_px = round(limit_px - max(tp_dist, f["price"] * 0.024), prec)
+
+                    accepted, order_ref = submit_protected_limit_order(inst_id, "sell", "short", actual_sz, limit_px, tp_px, sl_px, risk_budget_usdt=f["risk_per_trade_usd"], decision_id=ai_info.get("decision_id"), decision_at=ai_info.get("data_as_of"), allow_demo_translation=not bool(ai_decision.get("candidate_id")), horizon=horizon)
                     if accepted:
+                        actual_sz = LAST_ENTRY_PLAN['size']
+                        limit_px, sl_px, tp_px = LAST_ENTRY_PLAN['entry'], LAST_ENTRY_PLAN['stop'], LAST_ENTRY_PLAN['take_profit']
                         if is_scale_in:
                             tracker = trackers.get(f"{inst_id}_short", {})
-                            tracker["scale_count"] = tracker.get("scale_count", 0) + 1
+                            pending = tracker.setdefault("pending_scale_orders", [])
+                            if str(order_ref) not in {str(item.get("order_id")) for item in pending if isinstance(item, dict)}:
+                                pending.append({"order_id": str(order_ref), "requested_size": actual_sz, "submitted_at": time.time()})
                             save_trackers(trackers)
-                            executed_actions.append(f"[{f['name']}] 🌪️ AI顺势浮盈金字塔加空挂单已提交 {actual_sz}张@{limit_px} (order={order_ref}, TP={tp_px}, SL={sl_px})")
+                            executed_actions.append(f"[{f['name']}] 🌪️ AI顺势浮盈金字塔加空委托已提交，等待成交确认后计入加仓次数（数量经最终风险预算裁剪）@{limit_px} (order={order_ref}, TP={tp_px}, SL={sl_px})")
                             if notify_trade_open:
-                                notify_trade_open(f["name"], "空 (顺势加仓)", actual_sz, limit_px, "🌪️ 顺势金字塔加空", f"TP={tp_px}, SL={sl_px} | {ai_reason}")
+                                notify_trade_open(
+                                    inst=f["name"],
+                                    side="空 (顺势加空)",
+                                    sz=actual_sz,
+                                    px=limit_px,
+                                    strategy="🌪️ 顺势金字塔加空",
+                                    reason=str(ai_reason),
+                                    tp_px=tp_px,
+                                    sl_px=sl_px,
+                                    leverage=LAST_ENTRY_PLAN.get("leverage", 3),
+                                )
                         else:
-                            executed_actions.append(f"[{f['name']}] AI限价空单已提交待成交 {actual_sz}张@{limit_px} (order={order_ref}, TP={tp_px}, SL={sl_px})")
+                            executed_actions.append(f"[{f['name']}] AI限价空单已提交待成交（数量经最终风险预算裁剪）@{limit_px} (order={order_ref}, TP={tp_px}, SL={sl_px})")
                             pending_inst_ids.add(inst_id)
                             reserved_slot_count += 1
                             reserved_short_count += 1
                             if notify_trade_open:
-                                notify_trade_open(f["name"], "空", actual_sz, limit_px, strat_tag, f"TP={tp_px}, SL={sl_px} | {ai_reason}")
+                                notify_trade_open(
+                                    inst=f["name"],
+                                    side="空",
+                                    sz=actual_sz,
+                                    px=limit_px,
+                                    strategy=strat_tag,
+                                    reason=str(ai_reason),
+                                    tp_px=tp_px,
+                                    sl_px=sl_px,
+                                    leverage=LAST_ENTRY_PLAN.get("leverage", 3),
+                                )
                     else:
                         executed_actions.append(f"[{f['name']}] AI限价空单提交失败: {order_ref}")
 
+    from scripts.decision_reporting import summarize, format_summary, format_actions
+    decision_cycle = summarize(brain_cache, environment_notices,
+        unavailable_reason=cb_reason if cb_active else get_last_inference_error() if not brain_cache else '',
+        circuit_breaker=cb_active)
+    decision_cycle['timestamp'] = timestamp_full
+    decision_cycle['executed_actions'] = list(executed_actions)
+    from scripts.wait_audit import public_status as wait_status
+    latest_wait_status = wait_status(market._selected().identity)
+    if brain_cache:
+        decision_cycle['no_entry_candidate_streak'] = latest_wait_status.get('no_entry_candidate_streak', 0)
+        decision_cycle['wait_alert'] = latest_wait_status.get('alert', False)
+        decision_cycle['wait_diagnostics'] = latest_wait_status.get('diagnostics')
     # 5. Persist Latest State for Web Monitoring Dashboard
     state_payload = {
         "timestamp": timestamp_full,
         "active_positions_count": active_pos_count,
-        "max_positions": MAX_CONCURRENT_POSITIONS,
+        "max_positions": max_active_positions,
         "long_count": long_count,
         "short_count": short_count,
         "circuit_breaker": {"active": cb_active, "reason": cb_reason},
         "executed_actions": executed_actions,
+        "decision_cycle": decision_cycle,
+        "environment_notices": environment_notices,
         "instruments": []
     }
 
@@ -1911,6 +2391,9 @@ def execute_portfolio():
     with open(os.path.join(DATA_DIR, "trading_state.json"), "w", encoding="utf-8") as f:
         json.dump(state_payload, f, ensure_ascii=False, indent=2)
 
+    strategy_evidence.best_effort(market._selected().identity, 'execution_cycle',
+        {'timestamp':timestamp_full,'actions':executed_actions,'decision_cycle':decision_cycle})
+
     # 6. Always Sync Full Lifecycle Ledger and SQLite DB in Realtime
     try:
         sync_script = os.path.join(WORKSPACE_DIR, "scripts", "sync_full_ledger.py")
@@ -1922,10 +2405,14 @@ def execute_portfolio():
     except Exception as e:
         print(f"[Ledger Sync Warning] {e}")
 
-    log_entry = f"[{timestamp_full}] ⚡ R20 Quantum Trader v6.5.2 巡检完成 | 持仓 {active_pos_count}/{MAX_CONCURRENT_POSITIONS} (多{long_count}/空{short_count}) | 动作: {', '.join(executed_actions) if executed_actions else '无开平仓操作'}\n"
+    log_entry = f"[{timestamp_full}] 巡检完成 | 持仓 {active_pos_count}/{MAX_CONCURRENT_POSITIONS} (多{long_count}/空{short_count}) | 动作: {format_actions(executed_actions)} | 决策: {format_summary(decision_cycle)}\n"
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(log_entry)
     print(log_entry.strip())
+    return {"completed": True, "timestamp": timestamp_full, "actions": executed_actions}
 
 if __name__ == "__main__":
-    execute_portfolio()
+    # Account/quote aborts and lock skips must not be reported as completed work.
+    # No exchange write is retried here; the next normal schedule may re-read.
+    if execute_portfolio() is None:
+        raise SystemExit(1)

@@ -1,0 +1,12 @@
+{
+  "enabled": false,
+  "environment": "demo",
+  "allocation_id": "small-account-300-v1",
+  "budget_usdt": 300,
+  "max_active_instruments": 2,
+  "single_asset_margin_fraction": 0.2,
+  "total_margin_fraction": 0.5,
+  "dedicated_account_confirmed": false,
+  "virtual_cap_acknowledged": false,
+  "allow_live": false
+}

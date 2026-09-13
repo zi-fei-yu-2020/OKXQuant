@@ -6,16 +6,16 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from r20_backend.settings_store import remove_env
-from r20_gateway.secrets import delete_secrets
+from okxquant_backend.settings_store import remove_env
+from okxquant_gateway.secrets import delete_secrets
 ENV_KEYS = {
-    "R20_NOTIFY_WECHAT_ILINK_ENABLED",
-    "R20_WECHAT_BASE_URL",
-    "R20_WECHAT_USER_ID",
-    "R20_WECHAT_BOT_TOKEN",
-    "R20_WECHAT_CONTEXT_TOKEN",
+    "OKXQUANT_NOTIFY_WECHAT_ILINK_ENABLED",
+    "OKXQUANT_WECHAT_BASE_URL",
+    "OKXQUANT_WECHAT_USER_ID",
+    "OKXQUANT_WECHAT_BOT_TOKEN",
+    "OKXQUANT_WECHAT_CONTEXT_TOKEN",
 }
-SECRET_KEYS = {"R20_WECHAT_BOT_TOKEN", "R20_WECHAT_CONTEXT_TOKEN"}
+SECRET_KEYS = {"OKXQUANT_WECHAT_BOT_TOKEN", "OKXQUANT_WECHAT_CONTEXT_TOKEN"}
 STATE_FILES = (ROOT / "data" / "wechat_session_state.json",)
 
 

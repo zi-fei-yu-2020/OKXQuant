@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """
-R20 AI Brain Six-Crypto Quantitative Trading Decision Engine (ai_brain_trader.py)
+OKXQuant AI Brain Six-Crypto Quantitative Trading Decision Engine (ai_brain_trader.py)
 Batch ingests six crypto perpetuals into one macro-context LLM call.
 Maintains a validated live decision cache and durable Web audit history.
 """
+
+# Standalone scheduler children must not depend on an inherited PYTHONPATH.
+import sys as _sys
+from pathlib import Path as _Path
+_project_root = str(_Path(__file__).resolve().parents[1])
+if _project_root not in _sys.path:
+    _sys.path.insert(0, _project_root)
+
 
 import os
 from okx_runtime import replace_cli_prefix as okx_private_command
@@ -12,9 +20,12 @@ import json
 import time
 import datetime
 import urllib.request
+import public_market as market
+import instrument_support as support
+import algo_reader
+from scripts import trade_lock, strategy_evidence, trading_prompt, wait_audit, capital_pool
 import subprocess
 import tempfile
-import fcntl
 from typing import Dict, Any, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
 
@@ -23,7 +34,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 try:
-    from r20_backend.config import settings as standalone_settings
+    from okxquant_backend.config import settings as standalone_settings
 except ImportError:
     standalone_settings = None
 
@@ -41,10 +52,16 @@ AI_MEMORY_FILE = os.path.join(DATA_DIR, "ai_trading_memory.json")
 PROMPT_OVERRIDE_FILE = os.path.join(DATA_DIR, "system_prompt_override.txt")
 AI_BRAIN_LOCK_FILE = os.path.join(DATA_DIR, ".ai_brain_cycle.lock")
 DECISION_MAX_AGE_SECONDS = 300
+LAST_INFERENCE_ERROR = ""
+
+
+def get_last_inference_error() -> str:
+    """A safe reason for this process's most recent inference attempt."""
+    return LAST_INFERENCE_ERROR
 
 from instrument_pool import load_instruments
-from prompt_library import active_profile, append_layer, apply_module_layout
-from r20_gateway.telemetry import ModelCallTelemetry
+from prompt_library import active_profile
+from okxquant_gateway.telemetry import ModelCallTelemetry
 
 TARGET_INSTRUMENTS = load_instruments()
 
@@ -66,12 +83,17 @@ def atomic_write_json(path: str, payload: Any) -> None:
 def single_brain_cycle(func):
     """Prevent overlapping cron runs from overwriting the shared decision cache."""
     def wrapped(*args, **kwargs):
+        # Read-only prompt views are cross-platform; execution still requires the real POSIX lock.
+        import fcntl
+        global LAST_INFERENCE_ERROR
+        LAST_INFERENCE_ERROR = ""
         os.makedirs(DATA_DIR, exist_ok=True)
         lock_handle = open(AI_BRAIN_LOCK_FILE, "a+", encoding="utf-8")
         try:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             lock_handle.close()
+            LAST_INFERENCE_ERROR = "已有推理周期运行，本轮未取得执行锁"
             print("[AI Brain Batch] Skip: another inference cycle is still running")
             return None
         try:
@@ -79,6 +101,9 @@ def single_brain_cycle(func):
             lock_handle.truncate()
             lock_handle.write(str(os.getpid()))
             lock_handle.flush()
+            atomic_write_json(AI_DECISION_CACHE_FILE, {})
+            atomic_write_json(AI_POSITION_MANAGEMENT_FILE, {'timestamp': 0, 'instructions': []})
+            atomic_write_json(os.path.join(DATA_DIR, 'trading_output_validation.json'), {'status':'pending','contract_version':trading_prompt.VERSION})
             return func(*args, **kwargs)
         finally:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
@@ -104,7 +129,7 @@ def is_same_direction_scale_request(position_side: str, action: str) -> bool:
 def get_cpa_client_config() -> Tuple[str, str]:
     """Resolve LLM credentials only from process environment or local .env."""
     try:
-        from r20_backend.llm_manager import get_active_llm_runtime
+        from okxquant_backend.llm_manager import get_active_llm_runtime
         active_llm = get_active_llm_runtime()
         if active_llm.get("base_url"):
             return active_llm["base_url"], active_llm.get("api_key", "")
@@ -118,15 +143,53 @@ def get_cpa_client_config() -> Tuple[str, str]:
     )
 
 def get_effective_system_prompt() -> str:
-    """Append a locally managed admin override without replacing audited safety rules."""
+    """Trusted base only. Saved preferences are composed separately in the user role."""
+    return SYSTEM_PROMPT
+
+
+def get_user_prompt_override() -> str:
     try:
         if os.path.exists(PROMPT_OVERRIDE_FILE):
-            override = open(PROMPT_OVERRIDE_FILE, "r", encoding="utf-8").read().strip()
-            if override:
-                return f"{SYSTEM_PROMPT}\n\n【管理员提示词覆盖层（同样必须遵守上述风控和 JSON 约束）】\n{override}"
+            with open(PROMPT_OVERRIDE_FILE, encoding='utf-8') as handle:
+                return handle.read()
     except OSError:
-        pass
-    return SYSTEM_PROMPT
+        raise trading_prompt.ContractError('Cannot inspect administrator preference layer')
+    return ''
+
+
+def normalize_smart_money(item=None) -> Dict[str, Any]:
+    """Keep observed fields only; missing/malformed data is not neutral flow."""
+    result = {"valid": False, **dict.fromkeys((
+        "weighted_long_pct", "net_flow_usdt", "avg_long_entry",
+        "avg_short_entry", "top_win_rate"), "UNKNOWN")}
+    if not isinstance(item, dict) or item.get("valid", True) is not True:
+        return result
+    fields = (
+        ("longShortRatio", "weightedLongRatio", "weighted_long_pct"),
+        ("notional", "netNotionalUsdt", "net_flow_usdt"),
+        ("notional", "smartMoneyLongAvgEntry", "avg_long_entry"),
+        ("notional", "smartMoneyShortAvgEntry", "avg_short_entry"),
+        ("winRate", "avgLongWinRate", "top_win_rate"),
+    )
+    for section, source, target in fields:
+        data = item.get(section)
+        if not isinstance(data, dict) or data.get("valid", True) is not True:
+            continue
+        try:
+            value = trading_prompt.numeric(data.get(source))
+        except trading_prompt.ContractError:
+            continue
+        if target in ("weighted_long_pct", "top_win_rate"):
+            if not 0 <= value <= 1:
+                continue
+            value = round(value * 100, 1)
+            result[target] = value if target == "weighted_long_pct" else f"多胜率{value}%"
+        elif target == "net_flow_usdt":
+            result[target] = f"{round(value / 1e4, 1)}万 U" if abs(value) >= 1e4 else f"{round(value, 0)} U"
+        elif value > 0:
+            result[target] = str(data[source])
+    result["valid"] = any(value != "UNKNOWN" for key, value in result.items() if key != "valid")
+    return result
 
 
 def fetch_single_instrument_package(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -136,6 +199,7 @@ def fetch_single_instrument_package(item: Dict[str, Any]) -> Dict[str, Any]:
     headers = {"User-Agent": "Mozilla/5.0"}
 
     pkg = {
+        "data_as_of": market.signal_as_of(),
         "instId": inst_id,
         "name": name,
         "type": item["type"],
@@ -156,13 +220,8 @@ def fetch_single_instrument_package(item: Dict[str, Any]) -> Dict[str, Any]:
         "vol_ratio": 1.0,
         "obv_flow": "NEUTRAL",
         "adx_1h": 0.0,
-        "smart_money": {
-            "weighted_long_pct": 50.0,
-            "net_flow_usdt": "0 U",
-            "avg_long_entry": "--",
-            "avg_short_entry": "--",
-            "top_win_rate": "--"
-        },
+        "smart_money": normalize_smart_money(),
+        "entry_candles": {},
         "recent_15m": [],
         "recent_1h": [],
         "recent_4h": [],
@@ -172,196 +231,178 @@ def fetch_single_instrument_package(item: Dict[str, Any]) -> Dict[str, Any]:
 
     # 1. Ticker
     try:
-        req = urllib.request.Request(f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}", headers=headers)
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            d = json.loads(resp.read().decode("utf-8"))
-            if d.get("code") == "0" and d.get("data"):
-                t = d["data"][0]
-                pkg["price"] = float(t.get("last", 0))
-                pkg["bidPx"] = float(t.get("bidPx", pkg["price"]) or pkg["price"])
-                pkg["askPx"] = float(t.get("askPx", pkg["price"]) or pkg["price"])
-                op = float(t.get("open24h", 0) or 0)
-                pkg["chg24h"] = round(((pkg["price"] - op) / op * 100) if op > 0 else 0, 2)
+        d = market.get_json(f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}")
+        if d.get("code") == "0" and d.get("data"):
+            t = d["data"][0]
+            pkg["price"] = float(t.get("last", 0))
+            pkg["bidPx"] = float(t.get("bidPx", pkg["price"]) or pkg["price"])
+            pkg["askPx"] = float(t.get("askPx", pkg["price"]) or pkg["price"])
+            op = float(t.get("open24h", 0) or 0)
+            pkg["chg24h"] = round(((pkg["price"] - op) / op * 100) if op > 0 else 0, 2)
     except Exception:
         pass
 
     # 2. 15M Candles (recent 24, about 6 hours) & Technical Indicators Calculation
     try:
-        req = urllib.request.Request(f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar=15m&limit=24", headers=headers)
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            d = json.loads(resp.read().decode("utf-8"))
-            if d.get("code") == "0" and d.get("data"):
-                raw_candles = d["data"]
-                pkg["recent_15m"] = [[float(c[1]), float(c[2]), float(c[3]), float(c[4]), round(float(c[5]), 1)] for c in raw_candles[:12]]
+        d = market.signal_json(f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar=15m&limit=24")
+        if d.get("code") == "0" and d.get("data"):
+            raw_candles = d["data"]
+            from scripts.entry_candidates import seal_candles
+            pkg['entry_candles']['15M'] = seal_candles(raw_candles, '15M', int(pkg['data_as_of']*1000))
+            pkg["recent_15m"] = [[float(c[1]), float(c[2]), float(c[3]), float(c[4]), round(float(c[5]), 1)] for c in raw_candles[:12]]
 
-                # Calculate 15M indicators
-                if len(raw_candles) >= 15:
-                    closes = [float(c[4]) for c in reversed(raw_candles)]
-                    highs = [float(c[2]) for c in reversed(raw_candles)]
-                    lows = [float(c[3]) for c in reversed(raw_candles)]
-                    vols = [float(c[5]) for c in reversed(raw_candles)]
+            # Calculate 15M indicators
+            if len(raw_candles) >= 15:
+                closes = [float(c[4]) for c in reversed(raw_candles)]
+                highs = [float(c[2]) for c in reversed(raw_candles)]
+                lows = [float(c[3]) for c in reversed(raw_candles)]
+                vols = [float(c[5]) for c in reversed(raw_candles)]
 
-                    # ATR 15M
-                    tr_list = []
-                    for i in range(1, len(closes)):
-                        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
-                        tr_list.append(tr)
-                    if len(tr_list) >= 14:
-                        pkg["atr_15m"] = round(sum(tr_list[-14:]) / 14, 4)
-                        pkg["atr"] = pkg["atr_15m"]
+                # ATR 15M
+                tr_list = []
+                for i in range(1, len(closes)):
+                    tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+                    tr_list.append(tr)
+                if len(tr_list) >= 14:
+                    pkg["atr_15m"] = round(sum(tr_list[-14:]) / 14, 4)
+                    pkg["atr"] = pkg["atr_15m"]
 
-                    # RSI 15M
-                    diffs = [closes[i] - closes[i-1] for i in range(1, len(closes))]
-                    gains = [d if d > 0 else 0 for d in diffs]
-                    losses = [-d if d < 0 else 0 for d in diffs]
-                    if len(gains) >= 14:
-                        avg_g = sum(gains[-14:]) / 14
-                        avg_l = sum(losses[-14:]) / 14
-                        rs = (avg_g / avg_l) if avg_l > 0 else 100.0
-                        pkg["rsi"] = round(100.0 - (100.0 / (1.0 + rs)), 1)
-                        pkg["rsi_15m"] = pkg["rsi"]
+                # RSI 15M
+                diffs = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+                gains = [d if d > 0 else 0 for d in diffs]
+                losses = [-d if d < 0 else 0 for d in diffs]
+                if len(gains) >= 14:
+                    avg_g = sum(gains[-14:]) / 14
+                    avg_l = sum(losses[-14:]) / 14
+                    rs = (avg_g / avg_l) if avg_l > 0 else 100.0
+                    pkg["rsi"] = round(100.0 - (100.0 / (1.0 + rs)), 1)
+                    pkg["rsi_15m"] = pkg["rsi"]
 
-                    # VWAP Bias
-                    pv_sum = sum(closes[i] * vols[i] for i in range(len(closes)))
-                    v_sum = sum(vols)
-                    if v_sum > 0:
-                        vwap = pv_sum / v_sum
-                        pkg["vwap_bias"] = round((pkg["price"] - vwap) / vwap * 100, 2)
+                # VWAP Bias
+                pv_sum = sum(closes[i] * vols[i] for i in range(len(closes)))
+                v_sum = sum(vols)
+                if v_sum > 0:
+                    vwap = pv_sum / v_sum
+                    pkg["vwap_bias"] = round((pkg["price"] - vwap) / vwap * 100, 2)
 
-                    # Volume Ratio (Last vs MA5)
-                    if len(vols) >= 6:
-                        avg_v5 = sum(vols[-6:-1]) / 5
-                        if avg_v5 > 0:
-                            pkg["vol_ratio"] = round(vols[-1] / avg_v5, 2)
+                # Volume Ratio (Last vs MA5)
+                if len(vols) >= 6:
+                    avg_v5 = sum(vols[-6:-1]) / 5
+                    if avg_v5 > 0:
+                        pkg["vol_ratio"] = round(vols[-1] / avg_v5, 2)
 
-                    # OBV Flow
-                    obv = 0
-                    for i in range(1, len(closes)):
-                        if closes[i] > closes[i-1]:
-                            obv += vols[i]
-                        elif closes[i] < closes[i-1]:
-                            obv -= vols[i]
-                    pkg["obv_flow"] = "BULL_FLOW" if obv > 0 else ("BEAR_FLOW" if obv < 0 else "NEUTRAL")
+                # OBV Flow
+                obv = 0
+                for i in range(1, len(closes)):
+                    if closes[i] > closes[i-1]:
+                        obv += vols[i]
+                    elif closes[i] < closes[i-1]:
+                        obv -= vols[i]
+                pkg["obv_flow"] = "BULL_FLOW" if obv > 0 else ("BEAR_FLOW" if obv < 0 else "NEUTRAL")
     except Exception:
         pass
 
     # 3. 1H Candles (recent 24, about 24 hours) & 1H ATR / 1H RSI
     try:
-        req = urllib.request.Request(f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar=1H&limit=24", headers=headers)
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            d = json.loads(resp.read().decode("utf-8"))
-            if d.get("code") == "0" and d.get("data"):
-                raw_1h = d["data"]
-                pkg["recent_1h"] = [[float(c[1]), float(c[2]), float(c[3]), float(c[4]), round(float(c[5]), 1)] for c in raw_1h[:12]]
-                if len(raw_1h) >= 15:
-                    closes_1h = [float(c[4]) for c in reversed(raw_1h)]
-                    highs_1h = [float(c[2]) for c in reversed(raw_1h)]
-                    lows_1h = [float(c[3]) for c in reversed(raw_1h)]
+        d = market.signal_json(f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar=1H&limit=24")
+        if d.get("code") == "0" and d.get("data"):
+            raw_1h = d["data"]
+            from scripts.entry_candidates import seal_candles
+            pkg['entry_candles']['1H'] = seal_candles(raw_1h, '1H', int(pkg['data_as_of']*1000))
+            pkg["recent_1h"] = [[float(c[1]), float(c[2]), float(c[3]), float(c[4]), round(float(c[5]), 1)] for c in raw_1h[:12]]
+            if len(raw_1h) >= 15:
+                closes_1h = [float(c[4]) for c in reversed(raw_1h)]
+                highs_1h = [float(c[2]) for c in reversed(raw_1h)]
+                lows_1h = [float(c[3]) for c in reversed(raw_1h)]
 
-                    tr_list_1h = []
-                    for i in range(1, len(closes_1h)):
-                        tr = max(highs_1h[i] - lows_1h[i], abs(highs_1h[i] - closes_1h[i-1]), abs(lows_1h[i] - closes_1h[i-1]))
-                        tr_list_1h.append(tr)
-                    if len(tr_list_1h) >= 14:
-                        pkg["atr_1h"] = round(sum(tr_list_1h[-14:]) / 14, 4)
-                        pkg["atr"] = pkg["atr_1h"]  # Elevate primary ATR to 1H
+                tr_list_1h = []
+                for i in range(1, len(closes_1h)):
+                    tr = max(highs_1h[i] - lows_1h[i], abs(highs_1h[i] - closes_1h[i-1]), abs(lows_1h[i] - closes_1h[i-1]))
+                    tr_list_1h.append(tr)
+                if len(tr_list_1h) >= 14:
+                    pkg["atr_1h"] = round(sum(tr_list_1h[-14:]) / 14, 4)
+                    pkg["atr"] = pkg["atr_1h"]  # Elevate primary ATR to 1H
 
-                    diffs_1h = [closes_1h[i] - closes_1h[i-1] for i in range(1, len(closes_1h))]
-                    gains_1h = [d if d > 0 else 0 for d in diffs_1h]
-                    losses_1h = [-d if d < 0 else 0 for d in diffs_1h]
-                    if len(gains_1h) >= 14:
-                        avg_g_1h = sum(gains_1h[-14:]) / 14
-                        avg_l_1h = sum(losses_1h[-14:]) / 14
-                        rs_1h = (avg_g_1h / avg_l_1h) if avg_l_1h > 0 else 100.0
-                        pkg["rsi_1h"] = round(100.0 - (100.0 / (1.0 + rs_1h)), 1)
+                diffs_1h = [closes_1h[i] - closes_1h[i-1] for i in range(1, len(closes_1h))]
+                gains_1h = [d if d > 0 else 0 for d in diffs_1h]
+                losses_1h = [-d if d < 0 else 0 for d in diffs_1h]
+                if len(gains_1h) >= 14:
+                    avg_g_1h = sum(gains_1h[-14:]) / 14
+                    avg_l_1h = sum(losses_1h[-14:]) / 14
+                    rs_1h = (avg_g_1h / avg_l_1h) if avg_l_1h > 0 else 100.0
+                    pkg["rsi_1h"] = round(100.0 - (100.0 / (1.0 + rs_1h)), 1)
 
-                    # 1H Swing Structure
-                    if len(closes_1h) >= 10:
-                        ma7_1h = sum(closes_1h[-7:]) / 7
-                        ma20_1h = sum(closes_1h[-20:]) / min(len(closes_1h), 20)
-                        if closes_1h[-1] > ma7_1h > ma20_1h:
-                            pkg["structure_1h"] = "1H_SWING_BULL"
-                        elif closes_1h[-1] < ma7_1h < ma20_1h:
-                            pkg["structure_1h"] = "1H_SWING_BEAR"
-                        else:
-                            pkg["structure_1h"] = "1H_SWING_CHOP"
+                # 1H Swing Structure
+                if len(closes_1h) >= 10:
+                    ma7_1h = sum(closes_1h[-7:]) / 7
+                    ma20_1h = sum(closes_1h[-20:]) / min(len(closes_1h), 20)
+                    if closes_1h[-1] > ma7_1h > ma20_1h:
+                        pkg["structure_1h"] = "1H_SWING_BULL"
+                    elif closes_1h[-1] < ma7_1h < ma20_1h:
+                        pkg["structure_1h"] = "1H_SWING_BEAR"
+                    else:
+                        pkg["structure_1h"] = "1H_SWING_CHOP"
     except Exception:
         pass
 
     # 4. 4H Candles (recent 16, about 64 hours) & 4H Macro Structure
     try:
-        req = urllib.request.Request(f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar=4H&limit=16", headers=headers)
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            d = json.loads(resp.read().decode("utf-8"))
-            if d.get("code") == "0" and d.get("data"):
-                raw_4h = d["data"]
-                pkg["recent_4h"] = [[float(c[1]), float(c[2]), float(c[3]), float(c[4]), round(float(c[5]), 1)] for c in raw_4h[:8]]
-                if len(raw_4h) >= 8:
-                    closes_4h = [float(c[4]) for c in reversed(raw_4h)]
-                    ma5_4h = sum(closes_4h[-5:]) / 5
-                    ma12_4h = sum(closes_4h[-12:]) / min(len(closes_4h), 12)
-                    if closes_4h[-1] > ma5_4h > ma12_4h:
-                        pkg["macro_4h"] = "4H_MACRO_BULL (大级别多头通道)"
-                    elif closes_4h[-1] < ma5_4h < ma12_4h:
-                        pkg["macro_4h"] = "4H_MACRO_BEAR (大级别空头承压)"
-                    else:
-                        pkg["macro_4h"] = "4H_MACRO_RANGE (大级别区间震荡)"
+        d = market.signal_json(f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar=4H&limit=16")
+        if d.get("code") == "0" and d.get("data"):
+            raw_4h = d["data"]
+            pkg["recent_4h"] = [[float(c[1]), float(c[2]), float(c[3]), float(c[4]), round(float(c[5]), 1)] for c in raw_4h[:8]]
+            if len(raw_4h) >= 8:
+                closes_4h = [float(c[4]) for c in reversed(raw_4h)]
+                ma5_4h = sum(closes_4h[-5:]) / 5
+                ma12_4h = sum(closes_4h[-12:]) / min(len(closes_4h), 12)
+                if closes_4h[-1] > ma5_4h > ma12_4h:
+                    pkg["macro_4h"] = "4H_MACRO_BULL (大级别多头通道)"
+                elif closes_4h[-1] < ma5_4h < ma12_4h:
+                    pkg["macro_4h"] = "4H_MACRO_BEAR (大级别空头承压)"
+                else:
+                    pkg["macro_4h"] = "4H_MACRO_RANGE (大级别区间震荡)"
     except Exception:
         pass
 
     # 5. Funding Rate & OI
     if item["type"] == "crypto":
         try:
-            req = urllib.request.Request(f"https://www.okx.com/api/v5/public/funding-rate?instId={inst_id}", headers=headers)
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                d = json.loads(resp.read().decode("utf-8"))
-                if d.get("code") == "0" and d.get("data"):
-                    pkg["fundingRate"] = round(float(d["data"][0].get("fundingRate", 0)) * 100, 4)
+            d = market.get_json(f"https://www.okx.com/api/v5/public/funding-rate?instId={inst_id}")
+            if d.get("code") == "0" and d.get("data"):
+                pkg["fundingRate"] = round(float(d["data"][0].get("fundingRate", 0)) * 100, 4)
         except Exception:
             pass
 
         try:
-            req = urllib.request.Request(f"https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId={inst_id}", headers=headers)
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                d = json.loads(resp.read().decode("utf-8"))
-                if d.get("code") == "0" and d.get("data"):
-                    usd = float(d["data"][0].get("oiUsd", 0) or 0)
-                    pkg["oiUsd"] = f"{round(usd / 1e8, 2)}亿 U" if usd > 1e8 else f"{round(usd / 1e4, 1)}万 U"
+            d = market.get_json(f"https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId={inst_id}")
+            if d.get("code") == "0" and d.get("data"):
+                usd = float(d["data"][0].get("oiUsd", 0) or 0)
+                pkg["oiUsd"] = f"{round(usd / 1e8, 2)}亿 U" if usd > 1e8 else f"{round(usd / 1e4, 1)}万 U"
         except Exception:
             pass
 
         if ccy:
             try:
-                req = urllib.request.Request(f"https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio?ccy={ccy}&period=5m", headers=headers)
-                with urllib.request.urlopen(req, timeout=3) as resp:
-                    d = json.loads(resp.read().decode("utf-8"))
-                    if d.get("code") == "0" and d.get("data") and len(d["data"]) > 0:
-                        pkg["lsRatio"] = float(d["data"][0][1])
+                d = market.get_json(f"https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio?ccy={ccy}&period=5m")
+                if d.get("code") == "0" and d.get("data") and len(d["data"]) > 0:
+                    pkg["lsRatio"] = float(d["data"][0][1])
             except Exception:
                 pass
 
             try:
-                req = urllib.request.Request(f"https://www.okx.com/api/v5/rubik/stat/taker-volume?ccy={ccy}&instType=CONTRACTS&period=5m", headers=headers)
-                with urllib.request.urlopen(req, timeout=3) as resp:
-                    d = json.loads(resp.read().decode("utf-8"))
-                    if d.get("code") == "0" and d.get("data") and len(d["data"]) > 0:
-                        b_vol = float(d["data"][0][1])
-                        s_vol = float(d["data"][0][2])
-                        net_diff = b_vol - s_vol
-                        pkg["takerNetUsd"] = f"{round(net_diff / 1e4, 1)}万 U"
+                d = market.get_json(f"https://www.okx.com/api/v5/rubik/stat/taker-volume?ccy={ccy}&instType=CONTRACTS&period=5m")
+                if d.get("code") == "0" and d.get("data") and len(d["data"]) > 0:
+                    b_vol = float(d["data"][0][1])
+                    s_vol = float(d["data"][0][2])
+                    net_diff = b_vol - s_vol
+                    pkg["takerNetUsd"] = f"{round(net_diff / 1e4, 1)}万 U"
             except Exception:
                 pass
 
         # 6. OKX ADX Trend Strength Indicator (1H)
         try:
-            cmd = f"okx market indicator adx {inst_id} --bar 1H --json 2>/dev/null"
-            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
-            if res.stdout:
-                ind_data = json.loads(res.stdout)
-                if isinstance(ind_data, list) and ind_data:
-                    adx_vals = ind_data[0].get("data", [{}])[0].get("timeframes", {}).get("1H", {}).get("indicators", {}).get("ADX", [])
-                    if adx_vals:
-                        pkg["adx_1h"] = float(adx_vals[0].get("values", {}).get("adx", 0.0) or 0.0)
+            indicators = market.signal_indicators(inst_id)
+            pkg["adx_1h"] = float(indicators["ADX"][0]["values"].get("adx", 0.0) or 0.0)
         except Exception:
             pass
 
@@ -385,74 +426,24 @@ def fetch_single_instrument_package(item: Dict[str, Any]) -> Dict[str, Any]:
     pkg["data_quality"] = "valid" if required_market_data else "invalid"
     return pkg
 
-SYSTEM_PROMPT = """你是 R20 Quantum Trader 的首席 AI 交易官，负责 1H~4H 加密波段交易裁决。你的任务不是提高交易频率，而是在不可覆盖的风险边界内，只执行具有可验证证据链的高质量决策。
+SYSTEM_PROMPT = trading_prompt.BASE_SYSTEM
 
-【决策优先级：高层级永远覆盖低层级】
-P0 不可覆盖硬约束：数据有效性、交易执行层 Fail-Closed、4H 方向否决、真实价格几何、R:R、杠杆/保证金/持仓上限、云端 OCO、禁止逆势补仓及 JSON 契约。任何长期记忆、新闻、聪明钱、风格模板或管理员附加层都不得覆盖 P0。
-P1 核心方向证据：4H 宏观结构与 1H 三大数理基石。
-P2 质量确认：1H ADX、量能/OI、聪明钱与衍生品结构。
-P3 执行定位：15M K线、盘口与 Maker 挂单位置。P3 只能优化入场，不能单独改变 P1 方向。
-证据缺失、失效或相互冲突且无法解释时，开仓必须 WAIT；持仓默认 HOLD；挂单默认 KEEP。
-P0 用于阻止非法方向、坏数据和不可保护订单，不得被解释成“只有完美共振才允许交易”。市场有效且 4H/1H 同向时，P2/P3 的轻微分歧应通过减小保证金处理，而不是机械 WAIT。
-
-【三大底层数理基石：必须保留并使用真实数值】
-1. 因果微积分动力学：只使用已闭合历史 K 线，按时间因果顺序解释对数价格速度 v、一阶变化的加速度 a、加速度变化 jerk j、指数衰减累计冲量 I。
-   - v 表示当前方向速度；a 表示动能扩张或衰减；j 表示突变冲击；I 表示近期方向性累计作用。
-   - 1H 是硬阈值与波段裁决周期；多周期聚合值只作摘要，不得冒充 1H 数值。
-   - BULL_DECELERATING/BEAR_DECELERATING 表示趋势失速，不等于已经反转；必须结合结构、积分能量与概率证据。
-2. 定积分能量学：使用梯形积分计算 energy_integral（速度路径净位移/净做功）、deviation_area_integral（相对窗口起点基线的价格路径偏离面积）与 volume_action_integral（成交量加权价格作用）。
-   - 正负能量表示方向性累计做功；绝对偏离面积过大表示路径过度伸展与均值回归风险。
-   - deviation_area_integral 不是 VWAP，本系统禁止把它误称或误解为 VWAP 偏离。
-3. 概率论与统计风险：使用偏度、超额峰度、条件延续/击穿概率、Cornish-Fisher 95% VaR 与 CVaR 识别方向概率及肥尾风险。
-   - continuation_prob_pct / breakdown_prob_pct 是基于当前动力状态的模型估计概率，不是保证胜率。
-   - 高峰度、极端偏度、高 VaR/CVaR 或 |j| 冲击必须降低置信度；不得用单一概率覆盖结构与风险门禁。
-
-【三重滤网裁决协议】
-1. 4H 宏观方向：4H_MACRO_BEAR 否决新做多，4H_MACRO_BULL 否决新做空；区间或不可靠状态不得强行推断趋势。
-2. 1H 核心中枢：综合结构、ADX 与三大数理基石。ADX < 18 必须 WAIT；ADX 18~22 仅允许 4H/1H 同向且降低保证金；ADX ≥ 22 为正常趋势候选。持仓不得仅因 ADX 降低而平仓。
-   - “减速”不是永久禁令：仅当方向速度已经接近 0、1H 结构转为 CHOP、或 jerk/肥尾异常时禁止追单；若 4H/1H 仍同向、速度和能量未翻转，可等待 15M 回抽后以小仓顺势参与。
-   - 高 jerk/肥尾是仓位折减因子；只有与结构破坏、无效数据或极端尾部风险同时出现时才强制 WAIT。
-3. 15M 执行过滤：用于回踩、超买超卖、成交量和盘口位置；单根 15M K线不得单独触发反转，但可在 4H/1H 已同向时确认顺势回抽入场。
-
-【开仓与价格几何（胜率第一·宁缺毋滥）】
-- 置信度硬门禁：置信度必须 ≥ 80% 才允许输出 BUY_LONG 或 SELL_SHORT；置信度 < 80% 时必须坚决输出 WAIT！宁可空仓观望等待确定性大机会，绝不在模糊状态下勉强开仓。
-- 顺势铁律（Fail-Closed）：4H_MACRO_BULL 大级别多头通道下 100% 严禁输出 SELL_SHORT 逆势摸顶；4H_MACRO_BEAR 大级别空头承压下 100% 严禁输出 BUY_LONG 逆势抄底！
-- 震荡过滤：1H ADX < 18 属于垃圾无序震荡市，一律强制 WAIT，禁止产生手续费磨损。DOGE 等 Meme 高杂波标的置信度门禁提升至 ≥ 85%。
-- 非 WAIT 决策必须形成可审计证据链：4H方向 → 1H结构/动力学 → 概率风险 → 15M入场位置。量能/OI/聪明钱是重要确认项，但数据中性或轻微分歧时允许减仓参与，不要求所有指标完美同向。
-- BUY_LONG 必须满足 stop_loss_price < entry_price < take_profit_price；SELL_SHORT 必须满足 take_profit_price < entry_price < stop_loss_price。
-- 目标 R:R ≥ 2.2；执行层绝对拒绝 R:R < 2.0 的报价。不得通过虚构过近止损抬高 R:R。止损通常基于 1.5~2.0x 1H ATR。
-- 处于空仓且存在至少一个合法顺势候选时，必须比较候选并选择最优项；只有全部候选都触发明确硬否决或优势不足时才全体 WAIT，且理由必须指出具体否决门禁。
-- 单笔保证金不得超过可用余额 20%，建议 5%~20%；杠杆 2x~5x。数据不足或余额未知而无法验证风险时 WAIT。
-
-【顺势浮盈金字塔加仓：模型只能申请，执行层拥有最终否决权】
-- 已有多仓只能申请同向 BUY_LONG，已有空仓只能申请同向 SELL_SHORT；反向指令不得借加仓通道执行。
-- 底仓必须 ROI ≥ +0.8% 或止损已经移至保本/盈利区；最多追加 1 次；单标的累计保证金 ≤ 600 USDT；AI 置信度 ≥ 75%。
-- 加多门禁：多周期聚合加速度 a ≥ -0.25 且 continuation_prob_pct ≥ 40%。
-- 加空门禁：多周期聚合加速度 a ≤ +0.25 且 breakdown_prob_pct ≥ 40%。
-- 浮亏、未脱离成本区、顶部/底部失速、概率不足或肥尾冲击时不得申请加仓。即使模型申请，执行器仍会再次硬校验。
-
-【持仓、止损与止盈】
-- 证据不足时 HOLD。只有 1H/4H 结构破位、数理动力学逆转、概率风险与量能/聪明钱形成可验证共振时，才考虑 CLOSE_MARKET；15M 信号只能作为第二确认。
-- 丰厚浮盈出现 1H 动能衰竭时可主动锁利；亏损仓只有真实趋势逆转且置信度 ≥ 85% 才提前斩仓，禁止因普通波动恐慌退出。
-- AI 请求 UPDATE_SL 仅在浮盈 ≥ 1.2x 1H ATR，且新止损与现价保留至少 0.7x 1H ATR 缓冲时有效；不满足时 HOLD。执行器自身的分阶利润棘轮继续独立运行。
-
-【输出与审计纪律】
-- 必须输出一个严格 JSON 对象，包含 macro_assessment、position_management、pending_orders_management 和覆盖全部标的的 decisions。
-- 每个 BUY_LONG/SELL_SHORT 的 calculus_dynamics 与 math_prob_rationale 必须引用输入中的具体数值和周期；不得只写“动能良好”“概率较高”等空泛结论。
-- WAIT/HOLD/KEEP 是正式风险决策，不是分析失败。不得输出 Markdown、代码围栏或 JSON 之外的文字。
-"""
-
-def construct_full_market_prompt(packages: List[Dict[str, Any]], pos_summary: str = "当前总持仓 0/6", active_positions_detail: List[Dict[str, Any]] = None, pending_orders_detail: List[Dict[str, Any]] = None, current_time_str: str = "", usdt_available: float = 0.0) -> str:
+def construct_full_market_prompt(packages: List[Dict[str, Any]], pos_summary: str = "当前总持仓 0/6", active_positions_detail: List[Dict[str, Any]] = None, pending_orders_detail: List[Dict[str, Any]] = None, current_time_str: str = "", usdt_available: float = 0.0, *, profile=None, return_bundle=False, pending_verified=True):
     tz_bj = datetime.timezone(datetime.timedelta(hours=8))
     now_bj_str = current_time_str or datetime.datetime.now(tz_bj).strftime("%Y-%m-%d %H:%M:%S (北京时间)")
     market_lines = []
     for p in packages:
+        capability = p.get("environment_support")
+        if capability and not capability["can_open"]:
+            market_lines.append(f"【{p['instId']} 环境限制】{capability['label']}：只允许处理已有仓位，不得开仓或加仓。")
         k15 = p.get("recent_15m", [])
         k1h = p.get("recent_1h", [])
         k4h = p.get("recent_4h", [])
         quality = p.get("data_quality", "invalid")
 
-        sm = p.get("smart_money", {})
+        sm = p.get("smart_money") or {}
+        if not isinstance(sm, dict) or sm.get("valid") is not True:
+            sm = normalize_smart_money()
         adx_val = p.get("adx_1h", "--")
         calc = p.get("calculus", {})
         calc_tfs = calc.get("timeframes", {}) if isinstance(calc, dict) else {}
@@ -472,7 +463,7 @@ def construct_full_market_prompt(packages: List[Dict[str, Any]], pos_summary: st
             f"| 量价作用积分={d_int.get('volume_action_integral', 'UNKNOWN')} | 能量态={d_int.get('regime', 'UNKNOWN')}"
         )
         prob_line = (
-            f"多头延续估计概率={p_th.get('continuation_prob_pct', 'UNKNOWN')}% | 空头击穿估计概率={p_th.get('breakdown_prob_pct', 'UNKNOWN')}% "
+            f"多头方向评分(未校准)={p_th.get('continuation_prob_pct', 'UNKNOWN')}% | 空头方向评分(未校准)={p_th.get('breakdown_prob_pct', 'UNKNOWN')}% "
             f"| 偏度S={p_th.get('skewness', 'UNKNOWN')} | 超额峰度K={p_th.get('kurtosis', 'UNKNOWN')} "
             f"| 95%VaR={p_th.get('var_95_pct', 'UNKNOWN')}% | 95%CVaR={p_th.get('cvar_95_pct', 'UNKNOWN')}% "
             f"| 尾部风险态={p_th.get('regime', 'UNKNOWN')}"
@@ -491,8 +482,8 @@ def construct_full_market_prompt(packages: List[Dict[str, Any]], pos_summary: st
         info = f"""---------------------------------------------------------
 【{p['name']} ({p['instId']})】| 数据质量: {quality} | 现价: {p['price']} | 24H涨跌: {p['chg24h']}% | 盘口买/卖: {p['bidPx']}/{p['askPx']}
 - 🏛️ 三重滤网宏观结构: 4H宏观大势={p.get('macro_4h', '4H_MACRO_RANGE')} | 1H波段结构={p.get('structure_1h', '1H_SWING_CHOP')}
-- 👑 顶级聪明钱 (SmartMoney Top100): 加权做多占比={sm.get('weighted_long_pct', 50)}% | 24H净流入={sm.get('net_flow_usdt', '--')} | 多头均价={sm.get('avg_long_entry', '--')} | 空头均价={sm.get('avg_short_entry', '--')} | {sm.get('top_win_rate', '')}
-- 📐 1H核心波段指标: 1H ATR(14)={p.get('atr_1h', p.get('atr', '--'))} (止损基准: 1.5~2.0x 1H ATR) | 1H RSI(14)={p.get('rsi_1h', '--')} | 1H ADX趋势强度={adx_val} (注:<20无趋势垃圾市, ≥22强单边)
+- 👑 官方聪明钱聚合 (SmartMoney): 加权做多占比={sm.get('weighted_long_pct', 'UNKNOWN')}% | 当前多空净名义敞口={sm.get('net_flow_usdt', '--')}（多头名义金额减空头名义金额，不是24H资金净流入） | 多头均价={sm.get('avg_long_entry', '--')} | 空头均价={sm.get('avg_short_entry', '--')} | {sm.get('top_win_rate', '')}
+- 📐 1H核心波段指标: 1H ATR(14)={p.get('atr_1h', p.get('atr', '--'))} (波动参考，不替代失效条件) | 1H RSI(14)={p.get('rsi_1h', '--')} | 1H ADX趋势强度={adx_val} (趋势强度观测，不单独决定交易)
 - ⚡ 15M微观执行参考: 15M ATR={p.get('atr_15m', '--')} | 15M RSI={p.get('rsi_15m', '--')} | VWAP乖离={p.get('vwap_bias', '--')}% | 15M量比={p.get('vol_ratio', '--')}x | OBV资金流={p.get('obv_flow', '--')}
 - 📐 1H三大数理基石硬证据: {core_math_line}
 - ∂ 多周期微积分动力学摘要: {calc_line}
@@ -511,10 +502,10 @@ def construct_full_market_prompt(packages: List[Dict[str, Any]], pos_summary: st
     if active_positions_detail and len(active_positions_detail) > 0:
         for p in active_positions_detail:
             pos_lines.append(
-                f"- 标的: {p.get('name') or p.get('instId')} | 方向: {p.get('side')} {p.get('lever', '3')}x | 开仓均价: {p.get('avgPx')} | 当前标记价: {p.get('markPx', p.get('lastPx'))} | 持仓量: {p.get('pos')}张 | 未结浮盈: {p.get('upl')} U (ROI: {round(safe_float(p.get('uplRatio')) * 100, 2)}%) | 动态止损线: {p.get('trailingStopPx', p.get('trailingSl', '--'))}"
+                f"- 标的: {p.get('name') or p.get('instId')} | 方向: {p.get('side')} {p.get('lever', 'UNKNOWN')}x | 开仓均价: {p.get('avgPx')} | 当前标记价: {p.get('markPx', p.get('lastPx'))} | 持仓量: {p.get('pos')}张 | 未结浮盈: {p.get('upl')} U (ROI: {round(safe_float(p.get('uplRatio')) * 100, 2)}%) | 动态止损线: {p.get('trailingStopPx', p.get('trailingSl', '--'))}"
             )
     else:
-        pos_lines.append("当前无任何在途持仓敞口 (100% 现金空仓状态)")
+        pos_lines.append("本轮输入未列出活动合约持仓；不据此推断账户其他资产或现金比例")
 
     active_pos_text = "\n".join(pos_lines)
 
@@ -551,142 +542,55 @@ def construct_full_market_prompt(packages: List[Dict[str, Any]], pos_summary: st
             pending_lines.append(
                 f"- [挂单ID: {ord_id}] {inst_id} | {side_str} {sz_val}张 @ {px_val} | 挂单时间: {c_time_str}{tp_sl_info}"
             )
+    elif pending_verified:
+        pending_lines.append("本轮已核验挂单列表为空")
     else:
-        pending_lines.append("当前无任何在途未成交限价挂单 (挂单池为空)")
+        pending_lines.append("在途挂单快照不可用：UNKNOWN，不得推断挂单池为空")
 
     pending_orders_text = "\n".join(pending_lines)
 
-    memory_lessons = ""
-    # Priority 1: Read durable R20 Markdown trading memory
-    if os.path.exists(AI_MEMORY_MD_FILE):
-        try:
-            with open(AI_MEMORY_MD_FILE, "r", encoding="utf-8") as f:
-                md_text = f.read().strip()
-                if md_text:
-                    memory_lessons = f"""======================= 【R20 启发式实战认知与长期记忆 (Markdown)】 =======================
-{md_text}
-"""
-        except Exception:
-            pass
-    elif os.path.exists(AI_MEMORY_FILE):
-        try:
-            with open(AI_MEMORY_FILE, "r", encoding="utf-8") as f:
-                mem = json.load(f)
-                lessons = mem.get("core_lessons", [])
-                if lessons:
-                    formatted_lessons = "\n".join([f"  • {item}" for item in lessons])
-                    memory_lessons = f"""======================= 【R20 启发式实战认知与长期记忆】 =======================
-【每日复盘提炼的心法与直觉提示词 (供决策参考，不设死板禁令)】:
-{formatted_lessons}
-"""
-        except Exception:
-            pass
+    from scripts.memory_registry import view as memory_view
+    memory_state=memory_view(DATA_DIR,scope=market._selected().identity,
+        legacy_paths={'md':AI_MEMORY_MD_FILE,'json':AI_MEMORY_FILE})
+    memory_lessons=memory_state['prompt_text']
 
-    # Harvest Latest Live News & Multi-Coin Sentiment
-    news_briefs = []
-    macro_env = "中性平衡"
-    if os.path.exists(NEWS_SENTIMENT_FILE):
-        try:
-            with open(NEWS_SENTIMENT_FILE, "r", encoding="utf-8") as f:
-                ns_data = json.load(f)
-                macro_env = ns_data.get("macro_sentiment", "中性平衡")
-                for n in ns_data.get("latest_news", [])[:6]:
-                    news_briefs.append(f"- [{n.get('time', '')}] {n.get('title', '')} ({n.get('summary', '')[:80]}...)")
-        except Exception:
-            pass
+    # Freeze once before inference: rendering, validation and evidence share this exact input.
+    try:
+        from scripts.news_connection import load_strategy_snapshot, render_strategy_snapshot
+        news_snapshot = load_strategy_snapshot(NEWS_SENTIMENT_FILE,
+            [p['instId'].split('-')[0] for p in packages])
+        news_text = render_strategy_snapshot(news_snapshot)
+    except Exception:
+        news_snapshot = {'schema': 1, 'connection_status': 'unavailable', 'macro_sentiment': 'UNKNOWN',
+                         'sentiment_fresh': False, 'items': [], 'coins_sentiment': {}, 'section_freshness': {}}
+        news_text = '市场情报当前不可用；不得据此推断市场平稳或不存在事件风险'
+    for package in packages:
+        package['news_snapshot'] = news_snapshot
 
-    news_text = "\n".join(news_briefs) if news_briefs else "无可验证新闻输入；不得据此推断市场平稳或不存在事件风险"
+    avail_balance_str = f"{usdt_available:.2f} USDT" if usdt_available > 0 else "0 USDT；不得假设存在可用资金"
 
-    avail_balance_str = f"{usdt_available:.2f} USDT" if usdt_available > 0 else "根据系统风险自适应分配"
-
-    prompt = f"""======================= 【当前决策时间戳与市场时效】 =======================
-【推演基准时间】: {now_bj_str}
-【当前账户可用资金】: {avail_balance_str}
-
-======================= 【全网实时重大快讯与宏观情报】 =======================
-【宏观环境基调】: {macro_env}
-【最新核心资讯要闻】:
-{news_text}
-
-======================= 【账户当前持仓与风险敞口全景】 =======================
-【账户持仓概况】: {pos_summary}
-【当前活动在途持仓明细】:
-{active_pos_text}
-
-======================= 【在途未成交限价挂单 (Pending Maker Orders)】 =======================
-【当前在途挂单列表】:
-{pending_orders_text}
-
-{memory_lessons}
-
-======================= 【六币种原生行情、技术指标与筹码矩阵】 =======================
-{all_market_str}
-
-================================================================================
-【推演与决策任务】:
-你只能在 System Prompt 的 P0 硬约束内进行综合裁决。按“数据有效性 → 4H方向 → 1H三大数理基石 → 量能/OI/聪明钱 → 15M执行位置”的顺序逐项检查；任一硬条件失败或证据无法闭环时，开仓输出 WAIT：
-1. 【在途持仓管理 (科学持仓与动态风控)】：
-   - 逐一分析当前在途持仓：
-     • 若 1H 波段趋势完好且微积分动能平稳，坚决坚定持有 (HOLD)，给大波段充分呼吸空间；
-     • 若出现【1H 结构破位 / 动能加速度严重逆转 / 聪明钱反向出逃】等真实趋势逆转信号且置信度 ≥ 85%，果断输出 CLOSE_MARKET 提前斩仓止损，杜绝死等硬止损；
-     • 若底仓浮盈已超过 1.2x 1H ATR 且需锁定利润，输出 UPDATE_SL 并确保新止损与现价保留 0.7x 1H ATR 安全缓冲，严禁贴脸移动止损。
-2. 【在途限价挂单生命周期审查与裁决 (Pending Orders Management)】：
-   - 仔细审查上述在途未成交挂单：若挂单价格已大幅偏离最新盘口、或者行情动能/突发要闻已转变导致原挂单计划失效，必须在 pending_orders_management 中为该挂单输出 CANCEL 立即撤单指令，防止挂单成交在不利价格；若原计划仍然有效且价格合适，输出 KEEP 维持挂单。
-3. 【多空开仓与顺势浮盈加仓全权裁决 (Opening & Pyramiding)】：
-   - 【首发开仓】：自主判断未持仓品种是否具备确定性爆发机会，结合最新资讯、多周期形态与筹码，决定多空方向 (action: BUY_LONG / SELL_SHORT / WAIT)；
-   - 【顺势浮盈金字塔加仓申请】：已有多仓仅可输出同向 BUY_LONG，已有空仓仅可输出同向 SELL_SHORT；这只是加仓申请，执行层仍将复核底仓 ROI/保本、最多1次、累计保证金≤600U、置信度≥75%、加速度与延续/击穿概率门禁。任何不确定均输出 WAIT；
-   - 自主规划拟开仓/加仓保证金 (margin_usdt: 可用余额的 5%~20%，且不得超过系统上限) 与杠杆 (2~5x)；
-   - 自主规划 entry_price、take_profit_price 与 stop_loss_price；目标 R:R ≥ 2.5，且任何 R:R < 2.0 的报价会被执行层拒绝。
-4. 必须输出严格 JSON，格式如下：
-{{
-  "macro_assessment": "30字内全市场宏观流动性与情绪总结",
-  "position_management": [
-    {{
-      "instId": "LINK-USDT-SWAP",
-      "action": "HOLD" | "CLOSE_MARKET" | "UPDATE_SL",
-      "suggested_sl_price": float (若调整止损填具体价格，否则0),
-      "confidence": 0~100,
-      "reason": "30字内持仓调整原因与当前动能分析"
-    }}
-  ],
-  "pending_orders_management": [
-    {{
-      "ordId": "3879092142614409217",
-      "instId": "LINK-USDT-SWAP",
-      "action": "KEEP" | "CANCEL",
-      "reason": "30字内撤单或维持挂单原因"
-    }}
-  ],
-  "decisions": {{
-    "BTC-USDT-SWAP": {{
-      "action": "BUY_LONG" | "SELL_SHORT" | "WAIT",
-      "confidence": 0~100,
-      "leverage": 3 (推荐杠杆2~5),
-      "margin_usdt": 50.0 (推荐保证金),
-      "entry_price": float,
-      "take_profit_price": float,
-      "stop_loss_price": float,
-      "summary_reason": "30字内核心逻辑",
-      "market_structure": "4H/1H趋势与15M短线形态",
-      "calculus_dynamics": "必须引用1H具体 v/a/j/I、状态及方向解释；WAIT也需说明冲突或缺失",
-      "math_prob_rationale": "必须引用具体 E/A、延续或击穿估计概率、VaR/CVaR与肥尾风险",
-      "volume_and_oi": "量能/筹码流向简述"
-    }},
-    ... (依次包含全部标的)
-  }}
-}}
-"""
+    capital_context = capital_pool.status(market._selected())
+    previous_wait_reviews = wait_audit.prepare(market._selected().identity, packages, active_positions_detail)
     runtime_vars = {
+        'previous_wait_reviews': previous_wait_reviews,
+        'capital_pool': capital_context,
+        'execution_profile': __import__('scripts.execution_profiles',fromlist=['runtime']).runtime(),
+        "pending_orders_status": "verified" if pending_verified else "unknown",
         "decision_timestamp": f"【推演基准时间】: {now_bj_str}",
-        "account_balance": f"【当前账户可用资金】: {avail_balance_str}",
+        "account_balance": f"【交易所账户可用资金】: {avail_balance_str}" + (f"；策略资金池上限={capital_context.get('configured_cap', 'UNKNOWN')} USDT，风险净值={capital_context.get('risk_equity', '待初始化')}；不是额外现金，不能借用池外权益放大建议。" if capital_context.get("enabled") else ""),
         "account_positions": f"【账户持仓概况】: {pos_summary}\n【当前活动在途持仓明细】:\n{active_pos_text}",
         "pending_orders": f"【当前在途挂单列表】:\n{pending_orders_text}",
-        "news_intelligence": f"【宏观环境基调】: {macro_env}\n【最新核心资讯要闻】:\n{news_text}",
+        "news_intelligence": news_text,
         "trading_memory": memory_lessons.strip(),
         "market_matrix": all_market_str,
     }
-    profile = active_profile()
-    return apply_module_layout(prompt, profile, "trading_user", f"{profile.get('name', '稳健')}交易用户提示词模板", context=runtime_vars)
+    from dataclasses import asdict
+    from scripts.risk_policy import load_policy
+    selected = profile if profile is not None else active_profile()
+    bundle = trading_prompt.compose(selected, runtime_vars, packages, override=get_user_prompt_override(),
+        positions=active_positions_detail, pending=pending_orders_detail, risk_contract=asdict(load_policy()))
+    bundle.manifest['memory_publication']={k:memory_state.get(k) for k in ('scope','active_version','prompt_hash')}
+    return bundle if return_bundle else bundle.user
 
 def validate_and_filter_decision(p: Dict[str, Any], d_item: Dict[str, Any], active_inst_ids: set, active_position_sides: Dict[str, str]) -> tuple[str, str, float]:
     """
@@ -699,7 +603,7 @@ def validate_and_filter_decision(p: Dict[str, Any], d_item: Dict[str, Any], acti
         "active_position_sides": active_position_sides,
     }
     try:
-        from r20_backend.interceptor_manager import run_interceptor_pipeline
+        from okxquant_backend.interceptor_manager import run_interceptor_pipeline
         return run_interceptor_pipeline(p, d_item, context)
     except Exception as exc:
         # Fail-closed fallback in case interceptor manager cannot be reached
@@ -720,8 +624,11 @@ def validate_and_filter_decision(p: Dict[str, Any], d_item: Dict[str, Any], acti
 @single_brain_cycle
 def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", active_positions_detail: List[Dict[str, Any]] = None, usdt_available: float = 0.0) -> Optional[Dict[str, Any]]:
     """Fetch all six crypto symbols, call the LLM once, then persist an auditable result."""
+    global LAST_INFERENCE_ERROR
     base_url, api_key = get_cpa_client_config()
     if not api_key:
+        LAST_INFERENCE_ERROR = "未配置模型调用凭据"
+        atomic_write_json(os.path.join(DATA_DIR, 'trading_output_validation.json'), {'status':'unavailable','reason':LAST_INFERENCE_ERROR})
         print("[AI Brain Batch] Error: CPA API Key not found")
         return None
 
@@ -729,38 +636,27 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
     now_bj = datetime.datetime.now(tz_bj)
     time_str = now_bj.strftime("%Y-%m-%d %H:%M:%S")
 
-    print(f"[AI Brain Batch] 并行获取 {len(TARGET_INSTRUMENTS)} 币种原生行情、技术指标与顶级聪明钱数据...")
+    market.begin_signal_frame()
+    eligible, availability = support.trading_universe(TARGET_INSTRUMENTS, active_positions_detail, market._selected().mode)
+    if not eligible:
+        LAST_INFERENCE_ERROR = "当前环境无已核验可交易标的，仅保留行情观察"
+        atomic_write_json(os.path.join(DATA_DIR, 'trading_output_validation.json'), {'status':'unavailable','reason':LAST_INFERENCE_ERROR})
+        return None
+    print(f"[AI Brain Batch] 并行获取 {len(eligible)} 个交易/持仓管理标的；其余标的仅作行情观察")
     with ThreadPoolExecutor(max_workers=8) as executor:
-        packages = list(executor.map(fetch_single_instrument_package, TARGET_INSTRUMENTS))
+        packages = list(executor.map(fetch_single_instrument_package, eligible))
+    for package in packages:
+        package["environment_support"] = availability["items"][package["instId"]]
 
-    # Fetch OKX Smart Money Signals (Top 100 80%+ Winrate Traders)
+    # Fetch OKX Smart Money Signals
+    for p in packages:
+        p["smart_money"] = normalize_smart_money()
     try:
-        sm_cmd = "okx smartmoney signal-overview-by-filter --instCcyList BTC,ETH,SOL,DOGE,SUI,LINK --json 2>/dev/null"
-        sm_res = subprocess.run(sm_cmd, shell=True, capture_output=True, text=True, timeout=8)
-        if sm_res.stdout:
-            sm_data = json.loads(sm_res.stdout).get("data", [])
-            sm_dict = {item.get("ccy"): item for item in sm_data if item.get("ccy")}
-            for p in packages:
-                ccy = p["name"]
-                if ccy in sm_dict:
-                    item = sm_dict[ccy]
-                    ls = item.get("longShortRatio", {})
-                    notional = item.get("notional", {})
-                    win = item.get("winRate", {})
-                    w_long = round(float(ls.get("weightedLongRatio", 0.5)) * 100, 1)
-                    net_usdt = float(notional.get("netNotionalUsdt", 0) or 0)
-                    net_flow_str = f"{round(net_usdt / 1e4, 1)}万 U" if abs(net_usdt) >= 1e4 else f"{round(net_usdt, 0)} U"
-                    long_cost = notional.get("smartMoneyLongAvgEntry") or "--"
-                    short_cost = notional.get("smartMoneyShortAvgEntry") or "--"
-                    top_win = f"多胜率{round(float(win.get('avgLongWinRate', 0))*100, 1)}%" if win.get('avgLongWinRate') else "--"
-
-                    p["smart_money"] = {
-                        "weighted_long_pct": w_long,
-                        "net_flow_usdt": net_flow_str,
-                        "avg_long_entry": str(long_cost)[:10],
-                        "avg_short_entry": str(short_cost)[:10],
-                        "top_win_rate": top_win
-                    }
+        sm_data = market.smart_money_overview([p["name"] for p in packages])
+        sm_dict = {item.get("ccy"): item for item in sm_data
+                   if isinstance(item, dict) and item.get("ccy")}
+        for p in packages:
+            p["smart_money"] = normalize_smart_money(sm_dict.get(p["name"]))
     except Exception as e:
         print(f"[AI Brain Batch] SmartMoney fetch warning: {e}")
 
@@ -784,13 +680,16 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
 
     # Fetch live pending limit orders from exchange
     pending_orders_list = []
+    pending_verified = False
     try:
         ord_cmd = okx_private_command("okx swap orders --json 2>/dev/null")
         ord_res = subprocess.run(ord_cmd, shell=True, capture_output=True, text=True, timeout=8)
-        if ord_res.stdout:
+        if ord_res.returncode == 0 and ord_res.stdout:
             pending_orders_list = json.loads(ord_res.stdout)
-            if not isinstance(pending_orders_list, list):
+            if not isinstance(pending_orders_list, list) or any(not isinstance(o,dict) or not o.get("instId") or not o.get("ordId") for o in pending_orders_list):
                 pending_orders_list = []
+            else:
+                pending_verified = True
     except Exception as e:
         print(f"[AI Brain Batch] Pending orders fetch warning: {e}")
 
@@ -810,12 +709,27 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
     except Exception as exc:
         print(f"[AI Brain] Calculus snapshot warning: {exc}")
 
-    prompt = construct_full_market_prompt(packages, pos_summary, active_positions_detail, pending_orders_detail=pending_orders_list, current_time_str=time_str, usdt_available=usdt_available)
+    try:
+        profile = active_profile()  # One immutable profile selection for the entire inference.
+        from scripts.execution_profiles import runtime as execution_runtime
+        cycle_execution=execution_runtime(profile)
+        prompt_bundle = construct_full_market_prompt(packages, pos_summary, active_positions_detail,
+            pending_orders_detail=pending_orders_list, current_time_str=time_str, usdt_available=usdt_available,
+            profile=profile, return_bundle=True, pending_verified=pending_verified)
+        prompt = prompt_bundle.user
+        effective_system_prompt = prompt_bundle.system
+    except Exception as exc:
+        LAST_INFERENCE_ERROR = '提示词组合失败：' + type(exc).__name__
+        atomic_write_json(os.path.join(DATA_DIR, 'trading_output_validation.json'),
+            {'status':'composition_rejected','contract_version':trading_prompt.VERSION,'reason':LAST_INFERENCE_ERROR})
+        return None
 
-    profile = active_profile()
-    effective_system_prompt = apply_module_layout(
-        get_effective_system_prompt(), profile, "trading_system", f"{profile.get('name', '稳健')}交易系统提示词模板"
-    )
+    # Same frozen data, shadow only. A research failure never blocks risk management.
+    try:
+        from scripts.entry_opportunities import record_cycle
+        record_cycle(market._selected().identity, packages, prompt_bundle.risk_contract, cycle_execution['signature'])
+    except Exception as exc:
+        print('[Entry Shadow] observation unavailable: ' + type(exc).__name__)
 
     # Save Realtime Prompt Snapshot for Web Transparent Inspection
     try:
@@ -823,14 +737,21 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
         with open(tmp_prompt, "w", encoding="utf-8") as f:
             f.write(f"【SYSTEM PROMPT】:\n{effective_system_prompt.strip()}\n\n{'='*70}\n【USER PROMPT ({time_str})】：\n{prompt.strip()}")
         os.replace(tmp_prompt, AI_LAST_PROMPT_FILE)
+        atomic_write_json(os.path.join(DATA_DIR, "trading_prompt_manifest.json"), prompt_bundle.manifest)
     except Exception:
         pass
+
+    if not prompt_bundle.allow_open:
+        LAST_INFERENCE_ERROR = "提示词偏好冲突或账户输入未核验，本轮不调用模型；独立持仓保护继续"
+        atomic_write_json(os.path.join(DATA_DIR, 'trading_output_validation.json'),
+            {'status':'blocked','contract_version':trading_prompt.VERSION,'reason':LAST_INFERENCE_ERROR,'warnings':prompt_bundle.manifest['warnings']})
+        return None
 
     model_name = os.environ.get("LLM_MODEL") or "gemini-3.8-flash-high"
     effort = os.environ.get("LLM_REASONING_EFFORT") or "high"
     api_format = "openai_chat"
     try:
-        from r20_backend.llm_manager import get_active_llm_runtime, execute_llm_request
+        from okxquant_backend.llm_manager import get_active_llm_runtime, execute_llm_request
         active_llm = get_active_llm_runtime()
         model_name = os.environ.get("LLM_MODEL") or active_llm.get("model") or model_name
         effort = os.environ.get("LLM_REASONING_EFFORT") or active_llm.get("reasoning_effort") or effort
@@ -840,18 +761,20 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
     except Exception:
         execute_llm_request = None
 
+    json_report = {}
     telemetry = ModelCallTelemetry(
         "trading_brain", model_name, str(effort), effective_system_prompt, prompt
     )
     try:
         t0 = time.time()
         raw_res = None
+        content = None  # Council returns structured output, not single-model text.
         brain_output = None
 
         # Transparent check: is Multi-Agent Council enabled?
         council_enabled = False
         try:
-            from r20_backend.council_manager import load_council_config, execute_council_debate
+            from okxquant_backend.council_manager import load_council_config, execute_council_debate
             c_cfg = load_council_config()
             council_enabled = bool(c_cfg.get("enabled"))
         except Exception:
@@ -872,51 +795,99 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
 
         if brain_output is None:
             print(f"[AI Brain Batch] 🚀 正在发起单次全市场大模型宏观决策推演 ({model_name} / {api_format})...")
-            if execute_llm_request:
-                content, _, usage_dict, _ = execute_llm_request(
-                    messages=[
-                        {"role": "system", "content": effective_system_prompt},
-                        {"role": "user", "content": prompt}
-                    ],
-                    model=model_name,
-                    base_url=base_url,
-                    api_key=api_key,
-                    api_format=api_format,
-                    reasoning_effort=effort,
-                    temperature=0.2,
-                    response_format={"type": "json_object"},
-                    timeout=50.0,
-                )
-                raw_res = {"usage": usage_dict} if isinstance(usage_dict, dict) else {}
-            else:
-                payload = {
-                    "model": model_name,
-                    "messages": [
-                        {"role": "system", "content": effective_system_prompt},
-                        {"role": "user", "content": prompt}
-                    ],
-                    "temperature": 0.2,
-                    "response_format": {"type": "json_object"}
-                }
-                if effort not in ("none", "auto"):
-                    payload["reasoning_effort"] = effort
-                req = urllib.request.Request(
-                    f"{base_url}/chat/completions",
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
-                )
-                with urllib.request.urlopen(req, timeout=50) as resp:
-                    res = json.loads(resp.read().decode("utf-8"))
-                    content = res["choices"][0]["message"]["content"].strip()
-                    raw_res = res
-
-            if content.startswith("```json"): content = content[7:]
-            if content.startswith("```"): content = content[3:]
-            if content.endswith("```"): content = content[:-3]
-
-            brain_output = json.loads(content.strip())
-            if not isinstance(brain_output, dict):
-                raise ValueError("LLM response root must be an object")
+            from scripts.model_json import decode_with_regeneration
+            def initial_json():
+                nonlocal content, raw_res
+                if execute_llm_request:
+                    content, _, usage_dict, _ = execute_llm_request(
+                        messages=[
+                            {"role": "system", "content": effective_system_prompt},
+                            {"role": "user", "content": prompt}
+                        ],
+                        model=model_name,
+                        base_url=base_url,
+                        api_key=api_key,
+                        api_format=api_format,
+                        reasoning_effort=effort,
+                        temperature=0.2,
+                        response_format={"type": "json_object"},
+                        timeout=50.0,
+                        require_complete=True,
+                    )
+                    raw_res = {"usage": usage_dict} if isinstance(usage_dict, dict) else {}
+                else:
+                    payload = {
+                        "model": model_name,
+                        "messages": [
+                            {"role": "system", "content": effective_system_prompt},
+                            {"role": "user", "content": prompt}
+                        ],
+                        "temperature": 0.2,
+                        "response_format": {"type": "json_object"}
+                    }
+                    if effort not in ("none", "auto"):
+                        payload["reasoning_effort"] = effort
+                    req = urllib.request.Request(
+                        f"{base_url}/chat/completions",
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
+                    )
+                    with urllib.request.urlopen(req, timeout=50) as resp:
+                        res = json.loads(resp.read().decode("utf-8"))
+                        from scripts.model_json import verify_completion, text_content
+                        verify_completion(res, "openai_chat")
+                        content = text_content(res["choices"][0]["message"]["content"])
+                        raw_res = res
+                return content
+            def regenerate_json(*, timeout, max_attempts):
+                nonlocal content
+                messages = [{"role":"system", "content":effective_system_prompt},
+                    {"role":"user", "content":prompt + "\n上一次响应不是完整合法JSON。请基于同一冻结输入重新输出完整JSON对象；不要输出代码围栏、解释、注释、尾逗号或省略字段。理由保持简洁，不改变风险契约。"}]
+                meter = ModelCallTelemetry('trading_json_regeneration', model_name, str(effort), messages[0]['content'], messages[1]['content'])
+                try:
+                    content, _, usage, _ = execute_llm_request(messages=messages, model=model_name,
+                        base_url=base_url, api_key=api_key, api_format=api_format, reasoning_effort=effort,
+                        temperature=0.2, response_format={'type':'json_object'}, timeout=timeout,
+                        max_attempts=max_attempts, require_complete=True)
+                    meter.finish('success', {'usage':usage}, output_chars=len(content))
+                    return content
+                except Exception as exc:
+                    meter.finish('failed', error=exc)
+                    raise
+            brain_output = decode_with_regeneration(initial_json,
+                regenerate_json if execute_llm_request else None, report=json_report)
+        original_brain_output = brain_output
+        # Shared boundary for single-model and council output, before any model-directed write.
+        brain_output = trading_prompt.validate_response(brain_output, packages,
+            positions=active_positions_detail, pending=pending_orders_list,
+            allow_open=prompt_bundle.allow_open and not brain_output.get('prompt_conflicts'),
+            previous_wait_reviews=prompt_bundle.previous_wait_reviews, risk_contract=prompt_bundle.risk_contract)
+        from scripts import wait_repair
+        def request_wait_correction(*, messages, timeout, max_attempts):
+            meter = ModelCallTelemetry('wait_audit_repair', model_name, str(effort), messages[0]['content'], messages[1]['content'])
+            try:
+                repaired_text, _, usage, _ = execute_llm_request(
+                    messages=messages, model=model_name, base_url=base_url, api_key=api_key,
+                    api_format=api_format, reasoning_effort=effort, temperature=0.2,
+                    response_format={'type':'json_object'}, timeout=timeout, max_attempts=max_attempts)
+            except Exception as exc:
+                meter.finish('failed', error=exc)
+                raise
+            meter.finish('success', {'usage':usage}, output_chars=len(repaired_text))
+            return repaired_text
+        brain_output, repair_report = wait_repair.attempt(original_brain_output, brain_output, packages,
+            request=request_wait_correction if execute_llm_request and not json_report.get("attempted") else None, positions=active_positions_detail,
+            previous_wait_reviews=prompt_bundle.previous_wait_reviews, risk_contract=prompt_bundle.risk_contract)
+        if repair_report['targets']:
+            strategy_evidence.best_effort(market._selected().identity, 'wait_audit_repair',
+                {'frame_time':time_str, 'model':model_name, 'report':repair_report})
+            print(f"[WAIT Audit] correction={repair_report['status']}; repaired={len(repair_report['corrected'])}/{len(repair_report['targets'])}; no trading actions authorized")
+        brain_output['validation']['json_response'] = json_report
+        if json_report.get('attempted'):
+            strategy_evidence.best_effort(market._selected().identity, 'model_json_response', json_report)
+        brain_output['validation']['wait_repair'] = wait_repair.public_report(repair_report)
+        output_chars = len(content) if content is not None else len(trading_prompt.canonical(original_brain_output))
+        atomic_write_json(os.path.join(DATA_DIR, 'trading_output_validation.json'), brain_output['validation'])
         decisions_dict = brain_output.get("decisions", {})
         pos_mgmt_list = brain_output.get("position_management", [])
         macro_summary = str(brain_output.get("macro_assessment", "宏观中性震荡"))[:120]
@@ -961,6 +932,10 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
 
         # Execute Pending Orders Cancellation if AI Brain decides CANCEL
         pending_mgmt_list = brain_output.get("pending_orders_management", [])
+        strategy_evidence.best_effort(market._selected().identity, 'management_decision', {
+            'model': model_name, 'features_as_of': market.signal_as_of(), 'generated_at': time.time(),
+            'position_management': pos_mgmt_list, 'pending_management': pending_mgmt_list})
+        known_pending = {(str(o.get('instId')), str(o.get('ordId'))) for o in pending_orders_list if isinstance(o, dict)}
         if isinstance(pending_mgmt_list, list):
             for p_order in pending_mgmt_list:
                 if not isinstance(p_order, dict):
@@ -969,36 +944,66 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                 p_ord_id = str(p_order.get("ordId", ""))
                 p_inst_id = str(p_order.get("instId", ""))
                 p_reason = str(p_order.get("reason", "模型指示撤销该挂单"))
-                if p_act == "CANCEL" and p_ord_id and p_inst_id:
+                import re
+                if (p_act == "CANCEL" and (p_inst_id, p_ord_id) in known_pending
+                        and re.fullmatch(r'[A-Z0-9]+-USDT-SWAP', p_inst_id)
+                        and re.fullmatch(r'[0-9]{1,32}', p_ord_id)):
                     cxl_cmd = okx_private_command(f"okx swap cancel {p_inst_id} --ordId {p_ord_id} --json")
-                    cxl_res = subprocess.run(cxl_cmd, shell=True, capture_output=True, text=True, timeout=10)
-                    print(f"[AI Brain Batch] 🛑 AI自主撤回失效/过时限价单: {p_inst_id} (ordId={p_ord_id}, 原因={p_reason})")
+                    with trade_lock.writer(), algo_reader.command_barrier(cxl_cmd, market._selected()):
+                        cxl_res = subprocess.run(cxl_cmd, shell=True, capture_output=True, text=True, timeout=10)
+                    strategy_evidence.best_effort(market._selected().identity, 'cancel_submission',
+                        {'instrument': p_inst_id, 'order_id': p_ord_id, 'transport_ok': cxl_res.returncode == 0})
+                    print(f"[AI Brain Batch] 撤单已提交，待订单状态对账: {p_inst_id} (ordId={p_ord_id}, CLI状态={cxl_res.returncode})")
 
         standard_cache = {}
         for p in packages:
             inst_id = p["instId"]
             d_item = decisions_dict.get(inst_id, {})
+            raw_proposal = original_brain_output.get('decisions', {}).get(inst_id)
+            raw_proposal = raw_proposal if isinstance(raw_proposal, dict) else {}
+            try:
+                model_score = trading_prompt.numeric(raw_proposal.get('confidence'))
+                if not 0 <= model_score <= 100: model_score = None
+            except trading_prompt.ContractError:
+                model_score = None
             if not isinstance(d_item, dict):
                 d_item = {}
-            entry = safe_float(d_item.get("entry_price"))
-            take_profit = safe_float(d_item.get("take_profit_price"))
-            stop_loss = safe_float(d_item.get("stop_loss_price"))
+            from scripts.entry_candidates import catalog as entry_catalog
+            plan_catalog = entry_catalog(p, prompt_bundle.risk_contract)
+            selected_plan = next((x for x in plan_catalog.get('plans', []) if x.get('id') == d_item.get('candidate_id')), None)
+            if selected_plan:
+                d_item = {**d_item, 'horizon': selected_plan.get('horizon', 'swing')}
+            # Smooth field alias normalization (support both standard contract and council desk outputs)
+            entry = safe_float(d_item.get("entry_price") or d_item.get("limit_price"))
+            take_profit = safe_float(d_item.get("take_profit_price") or d_item.get("take_profit"))
+            stop_loss = safe_float(d_item.get("stop_loss_price") or d_item.get("stop_loss"))
             confidence = max(0.0, min(100.0, safe_float(d_item.get("confidence"))))
-            ai_leverage = int(max(2, min(5, round(safe_float(d_item.get("leverage", 3))))))
-            ai_margin = round(safe_float(d_item.get("margin_usdt", 0.0)), 2)
+            ai_leverage = int(max(1, min(8, round(safe_float(d_item.get("leverage", 3))))))
+            ai_margin = round(safe_float(d_item.get("margin_usdt") or d_item.get("margin_usd", 0.0)), 2)
+
+            # Ensure normalized keys exist for downstream interceptors
+            normalized_d_item = dict(d_item)
+            normalized_d_item["entry_price"] = entry
+            normalized_d_item["take_profit_price"] = take_profit
+            normalized_d_item["stop_loss_price"] = stop_loss
+            normalized_d_item["margin_usdt"] = ai_margin
+            normalized_d_item["leverage"] = ai_leverage
 
             final_action, rejection_reason, rr = validate_and_filter_decision(
-                p, d_item, active_inst_ids, active_position_sides
+                p, normalized_d_item, active_inst_ids, active_position_sides
             )
 
             standard_cache[inst_id] = {
                 "instId": inst_id,
                 "name": p["name"],
                 "timestamp": int(time.time()),
+                "data_as_of": p.get("data_as_of", market.signal_as_of()),
+                "execution_profile_signature": cycle_execution["signature"],
+                "position_basis": {"side": active_position_sides.get(inst_id), "size": next((abs(safe_float(x.get("pos", x.get("size", 0)))) for x in (active_positions_detail or []) if x.get("instId") == inst_id), 0.0)},
                 "time_str": time_str,
                 "macro_assessment": macro_summary,
                 "thought_process": {
-                    "market_structure": d_item.get("market_structure", "多周期结构中性"),
+                    "market_structure": d_item.get("market_structure") or "；".join(e.get("interpretation", "") for e in d_item.get("supporting_evidence", [])) or "未建立候选，等待",
                     "calculus_dynamics": d_item.get("calculus_dynamics", "模型未提供具体微积分证据"),
                     "math_prob_rationale": d_item.get("math_prob_rationale", "模型未提供具体定积分与概率证据"),
                     "volume_and_oi": d_item.get("volume_and_oi", f"OI: {p['oiUsd']}, Taker: {p['takerNetUsd']}"),
@@ -1008,6 +1013,30 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                 "adx_1h": p.get("adx_1h", "--"),
                 "decision": {
                     "action": final_action,
+                    "memory_publication": prompt_bundle.manifest.get("memory_publication"),
+                    "model_action": str(raw_proposal.get("action", "MISSING")).upper()[:24],
+                    "model_confidence": model_score,
+                    "candidate_id": d_item.get("candidate_id"),
+                    "candidate_origin": d_item.get("candidate_origin"),
+                    "entry_plans": plan_catalog,
+                    "candidate_reviews": d_item.get("candidate_reviews", raw_proposal.get("candidate_reviews", [])),
+                    "confidence_role": "uncalibrated_diagnostic",
+                    "decision_status": d_item.get('decision_status','incomplete') if not rejection_reason else 'execution_rejected',
+                    "wait_audit": d_item.get('wait_audit'),
+                    "wait_repair": wait_repair.public_report(repair_report, inst_id),
+                    "previous_wait_review": d_item.get('previous_wait_review',{}),
+                    "validation_reason": rejection_reason or d_item.get('validation_reason'),
+                    "model_reason": d_item.get('model_reason'),
+                    "contract_version": trading_prompt.VERSION,
+                    "contract_valid": bool(d_item.get('contract_valid')) and not bool(rejection_reason),
+                    "supporting_evidence": d_item.get('supporting_evidence', []),
+                    "counter_evidence": d_item.get('counter_evidence', []),
+                    "counter_evidence_status": d_item.get('counter_evidence_status', 'not_applicable'),
+                    "uncertainty": d_item.get('uncertainty', ''),
+                    "invalidation": d_item.get('invalidation'),
+                    "valid_for_seconds": d_item.get('valid_for_seconds', 0),
+                    "valid_until": min(p.get('data_as_of', market.signal_as_of()) + 300,
+                                       time.time() + d_item.get('valid_for_seconds', 0)),
                     "confidence": confidence,
                     "leverage": ai_leverage,
                     "margin_usdt": ai_margin,
@@ -1030,6 +1059,24 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                 "raw_ls_ratio": str(p.get('lsRatio')) if p.get('lsRatio') is not None else "--"
             }
 
+        import hashlib
+        # Use the immutable prompt-time snapshot for attribution.
+        news_snapshot = dict(prompt_bundle.manifest.get('news_snapshot') or {})
+        strategy_evidence.record_decisions(market._selected().identity, standard_cache, packages, model_name,
+            hashlib.sha256(effective_system_prompt.encode()).hexdigest(), time.time(), news_snapshot=news_snapshot)
+        try:
+            audit_status = wait_audit.commit(market._selected().identity, standard_cache, packages,
+                active_positions_detail, frame_id=time_str)
+            brain_output['validation']['wait_audit_status'] = audit_status['status']
+        except Exception as exc:
+            # An audit persistence failure cannot authorize a trade or masquerade as a normal WAIT.
+            brain_output['validation']['status'] = 'incomplete'
+            brain_output['validation']['wait_audit_status'] = 'error'
+            brain_output['validation']['reason'] = 'WAIT审计持久化失败：' + type(exc).__name__
+            for row in standard_cache.values():
+                if row['decision']['action']=='WAIT':
+                    row['decision'].update(contract_valid=False,decision_status='incomplete',validation_reason='WAIT审计无法持久化')
+        atomic_write_json(os.path.join(DATA_DIR,'trading_output_validation.json'),brain_output['validation'])
         atomic_write_json(AI_DECISION_CACHE_FILE, standard_cache)
         atomic_write_json(AI_POSITION_MANAGEMENT_FILE, {
             "timestamp": int(time.time()),
@@ -1042,12 +1089,18 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
         history_record = {
             "time": time_str,
             "macro_assessment": macro_summary,
+            "prompt_composition": prompt_bundle.manifest,
+            "output_validation": brain_output["validation"],
+            "news_snapshot": news_snapshot,
             "ai_last_prompt": full_prompt_text,
             "position_management": pos_mgmt_list,
             "council_transcript": brain_output.get("council_transcript") if isinstance(brain_output, dict) else None,
             "top_opportunities": [
                 {
                     "inst": p["name"],
+                    "decision_status": standard_cache[p["instId"]]["decision"].get("decision_status"),
+                    "wait_audit": standard_cache[p["instId"]]["decision"].get("wait_audit"),
+                    "previous_wait_review": standard_cache[p["instId"]]["decision"].get("previous_wait_review"),
                     "action": standard_cache[p["instId"]]["decision"]["action"],
                     "confidence": standard_cache[p["instId"]]["decision"]["confidence"],
                     "leverage": standard_cache[p["instId"]]["decision"].get("leverage", 3),
@@ -1074,11 +1127,22 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
         atomic_write_json(AI_DECISION_HISTORY_FILE, history_list)
 
         latency = round(time.time() - t0, 2)
-        telemetry.finish("success", raw_res, output_chars=len(content))
-        print(f"[AI Brain Batch] ✅ 6 币种全景决策完成 (耗时 {latency}s, 宏观基调: {macro_summary})")
+        telemetry.finish("success", raw_res, output_chars=output_chars)
+        print(f"[AI Brain Batch] ✅ {len(packages)} 标的全景决策完成 (耗时 {latency}s, 宏观基调: {macro_summary})")
         return standard_cache
 
     except Exception as e:
+        code = getattr(e, "status_code", None) or getattr(e, "code", None)
+        attempts = getattr(e, "attempts", None)
+        LAST_INFERENCE_ERROR = ("模型输出契约不合格：" + str(e)) if isinstance(e, trading_prompt.ContractError) else (f"模型接口 HTTP {code}" if code else type(e).__name__)
+        atomic_write_json(os.path.join(DATA_DIR, 'trading_output_validation.json'), {'status':'rejected','contract_version':trading_prompt.VERSION,'reason':LAST_INFERENCE_ERROR, 'json_response':json_report, 'updated_at':time.time()})
+        if json_report:
+            strategy_evidence.best_effort(market._selected().identity, 'model_json_response', json_report)
+        provider_reason = getattr(e, "provider_reason", "")
+        if provider_reason:
+            LAST_INFERENCE_ERROR += f"（{provider_reason}）"
+        if attempts:
+            LAST_INFERENCE_ERROR += f"，已尝试 {attempts} 次"
         telemetry.finish("failed", error=e)
         print(f"[AI Brain Batch] Error in batch inference: {e}")
         return None
@@ -1093,7 +1157,10 @@ def get_latest_ai_decision(inst_id: str, max_age_seconds: int = DECISION_MAX_AGE
             if not isinstance(item, dict):
                 return None
             timestamp = int(item.get("timestamp", 0) or 0)
-            if timestamp <= 0 or int(time.time()) - timestamp > max_age_seconds:
+            if timestamp <= 0 or not 0 <= time.time() - timestamp <= max_age_seconds:
+                return None
+            decision = item.get('decision', {})
+            if decision.get('action') in {'BUY_LONG','SELL_SHORT'} and (decision.get('contract_version') != trading_prompt.VERSION or not decision.get('contract_valid') or time.time() >= float(decision.get('valid_until') or 0)):
                 return None
             return item
         except Exception:

@@ -5,12 +5,18 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import r20_gateway.secrets as secrets
-import r20_gateway.telemetry as telemetry
-from r20_gateway.store import GatewayStore
+import okxquant_gateway.secrets as secrets
+import okxquant_gateway.telemetry as telemetry
+from okxquant_gateway.store import GatewayStore
 
 
 class GatewayRuntimePrivacyTests(unittest.TestCase):
+    def test_windows_control_plane_does_not_spawn_posix_worker(self):
+        import okxquant_gateway.supervisor as supervisor
+        with patch.object(supervisor.sys, "platform", "win32"), patch.dict("os.environ", {"OKXQUANT_TESTING": "0"}), patch.object(supervisor, "ensure_worker") as spawn:
+            supervisor.start_supervisor()
+        spawn.assert_not_called()
+
     def test_telemetry_never_persists_prompt_content(self):
         with tempfile.TemporaryDirectory() as td:
             db = Path(td) / "gateway.db"
@@ -28,7 +34,7 @@ class GatewayRuntimePrivacyTests(unittest.TestCase):
 
     def test_telemetry_failure_is_non_fatal(self):
         call = telemetry.ModelCallTelemetry("trading_brain", "model", "high", "s", "u")
-        with patch("r20_gateway.telemetry.GatewayStore", side_effect=OSError("disk")):
+        with patch("okxquant_gateway.telemetry.GatewayStore", side_effect=OSError("disk")):
             call.finish("failed", error=RuntimeError("model"))
 
     def test_secret_store_encrypts_and_uses_0600(self):

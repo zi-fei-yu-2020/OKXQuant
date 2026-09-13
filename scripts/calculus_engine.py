@@ -1,7 +1,7 @@
 """Causal Calculus, Definite Integrals & Probability Theory Engine for Quantitative Trading.
 
 This module provides the core mathematical, continuous physical state, definite integration,
-and stochastic probabilistic foundation for R20 Quantum Trader.
+and stochastic probabilistic foundation for OKXQuant.
 
 All functions are strictly causal: chronological sequences with newest observation last.
 No lookahead bias. Closed candle data is enforced.
@@ -257,6 +257,8 @@ def calculate_probability_theory(
         "skewness": round(skewness_bounded, 2),
         "kurtosis": round(kurtosis_bounded, 2),
         "continuation_prob_pct": round(continuation_prob, 1),
+        "probability_calibrated": False,
+        "probability_semantics": "heuristic_direction_score_not_empirical_win_rate",
         "breakdown_prob_pct": round(breakdown_prob, 1),
         "var_95_pct": round(var_95_raw * 100.0, 2),
         "cvar_95_pct": round(cvar_95_raw * 100.0, 2),

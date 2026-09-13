@@ -1,0 +1,64 @@
+name: okxquant
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NODE_IMAGE: "${OKXQUANT_NODE_IMAGE:-node:22-bookworm-slim}"
+        PYTHON_IMAGE: "${OKXQUANT_PYTHON_IMAGE:-python:3.12-slim-bookworm}"
+        OKX_CLI_SPEC: "${OKXQUANT_OKX_CLI_SPEC:-@okx_ai/okx-trade-cli@^1.4.4}"
+    container_name: okxquant-app
+    image: "${OKXQUANT_IMAGE:-okxquant:local}"
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ./.env
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: /app
+      OKXQUANT_ENV_FILE: /app/config/.env
+      OKXQUANT_DEPLOYMENT_MODE: docker
+      OKXQUANT_BUILD_BRANCH: "${OKXQUANT_BUILD_BRANCH:-dev}"
+      OKXQUANT_BUILD_COMMIT: "${OKXQUANT_BUILD_COMMIT:-local}"
+    ports:
+      - "${OKXQUANT_HTTP_PORT:-8080}:8080"
+    volumes:
+      - okxquant_config:/app/config
+      - okxquant_data:/app/data
+      - okxquant_logs:/app/logs
+      - okxquant_backups:/app/backups
+      - okxquant_okx:/home/okxquant/.okx
+      - okxquant_bypy:/home/okxquant/.bypy
+      - okxquant_npm:/home/okxquant/.npm-global
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).read()
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  okxquant_config:
+    name: okxquant_config
+  okxquant_data:
+    name: okxquant_data
+  okxquant_logs:
+    name: okxquant_logs
+  okxquant_backups:
+    name: okxquant_backups
+  okxquant_okx:
+    name: okxquant_okx
+  okxquant_bypy:
+    name: okxquant_bypy
+  okxquant_npm:
+    name: okxquant_npm

@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from r20_backend.admin_auth import AdminAuthStore
+from okxquant_backend.admin_auth import AdminAuthStore
 
 
 class AdminAuthTests(unittest.TestCase):

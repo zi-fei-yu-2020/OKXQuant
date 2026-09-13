@@ -7,40 +7,40 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import r20_backend.notifications as notifications
-import r20_backend.okx_trade_service as trade_service
+import okxquant_backend.notifications as notifications
+import okxquant_backend.okx_trade_service as trade_service
 import scripts.okx_runtime as okx_runtime
 import scripts.prompt_library as prompts
 import scripts.backup_runtime as backup_runtime
-import r20_backend.backup_store as backup_store
-import r20_backend.net_security as net_security
-from r20_gateway.plugins import PLUGINS
+import okxquant_backend.backup_store as backup_store
+import okxquant_backend.net_security as net_security
+from okxquant_gateway.plugins import PLUGINS
 
 
 class OKXEnvironmentTests(unittest.TestCase):
     def test_separate_live_and_demo_credentials(self):
         values = {
-            "R20_OKX_ENV":"demo", "OKX_DEMO_API_KEY":"DEMO_AK", "OKX_DEMO_SECRET_KEY":"DEMO_SK", "OKX_DEMO_PASSPHRASE":"DEMO_PP",
+            "OKXQUANT_OKX_ENV":"demo", "OKX_DEMO_API_KEY":"DEMO_AK", "OKX_DEMO_SECRET_KEY":"DEMO_SK", "OKX_DEMO_PASSPHRASE":"DEMO_PP",
             "OKX_LIVE_API_KEY":"LIVE_AK", "OKX_LIVE_SECRET_KEY":"LIVE_SK", "OKX_LIVE_PASSPHRASE":"LIVE_PP",
         }
         demo = okx_runtime.selected_environment(values)
         self.assertEqual((demo.mode, demo.api_key), ("demo", "DEMO_AK"))
-        live = okx_runtime.selected_environment({**values, "R20_OKX_ENV":"live"})
+        live = okx_runtime.selected_environment({**values, "OKXQUANT_OKX_ENV":"live"})
         self.assertEqual((live.mode, live.api_key), ("live", "LIVE_AK"))
         self.assertNotEqual(demo.identity, live.identity)
 
     def test_legacy_private_command_is_rebound(self):
-        values={"R20_OKX_ENV":"live","OKX_LIVE_API_KEY":"A","OKX_LIVE_SECRET_KEY":"B","OKX_LIVE_PASSPHRASE":"C"}
+        values={"OKXQUANT_OKX_ENV":"live","OKX_LIVE_API_KEY":"A","OKX_LIVE_SECRET_KEY":"B","OKX_LIVE_PASSPHRASE":"C"}
         with patch.dict(os.environ, {}, clear=True):
             command=okx_runtime.replace_cli_prefix("okx --demo account positions --json", values)
             self.assertTrue(command.startswith("okx --live "))
             self.assertEqual(os.environ["OKX_API_KEY"], "A")
 
     def test_environment_is_frozen_for_cycle(self):
-        first={"R20_OKX_ENV":"demo","OKX_DEMO_API_KEY":"D","OKX_DEMO_SECRET_KEY":"S","OKX_DEMO_PASSPHRASE":"P"}
+        first={"OKXQUANT_OKX_ENV":"demo","OKX_DEMO_API_KEY":"D","OKX_DEMO_SECRET_KEY":"S","OKX_DEMO_PASSPHRASE":"P"}
         try:
             okx_runtime.freeze_environment(first)
-            with patch.dict(os.environ, {"R20_OKX_ENV":"live","OKX_LIVE_API_KEY":"L","OKX_LIVE_SECRET_KEY":"S","OKX_LIVE_PASSPHRASE":"P"}, clear=True):
+            with patch.dict(os.environ, {"OKXQUANT_OKX_ENV":"live","OKX_LIVE_API_KEY":"L","OKX_LIVE_SECRET_KEY":"S","OKX_LIVE_PASSPHRASE":"P"}, clear=True):
                 self.assertTrue(okx_runtime.replace_cli_prefix("okx account positions").startswith("okx --demo "))
         finally: okx_runtime.unfreeze_environment()
 
@@ -79,19 +79,19 @@ class OKXEnvironmentTests(unittest.TestCase):
 class NotificationChannelRemovalTests(unittest.TestCase):
     def test_retired_personal_wechat_channel_is_not_supported(self):
         retired_channel = "wechat" + "_ilink"
-        env={"R20_NOTIFY_" + retired_channel.upper() + "_ENABLED":"1"}
+        env={"OKXQUANT_NOTIFY_" + retired_channel.upper() + "_ENABLED":"1"}
         self.assertNotIn(retired_channel, notifications.enabled_channels(env))
         self.assertEqual(notifications.diagnose_channel(retired_channel, env)["status"], "failed")
         ok, detail=notifications.send_channel(retired_channel, "hello", env)
         self.assertFalse(ok)
         self.assertIn("未知通知通道", detail)
-        self.assertNotIn("r20.channel." + "wechat" + "-ilink", {plugin.plugin_id for plugin in PLUGINS})
+        self.assertNotIn("okxquant.channel." + "wechat" + "-ilink", {plugin.plugin_id for plugin in PLUGINS})
 
     def test_dotenv_still_overrides_stale_process_environment(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp); (root/".env").write_text("R20_NOTIFY_QQ_ENABLED=1\n")
-            with patch.object(notifications, "ROOT", root), patch.dict(os.environ, {"R20_NOTIFY_QQ_ENABLED":"0"}, clear=True):
-                self.assertEqual(notifications._env()["R20_NOTIFY_QQ_ENABLED"], "1")
+            root=Path(tmp); (root/".env").write_text("OKXQUANT_NOTIFY_QQ_ENABLED=1\n")
+            with patch.object(notifications, "ROOT", root), patch.dict(os.environ, {"OKXQUANT_NOTIFY_QQ_ENABLED":"0"}, clear=True):
+                self.assertEqual(notifications._env()["OKXQUANT_NOTIFY_QQ_ENABLED"], "1")
 
 
 class PromptSimpleModeTests(unittest.TestCase):

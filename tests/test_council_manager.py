@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import patch, MagicMock
-from r20_backend.council_manager import (
+from okxquant_backend.council_manager import (
     load_council_config,
     save_council_config,
     reset_role_template,
@@ -14,10 +14,10 @@ class TestCouncilManager(unittest.TestCase):
         cfg = load_council_config()
         self.assertIn("enabled", cfg)
         self.assertIn("roles", cfg)
-        self.assertIn("alpha", cfg["roles"])
-        self.assertIn("risk", cfg["roles"])
-        self.assertIn("quant", cfg["roles"])
-        self.assertIn("arbitrator", cfg["roles"])
+        self.assertIn("trader_trend", cfg["roles"])
+        self.assertIn("trader_momentum", cfg["roles"])
+        self.assertIn("trader_quant", cfg["roles"])
+        self.assertIn("cio", cfg["roles"])
 
         original_enabled = cfg["enabled"]
         cfg["enabled"] = not original_enabled
@@ -29,50 +29,42 @@ class TestCouncilManager(unittest.TestCase):
         save_council_config(cfg)
 
     def test_reset_role_template(self):
-        cfg = reset_role_template("alpha")
+        cfg = reset_role_template("trader_trend")
         self.assertEqual(
-            cfg["roles"]["alpha"]["prompt"],
-            DEFAULT_PRESET_TEMPLATES["alpha"]["prompt"]
+            cfg["roles"]["trader_trend"]["prompt"],
+            DEFAULT_PRESET_TEMPLATES["trader_trend"]["prompt"]
         )
 
     def test_consensus_mode_and_suites(self):
-        from r20_backend.council_manager import get_preset_suites, apply_preset_suite
+        from okxquant_backend.council_manager import get_preset_suites, apply_preset_suite
         suites = get_preset_suites()
-        self.assertGreaterEqual(len(suites), 3)
+        self.assertGreaterEqual(len(suites), 1)
         suite_ids = [s["id"] for s in suites]
-        self.assertIn("classic_trio", suite_ids)
-        self.assertIn("full_spectrum", suite_ids)
-        self.assertIn("trend_hunter", suite_ids)
+        self.assertIn("hedge_fund_desk", suite_ids)
 
-        # Apply trend hunter suite
-        updated = apply_preset_suite("trend_hunter")
-        self.assertEqual(updated["consensus_mode"], "aggressive")
-        self.assertIn("whale_tracker", updated["roles"])
-        self.assertIn("arbitrator", updated["roles"])
-
-        # Restore classic trio
-        restored = apply_preset_suite("classic_trio")
-        self.assertEqual(restored["consensus_mode"], "strict")
-        self.assertIn("alpha", restored["roles"])
-        self.assertIn("risk", restored["roles"])
+        # Apply hedge fund desk suite
+        updated = apply_preset_suite("hedge_fund_desk")
+        self.assertEqual(updated["consensus_mode"], "weighted")
+        self.assertIn("trader_trend", updated["roles"])
+        self.assertIn("trader_momentum", updated["roles"])
+        self.assertIn("cio", updated["roles"])
 
     def test_council_debate_execution_mocked(self):
         # Mock execute_llm_request to avoid making external HTTP calls
-        mock_advisor_return = ("BUY_LONG 80% 置信度，动能良好", "", {}, 120)
-        mock_arbitrator_json = (
-            '{"macro_assessment": "宏观强势突破", "decisions": {"ETH-USDT-SWAP": {"action": "BUY_LONG", "confidence": 85}}, "position_management": []}',
+        mock_trader_return = ("BUY_LONG 80% 置信度，动能良好，建议 HOLD 现有 BTC 持仓", "", {}, 120)
+        mock_cio_json = (
+            '{"macro_assessment": "采纳 Trader A 稳健回踩方案，资金充裕", "position_management": [{"instId": "BTC-USDT-SWAP", "action": "HOLD", "reasoning": "波段顺畅"}], "decisions": {"ETH-USDT-SWAP": {"action": "BUY_LONG", "confidence": 85, "limit_price": 2410.0, "stop_loss": 2350.0, "take_profit": 2530.0, "leverage": 3, "margin_usd": 150.0, "reasoning": "采纳交易员 A 顺势回踩买点"}}}',
             "",
             {},
             250
         )
 
-        with patch("r20_backend.llm_manager.execute_llm_request") as mock_exec:
-            # Set side effect: 3 advisors calls + 1 arbitrator call
+        with patch("okxquant_backend.llm_manager.execute_llm_request") as mock_exec:
             mock_exec.side_effect = [
-                mock_advisor_return,
-                mock_advisor_return,
-                mock_advisor_return,
-                mock_arbitrator_json,
+                mock_trader_return,
+                mock_trader_return,
+                mock_trader_return,
+                mock_cio_json,
             ]
 
             brain_output, transcript = execute_council_debate(
@@ -82,13 +74,13 @@ class TestCouncilManager(unittest.TestCase):
             )
 
             self.assertIn("decisions", brain_output)
-            self.assertEqual(brain_output["macro_assessment"], "宏观强势突破")
+            self.assertEqual(brain_output["macro_assessment"], "采纳 Trader A 稳健回踩方案，资金充裕")
+            self.assertEqual(len(brain_output["position_management"]), 1)
+            self.assertEqual(brain_output["position_management"][0]["action"], "HOLD")
             self.assertIn("council_transcript", brain_output)
             self.assertTrue(transcript["council_mode"])
             self.assertIn("advisors", transcript)
-            self.assertIn("alpha", transcript["advisors"])
-            self.assertIn("risk", transcript["advisors"])
-            self.assertIn("quant", transcript["advisors"])
+            self.assertIn("trader_trend", transcript["advisors"])
             self.assertIn("arbitrator", transcript)
 
 

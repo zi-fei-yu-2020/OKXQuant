@@ -1,10 +1,10 @@
 """
-R20 物理拦截插件规范
+OKXQuant 物理拦截插件规范
 ====================
 id: 04_risk_reward_gatekeeper
 name: 真实 2.0R 盈亏比门禁
 version: 1.0.0
-author: R20 Official
+author: OKXQuant Official
 description: 执行层真实风险收益比校验。入场点、止盈目标与云端止损线计算的 R:R 必须 ≥ 2.0，拒绝赔率不足的劣质交易。
 tags: 盈亏比, 赔率保障, 官方预设
 """

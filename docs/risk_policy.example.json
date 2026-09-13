@@ -1,0 +1,15 @@
+{
+  "per_trade_equity_pct": 0.005,
+  "portfolio_stop_pct": 0.03,
+  "direction_stop_pct": 0.02,
+  "group_stop_pct": 0.02,
+  "daily_drawdown_pct": 0.03,
+  "peak_drawdown_pct": 0.08,
+  "single_asset_margin_usdt": 600.0,
+  "available_margin_fraction": 0.8,
+  "taker_fee": 0.0005,
+  "slippage": 0.001,
+  "minimum_net_rr": 2.0,
+  "max_entry_distance_pct": 0.02,
+  "max_leverage": 5.0
+}

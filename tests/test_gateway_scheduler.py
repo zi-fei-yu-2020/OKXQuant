@@ -6,8 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from r20_gateway.scheduler import GatewayScheduler, JOBS
-from r20_gateway.store import GatewayStore
+from okxquant_gateway.scheduler import GatewayScheduler, JOBS
+from okxquant_gateway.store import GatewayStore
 
 BJ = timezone(timedelta(hours=8))
 
@@ -25,7 +25,7 @@ class GatewaySchedulerTests(unittest.TestCase):
 
     def test_migration_baseline_prevents_immediate_launch(self):
         self.scheduler.initialize_migration_baseline(self.now)
-        with patch("r20_gateway.scheduler.load_schedule", return_value={}):
+        with patch("okxquant_gateway.scheduler.load_schedule", return_value={}):
             self.assertEqual(self.scheduler.tick(self.now), [])
 
     def test_interval_job_becomes_due_on_aligned_trader_boundary(self):

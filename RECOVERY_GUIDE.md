@@ -1,4 +1,4 @@
-# R20 AI 自进化量化交易系统 — 完整部署与灾备恢复手册 (QwenPaw)
+# OKXQuant AI 自进化量化交易系统 — 完整部署与灾备恢复手册 (QwenPaw)
 
 > 本文档用于在任何全新环境（新云服务器 / 重新安装的 QwenPaw）中，100% 快速恢复本套基于 Gemini 3.7 Flash High（Reasoning High）深度思考的大模型全权决策自进化量化交易系统。
 
@@ -27,10 +27,10 @@
 ## 2. 新环境一键恢复步骤
 
 ### 步骤 1：解压最新灾备包
-从后台配置的任一成功灾备目标下载最新归档。百度 ByPy 兼容目录通常为 `/我的应用数据/bypy/R20_Backups/`；官方 OAuth 默认应用目录为 `/apps/R20QuantumTrader/R20_Backups/`；S3/OSS/WebDAV 使用任务中配置的远程前缀。上传至工作区并解压：
+从后台配置的任一成功灾备目标下载最新归档。百度 ByPy 兼容目录通常为 `/我的应用数据/bypy/OKXQUANT_Backups/`；官方 OAuth 默认应用目录为 `/apps/OKXQuant/OKXQUANT_Backups/`；S3/OSS/WebDAV 使用任务中配置的远程前缀。上传至工作区并解压：
 ```bash
 cd /app/working/workspaces/default
-tar -zxvf r20_system_backup_*.tar.gz
+tar -zxvf okxquant_system_backup_*.tar.gz
 ```
 
 ### 步骤 2：恢复 OKX 授权认证

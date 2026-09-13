@@ -1,16 +1,29 @@
 #!/usr/bin/env python3
 """
-R20 Authentic OKX Positions-History Ledger Synchronizer (sync_full_ledger.py)
+OKXQuant Authentic OKX Positions-History Ledger Synchronizer (sync_full_ledger.py)
 Directly reads OKX official `account positions-history` & `account positions` API.
 Eliminates bills heuristic split-error, accurately records real position-level trades!
 """
 
-from okx_runtime import replace_cli_prefix as okx_private_command
+# Standalone scheduler children must not depend on an inherited PYTHONPATH.
+import sys as _sys
+from pathlib import Path as _Path
+_project_root = str(_Path(__file__).resolve().parents[1])
+if _project_root not in _sys.path:
+    _sys.path.insert(0, _project_root)
+
+
+from okx_runtime import selected_environment, replace_cli_prefix as okx_private_command
 import subprocess
 import json
 import os
 import datetime
 import tempfile
+from scripts import ledger_monitor
+from scripts.ledger_duration import duration_seconds, format_duration, duration_bucket
+from scripts.close_attribution import reason as close_reason
+from scripts.close_evidence import load_inputs as close_inputs
+from scripts.fill_accounting import read_archive as read_fill_archive, reconcile as reconcile_fill_fees
 
 WORKSPACE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(WORKSPACE_DIR, "data")
@@ -28,7 +41,29 @@ def get_ct_val(inst_name):
             return item["ctVal"]
     return 1.0
 
-def build_lifecycle_ledger():
+def read_cli_list(command):
+    result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=20)
+    if result.returncode != 0 or not result.stdout.strip():
+        raise RuntimeError('Ledger source unavailable; existing ledger is preserved')
+    rows = json.loads(result.stdout)
+    if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
+        raise RuntimeError('Ledger source malformed; existing ledger is preserved')
+    return rows
+
+
+def read_snapshot(env, path, command, params):
+    if env.configured:
+        from okxquant_backend.okx_trade_service import _request
+        rows = _request('GET',path,params,env,timeout=8)
+        if not isinstance(rows,list) or any(not isinstance(x,dict) for x in rows):
+            raise RuntimeError('Invalid ledger source; previous ledger preserved')
+        return rows
+    return read_cli_list(okx_private_command(command))
+
+
+@ledger_monitor.serialized
+def build_lifecycle_ledger(*, notify=True):
+    env=selected_environment()
     reset_time = "1970-01-01 00:00:00"
     if os.path.exists(INITIAL_STATE_FILE):
         try:
@@ -39,11 +74,14 @@ def build_lifecycle_ledger():
             pass
 
     existing_closed_ids = set()
+    existing_closed_rows = []
+    old_trades = []
     if os.path.exists(LEDGER_JSON_FILE):
         try:
             with open(LEDGER_JSON_FILE, "r", encoding="utf-8") as f:
                 old_trades = json.load(f)
-                existing_closed_ids = {t["id"] for t in old_trades if t.get("status") == "closed"}
+                existing_closed_rows = [t for t in old_trades if t.get("status") == "closed" and t.get("id") and str(t.get("close_time", "")) >= reset_time]
+                existing_closed_ids = {t["id"] for t in existing_closed_rows}
         except Exception:
             pass
 
@@ -58,18 +96,25 @@ def build_lifecycle_ledger():
     tz_bj = datetime.timezone(datetime.timedelta(hours=8))
 
     # 1. Fetch OKX Official Positions History (Official position-level closed trades)
-    res_hist = subprocess.run(okx_private_command("okx account positions-history --limit 100 --json"), shell=True, capture_output=True, text=True)
-    pos_history = json.loads(res_hist.stdout) if res_hist.stdout else []
+    pos_history=read_snapshot(env,'/api/v5/account/positions-history','okx account positions-history --limit 100 --json',{'instType':'SWAP','limit':'100'})
+    cycle_start=datetime.datetime.strptime(reset_time,'%Y-%m-%d %H:%M:%S').replace(tzinfo=tz_bj).timestamp()*1000
+    pos_history=[row for row in pos_history if float(row.get('uTime') or row.get('cTime') or 0) >= cycle_start]
+    pos_data=read_snapshot(env,'/api/v5/account/positions','okx account positions --json',{'instType':'SWAP'})
+    orders_history=read_snapshot(env,'/api/v5/trade/orders-history','okx swap orders --history --limit 100 --json',{'instType':'SWAP','limit':'100'})
 
-    # 2. Fetch OKX Current Live Positions (Holding trades)
-    res_pos = subprocess.run(okx_private_command("okx account positions --json"), shell=True, capture_output=True, text=True)
-    pos_data = json.loads(res_pos.stdout) if res_pos.stdout else []
+    from scripts import strategy_evidence
+    for receipt in pos_history:
+        strategy_evidence.best_effort(env.identity, "position_receipt", receipt)
 
-    res_orders = subprocess.run(okx_private_command("okx swap orders --history --limit 100 --json"), shell=True, capture_output=True, text=True)
-    orders_history = json.loads(res_orders.stdout) if res_orders.stdout else []
-    close_orders = [o for o in orders_history if str(o.get('reduceOnly', '')).lower() == 'true' and o.get('state') == 'filled']
-
+    try:
+        attribution_inputs=close_inputs(env,orders_history)
+    except Exception:
+        attribution_inputs={'orders':orders_history,'algos':[],'executions':[]}
+    fill_archive = read_fill_archive(env.identity)
     trades_lifecycle = []
+
+    from scripts.strategy_origin import index as strategy_index, resolve as strategy_origin
+    origins=strategy_index(env.identity)
 
     # Process Active Holding Positions FIRST
     for p in pos_data:
@@ -99,21 +144,17 @@ def build_lifecycle_ledger():
 
         pos_k = f"{inst_id}_{'long' if side=='多' else 'short'}"
         t_info = trackers.get(pos_k, {})
-        strat_tag = t_info.get("strategy_tag") or ("🌊 低吸" if side == "多" else "⚡ 高空")
+        strat_tag = strategy_origin(p,fill_archive,origins)["strategy"]
 
-        try:
-            t1 = datetime.datetime.strptime(open_time, "%Y-%m-%d %H:%M:%S")
-            now_dt = datetime.datetime.now(tz_bj)
-            dur_mins = int((now_dt - t1).total_seconds() / 60)
-            duration_str = f"{dur_mins}分钟" if dur_mins < 60 else f"{dur_mins//60}时{dur_mins%60}分"
-        except Exception:
-            duration_str = "--"
+        held_seconds = duration_seconds(c_ts, datetime.datetime.now(tz_bj).timestamp())
+        duration_str = format_duration(held_seconds)
 
         trades_lifecycle.append({
             "id": f"holding_{inst}_{side}",
+            "instId":inst_id,"pos_id":str(p.get("posId") or ""),"environment_id":env.identity,"environment":env.mode,
             "inst": inst,
             "side": side,
-            "lever": f"{lever}x",
+            "lever": f"{lever:g}x" if lever is not None else "--",
             "strategy": strat_tag,
             "margin": margin_usdt,
             "sz": pos_sz,
@@ -129,6 +170,7 @@ def build_lifecycle_ledger():
             "net_pnl": round(upl, 2),
             "roi_pct": roi_pct,
             "duration": duration_str,
+            "duration_seconds": held_seconds,
             "status": "holding",
             "exit_reason": "⏳ 运行监控中"
         })
@@ -152,102 +194,106 @@ def build_lifecycle_ledger():
         
         open_px = float(h.get("openAvgPx", 0) or 0)
         close_px = float(h.get("closeAvgPx", 0) or 0)
-        gross_pnl = float(h.get("pnl", 0) or 0)
-        fee = float(h.get("fee", 0) or 0)
-        net_pnl = round(gross_pnl + fee, 2)
-        lever = int(float(h.get("lever", "3") or 3))
-        
-        # Calculate Margin & Real Position Size
+        from scripts.ledger_accounting import receipt_financials
+        from scripts.evolution_evidence import observed
+        actual_leverage = observed(h.get("lever"))
+        lever = actual_leverage if actual_leverage is not None and actual_leverage > 0 else None
         ct_val = get_ct_val(inst)
-        close_pos_sz = float(h.get("closeTotalPos", 0) or h.get("openMaxPos", 0) or 0)
-        
-        if close_pos_sz > 0 and open_px > 0 and ct_val > 0:
-            notional = close_pos_sz * ct_val * open_px
-            margin_usdt = round(notional / lever, 2) if lever > 0 else round(notional, 2)
-        else:
-            pnl_ratio = float(h.get("pnlRatio", 0) or 0)
-            margin_usdt = 500.0 # Standard fallback
-            if pnl_ratio != 0:
-                est_margin = abs(gross_pnl / pnl_ratio)
-                margin_usdt = round(est_margin, 2)
-        
-        roi_pct = round((net_pnl / margin_usdt * 100) if margin_usdt > 0 else 0.0, 2)
+        close_pos_sz = observed(h.get("closeTotalPos"))
+        amounts = receipt_financials(h, entry_price=open_px, size=close_pos_sz,
+                                    contract_value=ct_val, leverage=lever)
+        gross_pnl, fee, funding_fee, net_pnl, margin_usdt, roi_pct = (
+            amounts[k] for k in ('gross_pnl', 'fee', 'funding_fee', 'net_pnl', 'margin', 'roi_pct'))
 
-        # Duration
-        try:
-            t1 = datetime.datetime.strptime(open_time, "%Y-%m-%d %H:%M:%S")
-            t2 = datetime.datetime.strptime(close_time, "%Y-%m-%d %H:%M:%S")
-            dur_mins = int((t2 - t1).total_seconds() / 60)
-            duration_str = f"{dur_mins}分钟" if dur_mins < 60 else f"{dur_mins//60}时{dur_mins%60}分"
-        except Exception:
-            duration_str = "--"
+        # Preserve sub-minute elapsed time from the exchange's millisecond receipts.
+        held_seconds = duration_seconds(c_ts, u_ts)
+        duration_str = format_duration(held_seconds)
 
         # Strategy tag
-        strat_tag = "🌊 顺势做多" if side == "多" else "⚡ 阻力高空"
+        # Strategy source is resolved after complete lifecycle fill reconciliation.
         
-        # Accurate Exit Reason Inference via Matched Close Order Attributes
-        exit_type = str(h.get("type", ""))
-        if exit_type == "3":
-            exit_reason = "💥 强平出场"
-        else:
-            # Match filled close order within 5000ms window
-            u_ms = int(h.get("uTime", 0) or 0)
-            matched_close = next(
-                (o for o in close_orders if o.get("instId") == inst_id and o.get("posSide") == direction and abs(int(o.get("uTime", 0) or 0) - u_ms) < 5000),
-                None
-            )
-            if matched_close:
-                algo_id = matched_close.get("algoId")
-                cl_ord_id = str(matched_close.get("clOrdId", ""))
-                
-                if algo_id:
-                    if net_pnl > 3.0:
-                        exit_reason = "🎯 目标止盈达成"
-                    elif net_pnl < -1.0:
-                        exit_reason = "🛑 触发云端止损"
-                    else:
-                        exit_reason = "🛡️ 移动止损保本出场"
-                elif cl_ord_id.startswith("O") or "CLI" in matched_close.get("tag", ""):
-                    if net_pnl > 3.0:
-                        exit_reason = "✨ 移动止盈锁利"
-                    elif net_pnl < -1.0:
-                        exit_reason = "🛑 策略风控止损"
-                    else:
-                        exit_reason = "⏱️ 超时/保本平仓"
-                else:
-                    exit_reason = "🎯 目标止盈达成" if net_pnl > 3.0 else ("🛑 止损离场" if net_pnl < -1.0 else "🛡️ 保本平仓")
-            else:
-                exit_reason = "🎯 目标止盈达成" if net_pnl > 3.0 else ("🛑 止损出场" if net_pnl < -1.0 else "🛡️ 保本平仓")
+        attribution=close_reason(h,attribution_inputs['orders'],algos=attribution_inputs['algos'],executions=attribution_inputs['executions'],scope=env.identity)
+        previous=next((row for row in old_trades if row.get('id')==f'pos_hist_{u_ts}_{inst}'),{})
+        tier={'unknown':0,'partial':1,'corroborated':2,'mixed':3,'verified':3}
+        if tier.get(previous.get('attribution_status'),0)>tier.get(attribution['attribution_status'],0):
+            for field in ('exit_reason','exit_source','exit_evidence','attribution_status','close_order_ids','close_order_sources','attribution_note'):
+                if field in previous:attribution[field]=previous[field]
 
+        allocation = reconcile_fill_fees(h, fill_archive, peers=pos_history, active_positions=pos_data)
+        origin = strategy_origin(h,fill_archive,origins,allocation.get("fee_reconciliation"))
+        strat_tag = origin["strategy"]
+        opening_order_ids = list((allocation.get("fee_reconciliation") or {}).get("opening_order_ids") or [])
+        archived_fills = [fill for rows in fill_archive.by_instrument.values() for fill in rows]
+        opening_trade_ids = [str(f.get("tradeId")) for f in archived_fills if isinstance(f, dict)
+                             and str(f.get("ordId") or "") in set(opening_order_ids) and f.get("tradeId")]
+        linked_decisions = [origin.get("decision_id")] if origin.get("decision_id") else []
+        evidence_status = "complete" if origin.get("strategy_evidence") == "opening_fill_order_decision_link" and opening_order_ids and linked_decisions else "partial"
+        exit_snapshot = {k: h.get(k) for k in ("instId", "direction", "openAvgPx", "closeAvgPx", "closeTotalPos", "lever", "cTime", "uTime", "pnl", "fee", "fundingFee") if h.get(k) is not None}
         trades_lifecycle.append({
             "id": f"pos_hist_{u_ts}_{inst}",
+            "instId":inst_id,"pos_id":str(h.get("posId") or ""),"closed_size":close_pos_sz,"environment_id":env.identity,"environment":env.mode,
             "inst": inst,
             "side": side,
-            "lever": f"{lever}x",
+            "lever": f"{lever:g}x" if lever is not None else "--",
             "strategy": strat_tag,
+            "strategy_evidence": origin["strategy_evidence"],
+            "strategy_decision_id": origin.get("decision_id"),
+            "decision_id": origin.get("decision_id"),
+            "candidate_id": origin.get("candidate_id"),
+            "strategy_version": origin.get("strategy_version") or origin.get("candidate_version"),
+            "setup": origin.get("setup") or origin.get("strategy_type"),
+            "opening_order_ids": opening_order_ids,
+            "opening_trade_ids": sorted(set(opening_trade_ids)),
+            "opening_features": origin.get("opening_features") or {},
+            "news_snapshot": origin.get("news_snapshot") or {},
+            "evidence_status": evidence_status,
+            "strategy_type": origin.get("strategy_type") or origin.get("setup") or "unknown",
+            "horizon": origin.get("horizon", "unknown"),
             "margin": margin_usdt,
             "sz": 0,
             "open_time": open_time,
             "open_px": round(open_px, 4),
             "close_time": close_time,
             "close_px": round(close_px, 4),
-            "gross_pnl": round(gross_pnl, 2),
-            "open_fee": round(fee / 2.0, 4),
-            "close_fee": round(fee / 2.0, 4),
-            "fee": round(fee, 2),
+            "exit_snapshot": exit_snapshot,
+            "gross_pnl": gross_pnl,
+            "open_fee": None,
+            "close_fee": None,
+            "funding_fee": funding_fee,
+            "accounting_basis": amounts["accounting_basis"],
+            "fee_allocation": "unknown_until_fill_reconciliation",
+            "fee": fee,
             "pnl": net_pnl,
             "net_pnl": net_pnl,
             "roi": roi_pct,
             "roi_pct": roi_pct,
             "duration": duration_str,
+            "duration_seconds": held_seconds,
             "status": "closed",
-            "exit_reason": exit_reason
+            "close_notification_status": previous.get("close_notification_status", "legacy") if previous else "pending",
+            **attribution,
+            **allocation
         })
+
+    # Preserve old finalized history; replace stale holding rows only with verified data.
+    fresh_ids={row['id'] for row in trades_lifecycle}
+    final_keys={(row.get('instId'),row.get('side'),row.get('open_time')) for row in trades_lifecycle if row.get('status')=='closed'}
+    current_keys={(row.get('instId'),row.get('side')) for row in trades_lifecycle if row.get('status')=='holding'}
+    for row in old_trades:
+        if row.get('id') in fresh_ids:continue
+        if row.get('status')=='closed' and str(row.get('close_time',''))>=reset_time:
+            trades_lifecycle.append(row)
+        elif row.get('status') in {'holding','closed_pending'}:
+            inst=row.get('instId',str(row.get('inst',''))+'-USDT-SWAP')
+            if (inst,row.get('side'),row.get('open_time')) not in final_keys and (inst,row.get('side')) not in current_keys:
+                trades_lifecycle.append(row)
+    trades_lifecycle=ledger_monitor.project_rows(trades_lifecycle,env.identity,positions=pos_data)
+    trades_lifecycle.sort(key=lambda row:(row.get('status')=='holding',row.get('confirmed_close_at') or row.get('close_time') or row.get('open_time') or ''),reverse=True)
 
     fd, tmp_path = tempfile.mkstemp(prefix=".ledger-", suffix=".tmp", dir=DATA_DIR)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(trades_lifecycle, f, ensure_ascii=False, indent=2)
+            json.dump(trades_lifecycle, f, ensure_ascii=False, indent=2, allow_nan=False)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, LEDGER_JSON_FILE)
@@ -255,17 +301,33 @@ def build_lifecycle_ledger():
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
+    try:
+        from scripts.horizon_stats import write as write_horizon_stats
+        write_horizon_stats(trades_lifecycle)
+    except Exception:
+        pass
+
+    # The monitoring worker never emits trade notifications.
+    if not notify:
+        return trades_lifecycle
     # Notify newly closed trades via QQ
     try:
         from qq_notifier import notify_trade_close
         for t in trades_lifecycle:
-            if t["id"] not in existing_closed_ids and t.get("status") == "closed":
+            if t.get("status") == "closed" and (t.get("close_notification_status") == "pending" or t["id"] not in existing_closed_ids):
+                if t.get("net_pnl") is None:
+                    continue  # Keep notification pending until settlement is observable.
                 notify_trade_close(
                     inst=t.get("inst", "CRYPTO"),
                     pnl=float(t.get("pnl", 0.0) or 0.0),
                     stage=t.get("exit_reason", "平仓结清"),
-                    exit_px=float(t.get("close_px", 0.0) or 0.0)
+                    exit_px=float(t.get("close_px", 0.0) or 0.0),
+                    roi_pct=t.get("roi_pct"),
+                    duration_str=str(t.get("duration", "")),
                 )
+                t["close_notification_status"] = "sent"
+                # The read-only worker may discover the close first; persist notification acknowledgement.
+                ledger_monitor.atomic("trading_ledger.json", trades_lifecycle)
     except Exception as e:
         print(f"[Ledger Sync Notify Warning] {e}")
 

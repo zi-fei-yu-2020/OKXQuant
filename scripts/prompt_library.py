@@ -28,7 +28,7 @@ TEMPLATE_VARIABLES_METADATA = [
         "label": "自进化实战心法",
         "category": "自进化",
         "description": "注入每日复盘根据历史平仓台账提炼的核心实战心法、避坑指南与痛点归因",
-        "sample": "# R20 AI 交易大脑长期记忆与启发式心法\n1. [2026-09-04] 4H主升浪中回调即是做多机会，严禁盲目摸顶开空...",
+        "sample": "# OKXQuant AI 交易大脑长期记忆与启发式心法\n1. [2026-09-04] 4H主升浪中回调即是做多机会，严禁盲目摸顶开空...",
     },
     {
         "key": "market_matrix",
@@ -76,8 +76,8 @@ TEMPLATE_VARIABLES_METADATA = [
         "key": "strategy_version",
         "label": "系统版本号",
         "category": "系统环境",
-        "description": "当前 R20 Quantum Trader 交易引擎版本",
-        "sample": "6.5.2",
+        "description": "当前 OKXQuant 交易引擎版本",
+        "sample": "0.1.0",
     },
     {
         "key": "timezone",
@@ -95,13 +95,14 @@ MAX_REVISIONS = 100
 MAX_MODULES_PER_PIPELINE = 40
 _SECTION_RE = re.compile(r"(?m)(?=^={0,30}\s*【[^\n】]+】[^\n]*$)")
 
+from scripts.trading_prompt import STYLE_SYSTEM, STYLE_USER
+
 PRESETS: dict[str, dict[str, Any]] = {
     "stable": {
-        "id": "stable", "name": "全维度波段强化版", "description": "基于 1H~4H 宏观多空趋势、因果微积分、定积分能量、概率风险与智能加仓的量化决策方案（系统唯一主策略）。", "editable": True,
-        "trading_system": """【交易风格：全维度波段强化】\n所有 P0 硬约束保持不变，但不得把“稳健”解释为长期空仓。对 4H/1H 同向、ADX≥18、价格几何与真实 R:R 合法的候选进行相对排序；P2/P3 轻微分歧以降低保证金处理。若存在可审计的最佳顺势候选，应果断给出小仓决策。""",
-        "trading_user": """【全维度波段强化裁决偏好】\n优先顺应 4H/1H 同向趋势，并引用具体 1H v/a/j/I、E/A、延续或击穿概率及 VaR/CVaR。减速只有在速度趋零、结构转 CHOP 或尾部风险极端时才否决；普通回抽优先作为限价入场定位。""",
-        "evolution_system": """【全维度波段复盘风格】\n优先识别回撤、过度交易、追价和低质量入场，但只使用真实可观测证据。小样本、数理快照缺失或因果不可辨时 NO_CHANGE；任何记忆都不得成为绕过硬风控的新阈值。""",
-        "evolution_user": """【全维度波段进化任务】\n评估信号一致性、风险预算、手续费、入场与退出质量；只有多个独立样本支持时才沉淀新经验，否则保留旧记忆并提出需要补充的证据。""",
+        "id": "stable", "name": "全维度波段·证据优先", "description": "审查支持证据、反证与失效条件，无优势时等待；执行层控制最终风险。", "editable": True,
+        "trading_system": STYLE_SYSTEM, "trading_user": STYLE_USER,
+        "evolution_system": "仅根据已确认交易与同期快照提出待验证假设；小样本或缺少数理快照时 NO_CHANGE，不宣称因果或胜率提升。",
+        "evolution_user": "区分事实与假设，核对费用、回撤和执行质量；新经验进入候选库，不自动覆盖运行记忆。",
     },
 }
 
@@ -164,7 +165,8 @@ def compile_modules(modules: list[dict[str, Any]]) -> str:
 def base_template_modules(text: str, pipeline: str) -> list[dict[str, Any]]:
     modules = text_to_modules(text, "base", locked=False)
     for module in modules:
-        module["locked"] = False
+        from scripts.trading_prompt import PROTECTED_TITLES
+        module["locked"] = pipeline.startswith("trading_") and module["title"].rstrip(":：") in PROTECTED_TITLES
     return modules
 
 
@@ -177,6 +179,16 @@ def _clean_pipelines(raw: Any, legacy: dict[str, Any]) -> dict[str, list[dict[st
     return result
 
 
+# Named preset carries an immutable execution binding, not just persuasive text.
+PRESETS['small300'] = {**copy.deepcopy(PRESETS['stable']), 'id':'small300',
+    'name':'300U 小资金 · 风险预算型', 'description':'资金计算基数最多300U，单笔风险0.5%，单标的保证金30U，总保证金90U，最多2个标的，实际杠杆不超过3倍。切换后由执行网关强制生效。',
+    'editor_mode':'advanced', 'execution_profile':'small300', 'pipelines':{},
+    'trading_system':'以小资金成本效率为优先：只提交可以核验的结构计划；按执行预算裁剪数量，最小合约不能满足预算时跳过。评分不是胜率，不追求零不确定性。',
+    'trading_user':'优先审查本轮已触发的程序草案；已满足的等待条件应重新评估。允许明确残余风险，只要结构失效、成本后盈亏比和执行预算均成立。不要为了增加成交而编造依据。',
+    'evolution_system':'仅用真实结算和可追溯成交证据复盘，候选不自动晋级。',
+    'evolution_user':'分别统计费用拖累、错失候选、保护回撤与执行拒绝；小样本保持NO_CHANGE。'}
+
+
 def _clean_profile(raw: dict[str, Any], profile_id: str | None = None) -> dict[str, Any]:
     now = _now()
     result = copy.deepcopy(EMPTY_CUSTOM)
@@ -184,6 +196,8 @@ def _clean_profile(raw: dict[str, Any], profile_id: str | None = None) -> dict[s
     result["id"] = profile_id or str(raw.get("id") or f"custom-{uuid.uuid4().hex[:10]}")
     result["name"] = str(result.get("name") or "自定义方案").strip()[:60]
     result["description"] = str(result.get("description") or "").strip()[:240]
+    result["execution_profile"] = "small300" if result["id"]=="small300" else str(raw.get("execution_profile") or "standard")
+    if result["execution_profile"] not in ("standard","small300"): raise ValueError("Unknown execution preset")
     result["editable"] = True
     result["enabled"] = bool(result.get("enabled", True))
     result["editor_mode"] = str(raw.get("editor_mode") or ("advanced" if any(raw.get(k) for k in TEMPLATE_KEYS) else "simple"))
@@ -271,8 +285,8 @@ def resolve_profile(profile: dict[str, Any]) -> dict[str, Any]:
     if resolved.get("editor_mode") != "simple": return resolved
     policy = resolved.get("simple_policy") or {}; strategy = str(policy.get("strategy") or "").strip(); review = str(policy.get("review_focus") or "").strip()
     participation = {"conservative":"稳健参与，证据不足时等待", "balanced":"均衡参与高质量机会", "active":"积极参与证据完整的趋势机会"}.get(policy.get("participation"), "均衡参与高质量机会")
-    evidence = {"strict":"要求多周期、动力学、能量与概率风险严格共振", "balanced":"允许轻微证据分歧但必须可解释", "trend":"趋势与动力学优先，风险异常仍等待"}.get(policy.get("evidence"), "要求多周期、动力学、能量与概率风险严格共振")
-    risk = {"low":"优先使用允许风险区间低位", "middle":"优先使用允许风险区间中位", "high":"强信号可使用允许风险区间高位但绝不突破硬上限"}.get(policy.get("risk_budget"), "优先使用允许风险区间中位")
+    evidence = {"strict":"要求可核验的支持、反证和失效条件，不要求所有指标一致", "balanced":"允许轻微证据分歧但必须可解释", "trend":"趋势与动力学优先，风险异常仍等待"}.get(policy.get("evidence"), "要求可核验的支持、反证和失效条件，不要求所有指标一致")
+    risk = {"low":"优先使用允许风险区间低位", "middle":"优先使用允许风险区间中位", "high":"仅提出风险区间偏好，实际数量由执行层按最终止损预算计算"}.get(policy.get("risk_budget"), "优先使用允许风险区间中位")
     resolved["trading_system"] = f"【用户策略偏好·简单模式】\n{participation}；{evidence}；{risk}。\n{strategy}".strip()
     resolved["trading_user"] = ""
     resolved["evolution_system"] = f"【用户复盘关注·简单模式】\n围绕用户策略检查执行一致性，不得修改 P0、OCO、JSON 契约或风险硬门禁。\n{review or strategy}".strip()
@@ -328,6 +342,14 @@ def validate_profile(profile: dict[str, Any]) -> dict[str, Any]:
                 break
     if total > MAX_PROFILE_CHARS: errors.append(f"四类模板合计不得超过 {MAX_PROFILE_CHARS} 字符")
     if not total and not pipelines and profile.get("editor_mode") != "simple": warnings.append("当前方案四类附加模板均为空，将只使用基础提示词")
+    from scripts.trading_prompt import preference_layers
+    _, composition_warnings, allow_open = preference_layers(resolve_profile(profile))
+    for item in composition_warnings:
+        if item.get('code') == 'preference_conflict':
+            errors.append('交易偏好与基础契约冲突：' + ', '.join(item.get('reasons', [])))
+        elif item.get('code') == 'legacy_builtin_reference_refreshed':
+            warnings.append('识别到旧内置引用；运行时采用新版基础契约，保存文件不变')
+    if not allow_open and not errors: errors.append('交易偏好无法安全组合，禁止新增仓位')
     return {"valid": not errors, "errors": list(dict.fromkeys(errors)), "warnings": warnings, "characters": module_total if pipelines else total}
 
 
@@ -421,23 +443,27 @@ def rollback_profile(profile_id: str, revision_id: str) -> dict[str, Any]:
 
 def export_profile(profile_id: str) -> dict[str, Any]:
     profile = get_profile(profile_id)
-    return {"format": "r20-prompt-profile", "version": 3, "exported_at": _now(), "profile": {k: profile.get(k) for k in ("name", "description", "editor_mode", "pipelines", "simple_policy", *TEMPLATE_KEYS)}}
+    return {"format": "okxquant-prompt-profile", "version": 3, "exported_at": _now(), "profile": {k: profile.get(k) for k in ("name", "description", "editor_mode", "pipelines", "simple_policy", "execution_profile", *TEMPLATE_KEYS)}}
 
 
 def import_profile(payload: dict[str, Any], name_override: str = "") -> dict[str, Any]:
-    if payload.get("format") != "r20-prompt-profile" or not isinstance(payload.get("profile"), dict): raise ValueError("无效的 R20 提示词方案文件")
+    if payload.get("format") != "okxquant-prompt-profile" or not isinstance(payload.get("profile"), dict): raise ValueError("无效的 OKXQuant 提示词方案文件")
     source = payload["profile"]
+    binding=source.get('execution_profile') or 'standard'
+    if binding not in ('standard','small300'):raise ValueError('Unknown imported execution preset')
+    source_id='small300' if binding=='small300' else 'stable'
     if isinstance(source.get("pipelines"), dict) and any(source.get("pipelines", {}).values()):
-        profile=create_profile(name_override or str(source.get("name") or "导入方案"),str(source.get("description") or ""),"stable","导入模块方案")
+        profile=create_profile(name_override or str(source.get("name") or "导入方案"),str(source.get("description") or ""),source_id,"导入模块方案")
         return update_profile(profile["id"],{"editor_mode":"modules","pipelines":source["pipelines"]},"导入模板构成")
     if source.get("editor_mode") == "simple" or (not source.get("editor_mode") and source.get("simple_policy")):
-        profile = create_profile(name_override or str(source.get("name") or "导入方案"), str(source.get("description") or ""), "stable", "导入简单方案")
+        profile = create_profile(name_override or str(source.get("name") or "导入方案"), str(source.get("description") or ""), source_id, "导入简单方案")
         return update_profile(profile["id"], {"editor_mode": "simple", "simple_policy": source.get("simple_policy") or {}}, "导入简单策略")
-    return create_profile(name_override or str(source.get("name") or "导入方案"), str(source.get("description") or ""), "stable", "导入方案") if not any(source.get(k) for k in TEMPLATE_KEYS) else _import_with_templates(source, name_override)
+    return create_profile(name_override or str(source.get("name") or "导入方案"), str(source.get("description") or ""), source_id, "导入方案") if not any(source.get(k) for k in TEMPLATE_KEYS) else _import_with_templates(source, name_override)
 
 
 def _import_with_templates(source: dict[str, Any], name_override: str) -> dict[str, Any]:
-    profile = create_profile(name_override or str(source.get("name") or "导入方案"), str(source.get("description") or ""), "stable", "导入方案")
+    source_id="small300" if source.get("execution_profile")=="small300" else "stable"
+    profile = create_profile(name_override or str(source.get("name") or "导入方案"), str(source.get("description") or ""), source_id, "导入方案")
     return update_profile(profile["id"], {key: source.get(key, "") for key in TEMPLATE_KEYS}, "导入模板内容")
 
 
@@ -449,7 +475,7 @@ def all_profiles() -> list[dict[str, Any]]:
     library = load_library()
     profiles_map = copy.deepcopy(library["profiles"])
     result = []
-    for pid in ("stable",):
+    for pid in ("stable", "small300"):
         if pid in profiles_map:
             result.append(profiles_map.pop(pid))
         elif pid in PRESETS:
@@ -457,6 +483,8 @@ def all_profiles() -> list[dict[str, Any]]:
             preset["editable"] = True
             result.append(preset)
     result.extend(profiles_map.values())
+    from scripts.execution_profiles import settings_for
+    for profile in result: profile["execution_settings"] = settings_for(profile)
     return result
 
 
@@ -469,7 +497,7 @@ def _variable_context(profile_name: str = "") -> dict[str, str]:
         pass
 
     ctx = {
-        "strategy_version": os.getenv("R20_VERSION", "6.5.2"),
+        "strategy_version": os.getenv("OKXQUANT_VERSION", "0.1.0"),
         "timezone": "Asia/Shanghai",
         "active_instruments": instruments,
         "profile_name": profile_name,
@@ -482,7 +510,7 @@ def _variable_context(profile_name: str = "") -> dict[str, str]:
         "market_matrix": "【六币种原生行情、技术指标与筹码矩阵已就绪】",
     }
 
-    # Load durable R20 Markdown trading memory if present
+    # Load durable OKXQuant Markdown trading memory if present
     ai_mem_md = ROOT / "data" / "AI_TRADING_MEMORY.md"
     if ai_mem_md.exists():
         try:
@@ -586,19 +614,22 @@ def apply_module_layout(base: str, profile: dict[str, Any], pipeline: str, label
     output.extend(module for module in base_modules if module["title"] not in matched)
     return compile_modules(output)
 
-    # Fail closed: preserve every live value that an older layout does not know.
-    output.extend(module for module in base_modules if module["title"] not in matched)
-    return compile_modules(output)
-
 
 def pipeline_view(base: str, profile: dict[str, Any], pipeline: str) -> list[dict[str, Any]]:
     base_modules = base_template_modules(base, pipeline)
     current = ((profile.get("pipelines") or {}).get(pipeline) if isinstance(profile.get("pipelines"), dict) else [])
+    if pipeline.startswith('trading_'):
+        from scripts.trading_prompt import legacy_reference, fingerprint
+        references={fingerprint(m['content']) for m in base_modules}
+        extra=[]
+        raw=current if isinstance(current,list) and current else text_to_modules(str(profile.get(pipeline) or ''),'custom')
+        for module in raw:
+            if fingerprint(module.get('content','')) in references or legacy_reference(module.get('content','')):continue
+            # Preserve custom edits visibly as lower-priority preferences, not stale locked rules.
+            extra.append({**module,'source':'custom','locked':False})
+        return base_modules+extra
     if isinstance(current, list) and any(item.get("source") == "base" for item in current):
-        view = copy.deepcopy(current)
-        for m in view:
-            m["locked"] = False
-        return view
+        return copy.deepcopy(current)
     return base_modules + text_to_modules(str(profile.get(pipeline) or ""), "custom")
 
 

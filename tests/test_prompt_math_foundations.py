@@ -1,4 +1,4 @@
-"""Regression tests for R20 mathematical foundations and prompt contracts."""
+"""Regression tests for OKXQuant mathematical foundations and prompt contracts."""
 from __future__ import annotations
 import sys
 import unittest
@@ -60,14 +60,14 @@ class PromptMathFoundationsTests(unittest.TestCase):
 
     def test_system_prompt_does_not_turn_soft_disagreement_into_permanent_wait(self):
         prompt = ai_brain_trader.SYSTEM_PROMPT
-        self.assertIn("不得被解释成“只有完美共振才允许交易”", prompt)
-        self.assertIn("P2/P3 的轻微分歧应通过减小保证金处理", prompt)
-        self.assertIn("减速”不是永久禁令", prompt)
-        self.assertIn("存在至少一个合法顺势候选时", prompt)
-        self.assertIn("目标 R:R ≥ 2.2", prompt)
+        self.assertIn("没有开仓数量、频率或置信度配额", prompt)
+        self.assertIn("不直接等同于开仓许可或永久禁令", prompt)
+        self.assertIn("存在分歧时说明它为何不推翻假设", prompt)
+        self.assertIn("程序", prompt)
+        self.assertNotIn("必须果断给出", prompt)
 
     def test_user_prompt_injects_real_1h_math_values(self):
-        missing = "/tmp/r20-test-file-does-not-exist"
+        missing = "/tmp/okxquant-test-file-does-not-exist"
         with patch.object(ai_brain_trader, "NEWS_SENTIMENT_FILE", missing), patch.object(ai_brain_trader, "AI_MEMORY_MD_FILE", missing), patch.object(ai_brain_trader, "AI_MEMORY_FILE", missing):
             prompt = ai_brain_trader.construct_full_market_prompt([self.package()], current_time_str="2026-09-01 12:00:00", usdt_available=4000)
         for required in ("1H:v=0.61,a=0.27,j=0.18,I=1.12", "E=1.44,A=0.82", "P续=73.5%", "VaR=1.36%,CVaR=1.82%"):
@@ -113,13 +113,13 @@ class PromptMathFoundationsTests(unittest.TestCase):
         self.assertEqual(act, "WAIT")
         self.assertIn("空头承压通道", reason)
 
-    def test_low_confidence_rejected(self):
+    def test_low_uncalibrated_score_does_not_reject_otherwise_valid_candidate(self):
         p = self.package()
         p["macro_4h"] = "4H_MACRO_BULL (大级别多头通道)"
-        d = {"action": "BUY_LONG", "confidence": 75.0, "entry_price": 60000, "stop_loss_price": 59000, "take_profit_price": 63000}
+        d = {"action": "BUY_LONG", "confidence": 70.0, "entry_price": 60000, "stop_loss_price": 59000, "take_profit_price": 63000}
         act, reason, rr = ai_brain_trader.validate_and_filter_decision(p, d, set(), {})
-        self.assertEqual(act, "WAIT")
-        self.assertIn("低于 80% 胜率质量硬门禁", reason)
+        self.assertEqual(act, "BUY_LONG")
+        self.assertEqual(reason, '')
 
     def test_adx_chop_rejected(self):
         p = self.package()
@@ -130,15 +130,15 @@ class PromptMathFoundationsTests(unittest.TestCase):
         self.assertEqual(act, "WAIT")
         self.assertIn("无序震荡杂波市", reason)
 
-    def test_doge_high_noise_threshold(self):
+    def test_doge_has_no_arbitrary_extra_score_threshold(self):
         p = self.package()
         p["name"] = "DOGE"
         p["instId"] = "DOGE-USDT-SWAP"
         p["macro_4h"] = "4H_MACRO_BULL (大级别多头通道)"
-        d = {"action": "BUY_LONG", "confidence": 82.0, "entry_price": 0.10, "stop_loss_price": 0.09, "take_profit_price": 0.13}
+        d = {"action": "BUY_LONG", "confidence": 78.0, "entry_price": 0.10, "stop_loss_price": 0.09, "take_profit_price": 0.13}
         act, reason, rr = ai_brain_trader.validate_and_filter_decision(p, d, set(), {})
-        self.assertEqual(act, "WAIT")
-        self.assertIn("DOGE高杂波标的置信度", reason)
+        self.assertEqual(act, "BUY_LONG")
+        self.assertEqual(reason, '')
 
     def test_valid_trend_aligned_order_accepted(self):
         p = self.package()

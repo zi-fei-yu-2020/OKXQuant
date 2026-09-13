@@ -1,4 +1,4 @@
-"""Custom R20 backup job runtime: archive, encrypt, verify, deliver and retain."""
+"""Custom OKXQuant backup job runtime: archive, encrypt, verify, deliver and retain."""
 from __future__ import annotations
 import base64
 import fnmatch
@@ -26,10 +26,10 @@ LOCAL_DIR = BACKUPS / "local"
 SQLITE_DIR = BACKUPS / "sqlite"
 MANIFEST_DIR = BACKUPS / "manifests"
 BJ_TZ = timezone(timedelta(hours=8))
-MAGIC = b"R20GCM2\x00"
-MANDATORY_EXCLUDES = (".git/**", ".env", ".okx/**", ".bypy/**", "backups/**", "logs/**", "data/r20_admin.db*", "data/*.enc", "data/.*_key", "data/credentials/**", "data/*.db-wal", "data/*.db-shm", "**/__pycache__/**", "*.pyc")
+MAGIC = b"OKXQuantGCM2\x00"
+MANDATORY_EXCLUDES = (".git/**", ".env", ".okx/**", ".bypy/**", "backups/**", "logs/**", "data/okxquant_admin.db*", "data/llm_models.json", "data/llm_providers.json", "data/*.enc", "data/.*_key", "data/credentials/**", "data/*.db-wal", "data/*.db-shm", "**/__pycache__/**", "*.pyc")
 SCOPE_PATHS = {
-    "data": ("data",), "scripts": ("scripts",), "dashboard": ("dashboard",), "r20_backend": ("r20_backend",), "r20_gateway": ("r20_gateway",),
+    "data": ("data",), "scripts": ("scripts",), "dashboard": ("dashboard",), "okxquant_backend": ("okxquant_backend",), "okxquant_gateway": ("okxquant_gateway",),
     "tests": ("tests",), "recovery_guide": ("RECOVERY_GUIDE.md",), "agent_profile": ("SOUL.md", "PROFILE.md", "AGENTS.md", "MEMORY.md"),
     "root_configs": ("README.md", "requirements.txt", "pyproject.toml", "docker-compose.yml", "Dockerfile", ".gitignore"),
 }
@@ -45,7 +45,7 @@ def retain_local_archive(source: Path, retention: int, destination_dir: Path | N
     destination_dir.mkdir(parents=True, exist_ok=True)
     destination = destination_dir / source.name
     shutil.copy2(source, destination)
-    prune(destination_dir.glob("r20_backup_*"), retention)
+    prune(destination_dir.glob("okxquant_backup_*"), retention)
     return destination
 
 
@@ -54,7 +54,7 @@ def sqlite_hot_backups(timestamp: str, retention: int, destination_dir: Path | N
     destination_dir.mkdir(parents=True, exist_ok=True)
     created: list[Path] = []
     for source in (ROOT / "data").glob("*.db"):
-        if source.name == "r20_admin.db": continue
+        if source.name == "okxquant_admin.db": continue
         destination = destination_dir / f"{source.stem}_{timestamp}.db"
         source_conn = sqlite3.connect(source)
         try:
@@ -88,7 +88,7 @@ def _tar_filter(patterns: list[str]):
 def create_archive(job: dict[str, Any], timestamp: str) -> tuple[Path, list[str]]:
     staging = BACKUPS / "staging"; staging.mkdir(parents=True, exist_ok=True)
     safe_id = "".join(c for c in str(job["id"]) if c.isalnum() or c in "-_")[:48]
-    path = staging / f"r20_backup_{safe_id}_{timestamp}.tar.gz"
+    path = staging / f"okxquant_backup_{safe_id}_{timestamp}.tar.gz"
     included: list[str] = []
     with tarfile.open(path, "w:gz", compresslevel=int(job.get("compression_level", 6))) as archive:
         for scope in job.get("scope", []):
@@ -126,7 +126,7 @@ def decrypt_archive(source: Path, key_env: str, destination: Path) -> Path:
     secret = os.getenv(key_env, "")
     if not secret: raise RuntimeError(f"解密需要环境变量 {key_env}")
     with source.open("rb") as inp:
-        if inp.read(len(MAGIC)) != MAGIC: raise RuntimeError("不是受支持的 R20 AES-256-GCM 归档")
+        if inp.read(len(MAGIC)) != MAGIC: raise RuntimeError("不是受支持的 OKXQuant AES-256-GCM 归档")
         salt, nonce, tag = inp.read(16), inp.read(12), inp.read(16)
         if len(salt) != 16 or len(nonce) != 12 or len(tag) != 16: raise RuntimeError("加密归档头损坏")
         decryptor = Cipher(algorithms.AES(_derive_key(secret, salt)), modes.GCM(nonce, tag)).decryptor()
@@ -137,13 +137,14 @@ def decrypt_archive(source: Path, key_env: str, destination: Path) -> Path:
 
 
 def verify_archive(path: Path, expected_sha256: str = "", key_env: str = "") -> dict[str, Any]:
+    BACKUPS.mkdir(parents=True, exist_ok=True)
     if not path.exists(): raise RuntimeError("归档文件不存在")
     checksum = calculate_sha256(path)
     if expected_sha256 and checksum != expected_sha256: raise RuntimeError("SHA256 校验失败")
     temp: Path | None = None; tar_path = path
     try:
         if path.name.endswith(".aes256"):
-            fd, temp_name = tempfile.mkstemp(prefix="r20-verify-", suffix=".tar.gz", dir=BACKUPS)
+            fd, temp_name = tempfile.mkstemp(prefix="okxquant-verify-", suffix=".tar.gz", dir=BACKUPS)
             os.close(fd); temp = Path(temp_name); tar_path = decrypt_archive(path, key_env, temp)
         with tarfile.open(tar_path, "r:gz") as archive:
             members = archive.getmembers()
@@ -171,13 +172,13 @@ def upload_baidu(source: Path, remote_path: str, retries: int) -> dict[str, Any]
 
 
 def _credentials(target: dict[str, Any]) -> dict[str, str]:
-    from r20_backend.backup_secrets import load_credentials
+    from okxquant_backend.backup_secrets import load_credentials
     return load_credentials(str(target.get("credential_ref") or f"backup:{target['id']}"))
 
 
 def _urlencoded_json(url: str, data: dict[str, Any] | None = None, timeout: int = 60) -> dict[str, Any]:
     body = urllib.parse.urlencode(data).encode() if data is not None else None
-    request = urllib.request.Request(url, data=body, headers={"User-Agent": "R20-Backup/6.2.0"}, method="POST" if body is not None else "GET")
+    request = urllib.request.Request(url, data=body, headers={"User-Agent": "OKXQuant-Backup/6.2.0"}, method="POST" if body is not None else "GET")
     with urllib.request.urlopen(request, timeout=timeout) as response: raw = response.read().decode("utf-8")
     payload = json.loads(raw or "{}")
     if payload.get("errno") not in (None, 0) or payload.get("error"):
@@ -186,16 +187,16 @@ def _urlencoded_json(url: str, data: dict[str, Any] | None = None, timeout: int 
 
 
 def _multipart_upload(url: str, field_name: str, filename: str, content: bytes, timeout: int = 180) -> dict[str, Any]:
-    boundary = f"----R20{hashlib.sha256(os.urandom(16)).hexdigest()[:24]}"
+    boundary = f"----OKXQuant{hashlib.sha256(os.urandom(16)).hexdigest()[:24]}"
     body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field_name}\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n").encode() + content + f"\r\n--{boundary}--\r\n".encode()
-    request = urllib.request.Request(url, data=body, headers={"Content-Type": f"multipart/form-data; boundary={boundary}", "User-Agent": "R20-Backup/6.2.0"}, method="POST")
+    request = urllib.request.Request(url, data=body, headers={"Content-Type": f"multipart/form-data; boundary={boundary}", "User-Agent": "OKXQuant-Backup/6.2.0"}, method="POST")
     with urllib.request.urlopen(request, timeout=timeout) as response: payload = json.loads(response.read().decode("utf-8") or "{}")
     if payload.get("errno") not in (None, 0): raise RuntimeError(str(payload.get("errmsg") or payload))
     return payload
 
 
 def upload_baidu_oauth(source: Path, target: dict[str, Any]) -> dict[str, Any]:
-    from r20_backend.backup_secrets import save_credentials
+    from okxquant_backend.backup_secrets import save_credentials
     creds = _credentials(target); app_key = creds.get("app_key", ""); app_secret = creds.get("app_secret", ""); refresh_token = creds.get("refresh_token", "")
     if not app_key or not app_secret or not refresh_token: raise RuntimeError("百度官方 OAuth 需要 App Key、App Secret 与 Refresh Token")
     token_url = "https://openapi.baidu.com/oauth/2.0/token?" + urllib.parse.urlencode({"grant_type":"refresh_token","refresh_token":refresh_token,"client_id":app_key,"client_secret":app_secret})
@@ -209,8 +210,8 @@ def upload_baidu_oauth(source: Path, target: dict[str, Any]) -> dict[str, Any]:
             chunk = handle.read(chunk_size)
             if not chunk: break
             block_list.append(hashlib.md5(chunk).hexdigest())
-    remote_dir = str(target.get("remote_path") or "R20_Backups").strip("/")
-    remote_path = f"/apps/R20QuantumTrader/{remote_dir}/{source.name}" if remote_dir else f"/apps/R20QuantumTrader/{source.name}"
+    remote_dir = str(target.get("remote_path") or "OKXQUANT_Backups").strip("/")
+    remote_path = f"/apps/OKXQuant/{remote_dir}/{source.name}" if remote_dir else f"/apps/OKXQuant/{source.name}"
     precreate_url = "https://pan.baidu.com/rest/2.0/xpan/file?method=precreate&access_token=" + urllib.parse.quote(access_token, safe="")
     common = {"path":remote_path,"size":source.stat().st_size,"isdir":0,"autoinit":1,"rtype":3,"block_list":json.dumps(block_list)}
     precreated = _urlencoded_json(precreate_url, common); upload_id = str(precreated.get("uploadid") or "")
@@ -300,11 +301,11 @@ def upload_webdav(source: Path, target: dict[str, Any]) -> dict[str, Any]:
 def deliver_target(source: Path, target: dict[str, Any]) -> dict[str, Any]:
     target_type=target["type"]
     if target_type in {"s3","oss","webdav","aliyundrive","quark"}:
-        from r20_backend.net_security import validate_outbound_url
+        from okxquant_backend.net_security import validate_outbound_url
         target = {**target, "endpoint": validate_outbound_url(str(target.get("endpoint") or ""), allow_private=bool(target.get("allow_private_endpoint")))}
     if target_type=="baidu":
         if target.get("auth_mode","bypy")=="oauth": return upload_baidu_oauth(source,target)
-        return upload_baidu(source,target.get("remote_path","R20_Backups"),int(target.get("retries",3)))
+        return upload_baidu(source,target.get("remote_path","OKXQUANT_Backups"),int(target.get("retries",3)))
     if target_type=="local":
         destination=(ROOT/str(target.get("path") or "backups/local")).resolve()
         return {"success":True,"attempts":1,"destination":str(retain_local_archive(source,int(target.get("retention",3)),destination).relative_to(ROOT))}

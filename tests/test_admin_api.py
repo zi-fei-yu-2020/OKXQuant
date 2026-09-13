@@ -3,14 +3,25 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-import r20_backend.app as app_module
-from r20_backend.admin_auth import AdminAuthStore
+import okxquant_backend.app as app_module
+from okxquant_backend.admin_auth import AdminAuthStore
 
 
 class AdminApiTests(unittest.TestCase):
     def setUp(self):
+        # These tests exercise API/RBAC, not host probes or Git fetch.
+        platform_patch = patch("platform.platform", return_value="Linux-test")
+        platform_patch.start()
+        self.addCleanup(platform_patch.stop)
+        git_patch = patch.object(app_module, "git", side_effect=lambda command:
+            "0\t0" if command[0] == "rev-list" else
+            "dev" if command[0] == "branch" else
+            "" if command[0] in {"fetch", "status"} else "test-commit")
+        git_patch.start()
+        self.addCleanup(git_patch.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.original = app_module.admin_auth
         app_module.admin_auth = AdminAuthStore(Path(self.temp.name) / "admin.db")
@@ -24,7 +35,34 @@ class AdminApiTests(unittest.TestCase):
     def login(self, username: str, password: str) -> dict[str, str]:
         response = self.client.post("/api/v1/admin/auth/login", json={"username": username, "password": password})
         self.assertEqual(response.status_code, 200, response.text)
-        return {"X-R20-Session": response.json()["session_token"]}
+        return {"X-OKXQuant-Session": response.json()["session_token"]}
+
+    def test_docker_about_uses_build_metadata_without_git(self):
+        headers = self.login("admin", "InitialAdmin123456")
+        with patch.dict("os.environ", {"OKXQUANT_DEPLOYMENT_MODE": "docker", "OKXQUANT_BUILD_BRANCH": "dev", "OKXQUANT_BUILD_COMMIT": "test-image-commit"}), patch.object(app_module, "git", side_effect=AssertionError("Docker image has no Git checkout")) as git:
+            response = self.client.get("/api/v1/admin/about", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["repository"]["branch"], "dev")
+        self.assertEqual(response.json()["repository"]["commit"], "test-image-commit")
+        git.assert_not_called()
+
+    def test_about_does_not_fetch_remote_repository(self):
+        with patch.dict("os.environ", {"OKXQUANT_DEPLOYMENT_MODE": ""}):
+            result = app_module.update_status(fetch_remote=False)
+        self.assertEqual(result["branch"], "dev")
+        self.assertFalse(any(call.args[0][0] == "fetch" for call in app_module.git.call_args_list))
+
+    def test_connection_diagnostic_cache_invalidates_on_credential_change(self):
+        from types import SimpleNamespace
+        headers = self.login("admin", "InitialAdmin123456")
+        settings = SimpleNamespace(okx_environment="demo", okx_api_key="test-key", okx_secret_key="secret-one", okx_passphrase="pass", okx_demo_configured=True, okx_live_configured=False)
+        with patch.object(app_module, "refresh_settings"), patch.object(app_module, "settings", settings), patch.object(app_module, "_OKX_RUNTIME_CACHE", {"payload": None, "at": 0, "mode": "demo"}), patch.object(app_module, "diagnose_okx_runtime", return_value={"selected_mode": "demo", "ready": True}) as diagnose:
+            for _ in range(2):
+                self.assertEqual(self.client.get("/api/v1/admin/okx/runtime", headers=headers).status_code, 200)
+            self.assertEqual(diagnose.call_count, 1)
+            settings.okx_secret_key = "secret-two"
+            self.assertEqual(self.client.get("/api/v1/admin/okx/runtime", headers=headers).status_code, 200)
+            self.assertEqual(diagnose.call_count, 2)
 
     def test_login_session_and_logout(self):
         headers = self.login("admin", "InitialAdmin123456")
@@ -43,16 +81,16 @@ class AdminApiTests(unittest.TestCase):
     def test_health_and_about_report_651_release(self):
         health=self.client.get("/api/v1/health")
         self.assertEqual(health.status_code,200,health.text)
-        self.assertEqual(health.json()["version"],"6.5.2")
+        self.assertEqual(health.json()["version"],"0.1.0")
         headers=self.login("admin","InitialAdmin123456")
         about=self.client.get("/api/v1/admin/about",headers=headers)
         self.assertEqual(about.status_code,200,about.text)
-        self.assertEqual(about.json()["product"]["version"],"6.5.2")
+        self.assertEqual(about.json()["product"]["version"],"0.1.0")
         versions={item["name"]:item["version"] for item in about.json()["components"]}
-        self.assertEqual(versions["FastAPI Control Plane"],"6.5.2")
+        self.assertEqual(versions["FastAPI Control Plane"],"0.1.0")
 
     def test_legacy_header_disabled_after_initialization(self):
-        response = self.client.get("/api/v1/admin/overview", headers={"X-R20-Admin-Token": "InitialAdmin123456"})
+        response = self.client.get("/api/v1/admin/overview", headers={"X-OKXQuant-Admin-Token": "InitialAdmin123456"})
         self.assertEqual(response.status_code, 401)
 
     def test_vue_console_endpoints_require_session_and_return_data(self):
@@ -73,7 +111,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertIn("decisions", runtime.json())
         logs = self.client.get("/api/v1/admin/logs?source=backend&lines=30", headers=headers)
         self.assertEqual(logs.status_code, 200)
-        self.assertEqual(logs.json()["file"], "r20_backend.log")
+        self.assertEqual(logs.json()["file"], "okxquant_backend.log")
         self.assertEqual(self.client.get("/api/v1/admin/logs?source=../../etc/passwd", headers=headers).status_code, 400)
         library = self.client.get("/api/v1/admin/prompt-library", headers=headers)
         self.assertEqual(library.status_code, 200)
@@ -105,10 +143,11 @@ class AdminApiTests(unittest.TestCase):
     def test_config_exposes_initial_capital_without_secret(self):
         root=self.login("admin","InitialAdmin123456")
         from unittest.mock import patch
-        with patch.object(app_module,"load_account_baseline",return_value={"initial_capital":4061.04,"reset_time":"2026-08-31 06:57:38"}):
+        with patch.object(app_module,"load_account_baseline",return_value={"initial_capital":4061.04,"reset_time":"2026-08-31 06:57:38","baseline_configured":True}):
             response=self.client.get("/api/v1/admin/config",headers=root)
         self.assertEqual(response.status_code,200,response.text)
         self.assertEqual(response.json()["editable"]["initial_capital"],4061.04)
+        self.assertTrue(response.json()["editable"]["baseline_configured"])
         self.assertEqual(response.json()["editable"]["initial_capital_reset_time"],"2026-08-31 06:57:38")
 
     def test_okx_oauth_device_flow_endpoints_are_session_protected(self):

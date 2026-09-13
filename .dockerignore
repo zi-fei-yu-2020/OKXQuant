@@ -1,0 +1,39 @@
+# Git and local development metadata
+.git
+.gitignore
+.gitattributes
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+.okx
+.bypy
+
+# Runtime state; Compose provides persistent volumes for these paths
+data/*
+!data/.gitkeep
+logs
+backups
+
+# OKXQuant Frontend dependencies and generated output
+okxquant_frontend/node_modules
+okxquant_frontend/dist
+okxquant_frontend/.ui-artifacts
+
+# Python and OS caches
+__pycache__
+*.py[cod]
+*.pyo
+.venv
+venv
+.pytest_cache
+.mypy_cache
+.DS_Store
+Thumbs.db
+
+# Editor and local tool state
+.vscode
+.idea
+.agents
+.claude

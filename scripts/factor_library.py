@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-R20 High-Alpha Quantitative Factor Library Engine (factor_library.py)
+OKXQuant High-Alpha Quantitative Factor Library Engine (factor_library.py)
 Calculates and normalizes 5 core factor pillars for crypto perpetuals:
 1. Momentum & Trend (ADX, RSI, EMA slope, KDJ)
 2. Volatility & Channel (ATR%, Bollinger Bandwidth)
@@ -9,12 +9,21 @@ Calculates and normalizes 5 core factor pillars for crypto perpetuals:
 5. Smart Money & Derivatives (Top100 Weighted Long Ratio, 24H Net Flow, Funding Rate, OI)
 """
 
+# Standalone scheduler children must not depend on an inherited PYTHONPATH.
+import sys as _sys
+from pathlib import Path as _Path
+_project_root = str(_Path(__file__).resolve().parents[1])
+if _project_root not in _sys.path:
+    _sys.path.insert(0, _project_root)
+
+
 import os
 import sys
 import json
 import time
 import subprocess
 import urllib.request
+import public_market as market
 from typing import Dict, Any, List, Optional
 from concurrent.futures import ThreadPoolExecutor
 
@@ -33,6 +42,7 @@ def safe_float(val: Any, default: float = 0.0) -> float:
     except (TypeError, ValueError):
         return default
 
+@market.observe_collection
 def compute_instrument_factors(item: Dict[str, Any], smart_money_pool: Dict[str, Any]) -> Dict[str, Any]:
     inst_id = item["instId"]
     name = item["name"]
@@ -130,222 +140,194 @@ def compute_instrument_factors(item: Dict[str, Any], smart_money_pool: Dict[str,
 
     # 1. Ticker & Depth (Orderbook)
     try:
-        req = urllib.request.Request(f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}", headers=headers)
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            d = json.loads(resp.read().decode("utf-8"))
-            if d.get("code") == "0" and d.get("data"):
-                t = d["data"][0]
-                factors["price"] = safe_float(t.get("last"))
-                factors["microstructure"]["bid_px"] = safe_float(t.get("bidPx", factors["price"]))
-                factors["microstructure"]["ask_px"] = safe_float(t.get("askPx", factors["price"]))
-                op = safe_float(t.get("open24h", 0))
-                factors["chg24h"] = round(((factors["price"] - op) / op * 100) if op > 0 else 0.0, 2)
+        d = market.get_json(f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}")
+        if d.get("code") == "0" and d.get("data"):
+            t = d["data"][0]
+            factors["price"] = safe_float(t.get("last"))
+            factors["microstructure"]["bid_px"] = safe_float(t.get("bidPx", factors["price"]))
+            factors["microstructure"]["ask_px"] = safe_float(t.get("askPx", factors["price"]))
+            op = safe_float(t.get("open24h", 0))
+            factors["chg24h"] = round(((factors["price"] - op) / op * 100) if op > 0 else 0.0, 2)
                 
-                # Spread
-                if factors["microstructure"]["ask_px"] > 0 and factors["price"] > 0:
-                    spread = factors["microstructure"]["ask_px"] - factors["microstructure"]["bid_px"]
-                    factors["microstructure"]["spread_pct"] = round(spread / factors["price"] * 100, 4)
+            # Spread
+            if factors["microstructure"]["ask_px"] > 0 and factors["price"] > 0:
+                spread = factors["microstructure"]["ask_px"] - factors["microstructure"]["bid_px"]
+                factors["microstructure"]["spread_pct"] = round(spread / factors["price"] * 100, 4)
     except Exception:
         pass
 
     # 2. Orderbook Depth (Top 5 Level Imbalance)
     try:
-        cmd = f"okx market orderbook {inst_id} --sz 5 --json 2>/dev/null"
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=3)
-        if res.stdout:
-            ob_data = json.loads(res.stdout)
-            if isinstance(ob_data, list) and ob_data:
-                bids = ob_data[0].get("bids", [])
-                asks = ob_data[0].get("asks", [])
-                total_bid_sz = sum(safe_float(b[1]) for b in bids)
-                total_ask_sz = sum(safe_float(a[1]) for a in asks)
-                if total_ask_sz > 0:
-                    ratio = round(total_bid_sz / total_ask_sz, 2)
-                    factors["microstructure"]["bid_ask_depth_ratio"] = ratio
-                    if ratio >= 1.5:
-                        factors["microstructure"]["depth_bias"] = "STRONG_BID"
-                    elif ratio <= 0.67:
-                        factors["microstructure"]["depth_bias"] = "STRONG_ASK"
+        ob_data = market.get_json(f"https://www.okx.com/api/v5/market/books?instId={inst_id}&sz=5")["data"]
+        if isinstance(ob_data, list) and ob_data:
+            bids = ob_data[0].get("bids", [])
+            asks = ob_data[0].get("asks", [])
+            total_bid_sz = sum(safe_float(b[1]) for b in bids)
+            total_ask_sz = sum(safe_float(a[1]) for a in asks)
+            if total_ask_sz > 0:
+                ratio = round(total_bid_sz / total_ask_sz, 2)
+                factors["microstructure"]["bid_ask_depth_ratio"] = ratio
+                if ratio >= 1.5:
+                    factors["microstructure"]["depth_bias"] = "STRONG_BID"
+                elif ratio <= 0.67:
+                    factors["microstructure"]["depth_bias"] = "STRONG_ASK"
     except Exception:
         pass
 
     # 3. 15M Candles -> ATR, RSI, VWAP Bias, Vol Ratio, OBV
     try:
-        req = urllib.request.Request(f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar=15m&limit=24", headers=headers)
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            d = json.loads(resp.read().decode("utf-8"))
-            if d.get("code") == "0" and d.get("data") and len(d["data"]) >= 15:
-                raw_candles = d["data"]
-                closes = [safe_float(c[4]) for c in reversed(raw_candles)]
-                highs = [safe_float(c[2]) for c in reversed(raw_candles)]
-                lows = [safe_float(c[3]) for c in reversed(raw_candles)]
-                vols = [safe_float(c[5]) for c in reversed(raw_candles)]
+        d = market.signal_json(f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar=15m&limit=24")
+        if d.get("code") == "0" and d.get("data") and len(d["data"]) >= 15:
+            raw_candles = d["data"]
+            closes = [safe_float(c[4]) for c in reversed(raw_candles)]
+            highs = [safe_float(c[2]) for c in reversed(raw_candles)]
+            lows = [safe_float(c[3]) for c in reversed(raw_candles)]
+            vols = [safe_float(c[5]) for c in reversed(raw_candles)]
 
-                # ATR 14
-                tr_list = []
-                for i in range(1, len(closes)):
-                    tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
-                    tr_list.append(tr)
-                if len(tr_list) >= 14:
-                    atr = sum(tr_list[-14:]) / 14
-                    factors["volatility_channel"]["atr_14"] = round(atr, 4)
-                    if factors["price"] > 0:
-                        factors["volatility_channel"]["atr_pct"] = round(atr / factors["price"] * 100, 2)
+            # ATR 14
+            tr_list = []
+            for i in range(1, len(closes)):
+                tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+                tr_list.append(tr)
+            if len(tr_list) >= 14:
+                atr = sum(tr_list[-14:]) / 14
+                factors["volatility_channel"]["atr_14"] = round(atr, 4)
+                if factors["price"] > 0:
+                    factors["volatility_channel"]["atr_pct"] = round(atr / factors["price"] * 100, 2)
 
-                # RSI 14
-                diffs = [closes[i] - closes[i-1] for i in range(1, len(closes))]
-                gains = [d if d > 0 else 0 for d in diffs]
-                losses = [-d if d < 0 else 0 for d in diffs]
-                if len(gains) >= 14:
-                    avg_g = sum(gains[-14:]) / 14
-                    avg_l = sum(losses[-14:]) / 14
-                    rs = (avg_g / avg_l) if avg_l > 0 else 100.0
-                    factors["trend_momentum"]["rsi_14"] = round(100.0 - (100.0 / (1.0 + rs)), 1)
+            # RSI 14
+            diffs = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+            gains = [d if d > 0 else 0 for d in diffs]
+            losses = [-d if d < 0 else 0 for d in diffs]
+            if len(gains) >= 14:
+                avg_g = sum(gains[-14:]) / 14
+                avg_l = sum(losses[-14:]) / 14
+                rs = (avg_g / avg_l) if avg_l > 0 else 100.0
+                factors["trend_momentum"]["rsi_14"] = round(100.0 - (100.0 / (1.0 + rs)), 1)
 
-                # VWAP Bias
-                pv_sum = sum(closes[i] * vols[i] for i in range(len(closes)))
-                v_sum = sum(vols)
-                if v_sum > 0:
-                    vwap = pv_sum / v_sum
-                    factors["trend_momentum"]["vwap_bias_pct"] = round((factors["price"] - vwap) / vwap * 100, 2)
+            # VWAP Bias
+            pv_sum = sum(closes[i] * vols[i] for i in range(len(closes)))
+            v_sum = sum(vols)
+            if v_sum > 0:
+                vwap = pv_sum / v_sum
+                factors["trend_momentum"]["vwap_bias_pct"] = round((factors["price"] - vwap) / vwap * 100, 2)
 
-                # Vol Ratio
-                if len(vols) >= 6:
-                    avg_v5 = sum(vols[-6:-1]) / 5
-                    if avg_v5 > 0:
-                        factors["volume_money_flow"]["vol_ratio_15m"] = round(vols[-1] / avg_v5, 2)
+            # Vol Ratio
+            if len(vols) >= 6:
+                avg_v5 = sum(vols[-6:-1]) / 5
+                if avg_v5 > 0:
+                    factors["volume_money_flow"]["vol_ratio_15m"] = round(vols[-1] / avg_v5, 2)
 
-                # OBV
-                obv = 0
-                for i in range(1, len(closes)):
-                    if closes[i] > closes[i-1]: obv += vols[i]
-                    elif closes[i] < closes[i-1]: obv -= vols[i]
-                factors["volume_money_flow"]["obv_flow"] = "BULL_FLOW" if obv > 0 else ("BEAR_FLOW" if obv < 0 else "NEUTRAL")
+            # OBV
+            obv = 0
+            for i in range(1, len(closes)):
+                if closes[i] > closes[i-1]: obv += vols[i]
+                elif closes[i] < closes[i-1]: obv -= vols[i]
+            factors["volume_money_flow"]["obv_flow"] = "BULL_FLOW" if obv > 0 else ("BEAR_FLOW" if obv < 0 else "NEUTRAL")
 
-                # Pillar 6: Calculus, Definite Integrals & Probability Theory (15M High-Resolution)
-                try:
-                    sys.path.append(os.path.join(WORKSPACE_DIR, "scripts"))
-                    from calculus_engine import calculate_calculus
-                    c_res = calculate_calculus(closes, highs, lows, vols)
-                    if c_res.get("valid"):
-                        # Calculus Dynamics
-                        factors["calculus_dynamics"]["velocity"] = c_res.get("velocity", 0.0)
-                        factors["calculus_dynamics"]["acceleration"] = c_res.get("acceleration", 0.0)
-                        factors["calculus_dynamics"]["impulse"] = c_res.get("impulse", 0.0)
-                        factors["calculus_dynamics"]["jerk"] = c_res.get("jerk", 0.0)
-                        factors["calculus_dynamics"]["regime"] = c_res.get("regime", "RANGE_LOW_VELOCITY")
-                        factors["calculus_dynamics"]["quality"] = c_res.get("quality", 0.0)
-                        factors["calculus_dynamics"]["direction"] = c_res.get("direction", 0)
+            # Pillar 6: Calculus, Definite Integrals & Probability Theory (15M High-Resolution)
+            try:
+                sys.path.append(os.path.join(WORKSPACE_DIR, "scripts"))
+                from calculus_engine import calculate_calculus
+                c_res = calculate_calculus(closes, highs, lows, vols)
+                if c_res.get("valid"):
+                    # Calculus Dynamics
+                    factors["calculus_dynamics"]["velocity"] = c_res.get("velocity", 0.0)
+                    factors["calculus_dynamics"]["acceleration"] = c_res.get("acceleration", 0.0)
+                    factors["calculus_dynamics"]["impulse"] = c_res.get("impulse", 0.0)
+                    factors["calculus_dynamics"]["jerk"] = c_res.get("jerk", 0.0)
+                    factors["calculus_dynamics"]["regime"] = c_res.get("regime", "RANGE_LOW_VELOCITY")
+                    factors["calculus_dynamics"]["quality"] = c_res.get("quality", 0.0)
+                    factors["calculus_dynamics"]["direction"] = c_res.get("direction", 0)
 
-                        # Definite Integrals
-                        d_int = c_res.get("definite_integrals", {})
-                        factors["definite_integrals"]["energy_integral"] = d_int.get("energy_integral", 0.0)
-                        factors["definite_integrals"]["deviation_area_integral"] = d_int.get("deviation_area_integral", 0.0)
-                        factors["definite_integrals"]["volume_action_integral"] = d_int.get("volume_action_integral", 0.0)
-                        factors["definite_integrals"]["integral_regime"] = d_int.get("integral_regime", "BALANCED_ENERGY")
+                    # Definite Integrals
+                    d_int = c_res.get("definite_integrals", {})
+                    factors["definite_integrals"]["energy_integral"] = d_int.get("energy_integral", 0.0)
+                    factors["definite_integrals"]["deviation_area_integral"] = d_int.get("deviation_area_integral", 0.0)
+                    factors["definite_integrals"]["volume_action_integral"] = d_int.get("volume_action_integral", 0.0)
+                    factors["definite_integrals"]["integral_regime"] = d_int.get("integral_regime", "BALANCED_ENERGY")
 
-                        # Probability Theory & Stochastic Modeling
-                        p_th = c_res.get("probability_theory", {})
-                        factors["probability_theory"]["skewness"] = p_th.get("skewness", 0.0)
-                        factors["probability_theory"]["kurtosis"] = p_th.get("kurtosis", 0.0)
-                        factors["probability_theory"]["continuation_prob_pct"] = p_th.get("continuation_prob_pct", 50.0)
-                        factors["probability_theory"]["breakdown_prob_pct"] = p_th.get("breakdown_prob_pct", 50.0)
-                        factors["probability_theory"]["var_95_pct"] = p_th.get("var_95_pct", 1.5)
-                        factors["probability_theory"]["cvar_95_pct"] = p_th.get("cvar_95_pct", 2.2)
-                        factors["probability_theory"]["prob_regime"] = p_th.get("prob_regime", "GAUSSIAN_BALANCED")
-                        factors["probability_theory"]["is_fat_tail"] = p_th.get("is_fat_tail", False)
-                except Exception:
-                    pass
+                    # Probability Theory & Stochastic Modeling
+                    p_th = c_res.get("probability_theory", {})
+                    factors["probability_theory"]["skewness"] = p_th.get("skewness", 0.0)
+                    factors["probability_theory"]["kurtosis"] = p_th.get("kurtosis", 0.0)
+                    factors["probability_theory"]["continuation_prob_pct"] = p_th.get("continuation_prob_pct", 50.0)
+                    factors["probability_theory"]["breakdown_prob_pct"] = p_th.get("breakdown_prob_pct", 50.0)
+                    factors["probability_theory"]["var_95_pct"] = p_th.get("var_95_pct", 1.5)
+                    factors["probability_theory"]["cvar_95_pct"] = p_th.get("cvar_95_pct", 2.2)
+                    factors["probability_theory"]["prob_regime"] = p_th.get("prob_regime", "GAUSSIAN_BALANCED")
+                    factors["probability_theory"]["is_fat_tail"] = p_th.get("is_fat_tail", False)
+            except Exception:
+                pass
     except Exception:
         pass
 
     # 3.5. 1H Candles -> 1H ATR & 1H RSI
     try:
-        req = urllib.request.Request(f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar=1H&limit=24", headers=headers)
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            d = json.loads(resp.read().decode("utf-8"))
-            if d.get("code") == "0" and d.get("data") and len(d["data"]) >= 15:
-                raw_1h = d["data"]
-                closes_1h = [safe_float(c[4]) for c in reversed(raw_1h)]
-                highs_1h = [safe_float(c[2]) for c in reversed(raw_1h)]
-                lows_1h = [safe_float(c[3]) for c in reversed(raw_1h)]
+        d = market.signal_json(f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar=1H&limit=24")
+        if d.get("code") == "0" and d.get("data") and len(d["data"]) >= 15:
+            raw_1h = d["data"]
+            closes_1h = [safe_float(c[4]) for c in reversed(raw_1h)]
+            highs_1h = [safe_float(c[2]) for c in reversed(raw_1h)]
+            lows_1h = [safe_float(c[3]) for c in reversed(raw_1h)]
 
-                tr_list_1h = []
-                for i in range(1, len(closes_1h)):
-                    tr = max(highs_1h[i] - lows_1h[i], abs(highs_1h[i] - closes_1h[i-1]), abs(lows_1h[i] - closes_1h[i-1]))
-                    tr_list_1h.append(tr)
-                if len(tr_list_1h) >= 14:
-                    atr_1h = sum(tr_list_1h[-14:]) / 14
-                    factors["volatility_channel"]["atr_1h"] = round(atr_1h, 4)
-                    if factors["price"] > 0:
-                        factors["volatility_channel"]["atr_1h_pct"] = round(atr_1h / factors["price"] * 100, 2)
+            tr_list_1h = []
+            for i in range(1, len(closes_1h)):
+                tr = max(highs_1h[i] - lows_1h[i], abs(highs_1h[i] - closes_1h[i-1]), abs(lows_1h[i] - closes_1h[i-1]))
+                tr_list_1h.append(tr)
+            if len(tr_list_1h) >= 14:
+                atr_1h = sum(tr_list_1h[-14:]) / 14
+                factors["volatility_channel"]["atr_1h"] = round(atr_1h, 4)
+                if factors["price"] > 0:
+                    factors["volatility_channel"]["atr_1h_pct"] = round(atr_1h / factors["price"] * 100, 2)
     except Exception:
         pass
 
-    # 4. OKX Official Indicators (ADX, KDJ, BBWidth, CMF)
-    for ind, key_path in [
-        ("adx", ("trend_momentum", "adx_1h")),
-        ("kdj", ("trend_momentum", "kdj_j")),
-        ("bbwidth", ("volatility_channel", "bb_width_1h")),
-        ("cmf", ("volume_money_flow", "cmf_1h"))
-    ]:
-        try:
-            cmd = f"okx market indicator {ind} {inst_id} --bar 1H --json 2>/dev/null"
-            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=3)
-            if res.stdout:
-                ind_res = json.loads(res.stdout)
-                if isinstance(ind_res, list) and ind_res:
-                    tfs = ind_res[0].get("data", [{}])[0].get("timeframes", {}).get("1H", {}).get("indicators", {})
-                    ind_key = ind.upper().replace("-", "")
-                    items = tfs.get(ind_key, [])
-                    if items:
-                        vals = items[0].get("values", {})
-                        if ind == "adx": factors[key_path[0]][key_path[1]] = safe_float(vals.get("adx"))
-                        elif ind == "kdj": factors[key_path[0]][key_path[1]] = safe_float(vals.get("j"))
-                        elif ind == "bbwidth": factors[key_path[0]][key_path[1]] = safe_float(vals.get("bbWidth"))
-                        elif ind == "cmf": factors[key_path[0]][key_path[1]] = safe_float(vals.get("cmf"))
-        except Exception:
-            pass
+    # Same official indicator service and CLI defaults, batched into one read.
+    try:
+        indicators = market.signal_indicators(inst_id)
+        for code, section, key, field in [
+            ("ADX", "trend_momentum", "adx_1h", "adx"),
+            ("KDJ", "trend_momentum", "kdj_j", "j"),
+            ("BBWIDTH", "volatility_channel", "bb_width_1h", "bbWidth"),
+            ("CMF", "volume_money_flow", "cmf_1h", "cmf"),
+        ]:
+            if code in indicators:
+                factors[section][key] = safe_float(indicators[code][0]["values"][field])
+    except Exception:
+        pass
 
     # 5. Derivatives & SmartMoney
     try:
-        req = urllib.request.Request(f"https://www.okx.com/api/v5/public/funding-rate?instId={inst_id}", headers=headers)
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            d = json.loads(resp.read().decode("utf-8"))
-            if d.get("code") == "0" and d.get("data"):
-                factors["smart_money_derivatives"]["funding_rate_pct"] = round(safe_float(d["data"][0].get("fundingRate")) * 100, 4)
+        d = market.get_json(f"https://www.okx.com/api/v5/public/funding-rate?instId={inst_id}")
+        if d.get("code") == "0" and d.get("data"):
+            factors["smart_money_derivatives"]["funding_rate_pct"] = round(safe_float(d["data"][0].get("fundingRate")) * 100, 4)
     except Exception:
         pass
 
     try:
-        req = urllib.request.Request(f"https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId={inst_id}", headers=headers)
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            d = json.loads(resp.read().decode("utf-8"))
-            if d.get("code") == "0" and d.get("data"):
-                usd = safe_float(d["data"][0].get("oiUsd", 0))
-                factors["smart_money_derivatives"]["oi_usd"] = f"{round(usd / 1e8, 2)}亿 U" if usd > 1e8 else f"{round(usd / 1e4, 1)}万 U"
+        d = market.get_json(f"https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId={inst_id}")
+        if d.get("code") == "0" and d.get("data"):
+            usd = safe_float(d["data"][0].get("oiUsd", 0))
+            factors["smart_money_derivatives"]["oi_usd"] = f"{round(usd / 1e8, 2)}亿 U" if usd > 1e8 else f"{round(usd / 1e4, 1)}万 U"
     except Exception:
         pass
 
     if ccy:
         try:
-            req = urllib.request.Request(f"https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio?ccy={ccy}&period=5m", headers=headers)
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                d = json.loads(resp.read().decode("utf-8"))
-                if d.get("code") == "0" and d.get("data") and len(d["data"]) > 0:
-                    factors["smart_money_derivatives"]["long_short_ratio"] = str(d["data"][0][1])
+            d = market.get_json(f"https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio?ccy={ccy}&period=5m")
+            if d.get("code") == "0" and d.get("data") and len(d["data"]) > 0:
+                factors["smart_money_derivatives"]["long_short_ratio"] = str(d["data"][0][1])
         except Exception:
             pass
 
         try:
-            req = urllib.request.Request(f"https://www.okx.com/api/v5/rubik/stat/taker-volume?ccy={ccy}&instType=CONTRACTS&period=5m", headers=headers)
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                d = json.loads(resp.read().decode("utf-8"))
-                if d.get("code") == "0" and d.get("data") and len(d["data"]) > 0:
-                    b_vol = safe_float(d["data"][0][1])
-                    s_vol = safe_float(d["data"][0][2])
-                    net_diff = b_vol - s_vol
-                    factors["volume_money_flow"]["taker_net_usd"] = f"{round(net_diff / 1e4, 1)}万 U"
+            d = market.get_json(f"https://www.okx.com/api/v5/rubik/stat/taker-volume?ccy={ccy}&instType=CONTRACTS&period=5m")
+            if d.get("code") == "0" and d.get("data") and len(d["data"]) > 0:
+                b_vol = safe_float(d["data"][0][1])
+                s_vol = safe_float(d["data"][0][2])
+                net_diff = b_vol - s_vol
+                factors["volume_money_flow"]["taker_net_usd"] = f"{round(net_diff / 1e4, 1)}万 U"
         except Exception:
             pass
 
@@ -473,39 +455,51 @@ def compute_instrument_factors(item: Dict[str, Any], smart_money_pool: Dict[str,
     return factors
 
 def update_factor_library() -> Dict[str, Any]:
-    """Fetch and calculate multi-pillar factor library snapshot for 6 instruments."""
-    # 1. Fetch Smart Money Pool
-    smart_money_pool = {}
-    try:
-        cmd = "okx smartmoney signal-overview-by-filter --instCcyList BTC,ETH,SOL,DOGE,SUI,LINK --json 2>/dev/null"
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=8)
-        if res.stdout:
-            d = json.loads(res.stdout).get("data", [])
-            smart_money_pool = {item.get("ccy"): item for item in d if item.get("ccy")}
-    except Exception as e:
-        print(f"[Factor Library] SmartMoney pool error: {e}")
-
-    # 2. Parallel Factor Computations
-    with ThreadPoolExecutor(max_workers=6) as executor:
-        results = list(executor.map(lambda item: compute_instrument_factors(item, smart_money_pool), TARGET_INSTRUMENTS))
-
-    snapshot = {
-        "timestamp": int(time.time()),
-        "time_str": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "instruments": results
-    }
-
-    # Atomic Write
-    try:
-        os.makedirs(DATA_DIR, exist_ok=True)
-        tmp_file = FACTOR_LIB_CACHE_FILE + ".tmp"
-        with open(tmp_file, "w", encoding="utf-8") as f:
-            json.dump(snapshot, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_file, FACTOR_LIB_CACHE_FILE)
-    except Exception as e:
-        print(f"[Factor Library] Cache write error: {e}")
-
-    return snapshot
+    market.begin_signal_frame()
+    """Single-flight refresh; a reused snapshot keeps its original timestamps."""
+    started = time.time()
+    deadline = time.monotonic() + 45  # Fits the scheduler's 55-second budget.
+    instruments = load_instruments()
+    scope = market.account_scope()
+    signature = market._digest(("factor-v2", instruments, scope))
+    with market.file_lock("factor-library-refresh", deadline):
+        try:
+            with open(FACTOR_LIB_CACHE_FILE, encoding="utf-8") as handle:
+                old = json.load(handle)
+            if (scope and old.get("collection_signature") == signature
+                    and old.get("data_status") == "fresh"
+                    and 0 <= time.time() - old["collection_started_at"] < 10
+                    and 0 <= time.time() - old["oldest_source_at"] < 20):
+                return old
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            pass
+        started = time.time()
+        # Credentialed Smart Money is kept outside the public HTTP transport.
+        smart_money_pool = {}
+        smart_money_ok = True
+        try:
+            rows = market.run_with_deadline(deadline, market.smart_money_overview,
+                                           [item.get("ccy") or item["name"] for item in instruments])
+            smart_money_pool = {item.get("ccy"): item for item in rows if item.get("ccy")}
+        except Exception as exc:
+            smart_money_ok = False
+            print(f"[Factor Library] SmartMoney read unavailable: {type(exc).__name__}")
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            results = list(executor.map(
+                lambda item: market.run_with_deadline(deadline, compute_instrument_factors, item, smart_money_pool), instruments))
+        fresh = smart_money_ok and all(
+            item.get("price", 0) > 0 and item["collection_quality"]["status"] == "fresh" for item in results)
+        snapshot = {
+            "timestamp": int(time.time()), "time_str": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "instruments": results, "collection_signature": signature,
+            "collection_started_at": started,
+            "oldest_source_at": min([started] + [i["collection_quality"]["oldest_source_at"] for i in results]),
+            "data_status": "fresh" if fresh else "partial",
+            "collection_duration_ms": round((time.time() - started) * 1000),
+        }
+        # Unique temporary files + one refresh lock avoid overlapping writers.
+        market.atomic_json(FACTOR_LIB_CACHE_FILE, snapshot)
+        return snapshot
 
 if __name__ == "__main__":
     snap = update_factor_library()

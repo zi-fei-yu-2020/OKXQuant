@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from r20_gateway.events import GatewayEvent
-from r20_gateway.store import GatewayStore
+from okxquant_gateway.events import GatewayEvent
+from okxquant_gateway.store import GatewayStore
 
 
 class GatewayStoreTests(unittest.TestCase):

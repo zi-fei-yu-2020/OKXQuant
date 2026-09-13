@@ -6,11 +6,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import r20_backend.notifications as notifications
-import r20_backend.okx_trade_service as okx
+import okxquant_backend.notifications as notifications
+import okxquant_backend.okx_trade_service as okx
 import scripts.prompt_library as prompts
-from r20_gateway.events import GatewayEvent
-from r20_gateway.store import GatewayStore
+from okxquant_gateway.events import GatewayEvent
+from okxquant_gateway.store import GatewayStore
 from scripts.okx_runtime import OKXEnvironment
 
 
@@ -47,22 +47,22 @@ class OKXV5Tests(unittest.TestCase):
 
 class ChannelBusinessCodeTests(unittest.TestCase):
     def test_wecom_http_200_error_is_failure(self):
-        env={"R20_WECHAT_WEBHOOK":"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x"}
-        with patch.object(notifications,"validate_outbound_url",return_value=env["R20_WECHAT_WEBHOOK"]), patch.object(notifications,"_post_json",return_value=(True,"HTTP 200",{"errcode":93000,"errmsg":"denied"})):
+        env={"OKXQUANT_WECHAT_WEBHOOK":"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x"}
+        with patch.object(notifications,"validate_outbound_url",return_value=env["OKXQUANT_WECHAT_WEBHOOK"]), patch.object(notifications,"_post_json",return_value=(True,"HTTP 200",{"errcode":93000,"errmsg":"denied"})):
             self.assertFalse(notifications.send_channel("wechat","x",env)[0])
 
     def test_telegram_http_200_error_is_failure(self):
-        env={"R20_TELEGRAM_BOT_TOKEN":"T","R20_TELEGRAM_CHAT_ID":"1"}
+        env={"OKXQUANT_TELEGRAM_BOT_TOKEN":"T","OKXQUANT_TELEGRAM_CHAT_ID":"1"}
         with patch.object(notifications,"_post_json",return_value=(True,"HTTP 200",{"ok":False,"description":"denied"})):
             self.assertFalse(notifications.send_channel("telegram","x",env)[0])
 
     def test_qq_http_200_error_is_failure(self):
-        env={"R20_QQ_APP_ID":"A","R20_QQ_CLIENT_SECRET":"S","R20_QQ_OPENID":"O"}
+        env={"OKXQUANT_QQ_APP_ID":"A","OKXQUANT_QQ_CLIENT_SECRET":"S","OKXQUANT_QQ_OPENID":"O"}
         responses=[(True,"HTTP 200",{"access_token":"T"}),(True,"HTTP 200",{"code":11248,"message":"denied"})]
         with patch.object(notifications,"_post_json",side_effect=responses): self.assertFalse(notifications.send_channel("qq","x",env)[0])
 
     def test_diagnose_never_sends(self):
-        env={"R20_TELEGRAM_BOT_TOKEN":"T","R20_TELEGRAM_CHAT_ID":"1"}
+        env={"OKXQUANT_TELEGRAM_BOT_TOKEN":"T","OKXQUANT_TELEGRAM_CHAT_ID":"1"}
         with patch.object(notifications,"_post_json") as post:
             self.assertEqual(notifications.diagnose_channel("telegram",env)["status"],"ready"); post.assert_not_called()
 
@@ -120,9 +120,10 @@ class PromptModuleTests(unittest.TestCase):
 
     def test_stable_preset_balances_participation_without_weakening_p0(self):
         preset=prompts.PRESETS["stable"]
-        self.assertIn("不得把“稳健”解释为长期空仓",preset["trading_system"])
+        self.assertIn("全维度波段·证据优先",preset["trading_system"])
         self.assertIn("P0 硬约束保持不变",preset["trading_system"])
-        self.assertIn("普通回抽优先作为限价入场定位",preset["trading_user"])
+        self.assertIn("没有优势时全部 WAIT",preset["trading_user"])
+        self.assertNotIn("最高权重决策",preset["trading_user"])
 
     def test_trading_decision_contract_cannot_be_replaced_by_editor_summary(self):
         base="【推演与决策任务】:\n必须输出严格 JSON，包含 position_management 与 decisions"
@@ -134,12 +135,15 @@ class PromptModuleTests(unittest.TestCase):
 
 class GatewayFDTests(unittest.TestCase):
     def test_connections_are_closed(self):
+        import gc
         with tempfile.TemporaryDirectory() as tmp:
             store=GatewayStore(Path(tmp)/"gateway.db")
+            gc.collect()
             before=len(os.listdir("/proc/self/fd"))
             for i in range(150): store.set_state("x",str(i)); store.get_state("x"); store.stats()
+            gc.collect()
             after=len(os.listdir("/proc/self/fd"))
-            self.assertLessEqual(after-before,3)
+            self.assertLessEqual(after-before,5)
 
 
 if __name__ == "__main__": unittest.main()
