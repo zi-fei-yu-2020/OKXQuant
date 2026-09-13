@@ -191,6 +191,15 @@ def _load(scope):
     if not path.exists(): return {'scope':scope,'version':VERSION,'items':{},'streak':0}
     raw=json.loads(path.read_text(encoding='utf8'))
     if not isinstance(raw,dict) or raw.get('scope')!=scope or not isinstance(raw.get('items'),dict):raise ValueError('Invalid WAIT audit state')
+    # Scope-specific audit files survive account resets; isolate them by the active cycle.
+    try:
+        initial=json.loads((DATA/'account_initial_state.json').read_text(encoding='utf8'))
+        cycle_start=initial.get('reset_time')
+    except (OSError,ValueError,TypeError):
+        cycle_start=None
+    if cycle_start and raw.get('cycle_start') != cycle_start:
+        raw={'scope':scope,'version':VERSION,'items':{},'streak':0,'cycle_start':cycle_start}
+        return raw
     if raw.get('version')!=VERSION or not isinstance(raw.get('streak',0),int):raise ValueError('Invalid WAIT audit version')
     for item in raw['items'].values():
         if not isinstance(item,dict):raise ValueError('Invalid WAIT audit item')
