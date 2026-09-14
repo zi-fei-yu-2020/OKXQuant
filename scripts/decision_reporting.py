@@ -58,8 +58,9 @@ def format_actions(actions, *, maximum=3):
         text=clean(action,2000)
         code=re.search(r'(?:HTTP\s+|Code:\s*)([45][0-9]{2,4})',text)
         text=re.sub(r'\s*\(order=[^)]*\)','',text)
-        text=re.split(r':\s+|原因[:：]',text,maxsplit=1)[0]
-        text=clean(text,85)
+        if not any(w in text for w in ('失败','未确认','无法','未获')):
+            text=re.split(r':\s+|原因[:：]',text,maxsplit=1)[0]
+        text=clean(text,180)
         if code and code[1] not in text:text+=' ['+code[1]+']'
         return text
     # Surface failures before ordinary maintenance when the summary must be bounded.

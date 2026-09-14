@@ -558,7 +558,9 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
     env = market._selected()
     availability = support.opening_status(inst_id, env.mode)
     if not availability["can_open"]:
-        return False, availability["message"]
+        reason = str(availability.get("message") or "opening_environment_unavailable")
+        strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': None, 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'opening_environment_unavailable', 'details': {'message': reason}, 'at': time.time()})
+        return False, reason
     effective_px = price
     effective_tp = tp_px
     effective_sl = sl_px
@@ -598,7 +600,9 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
             entry=effective_px, stop=effective_sl, take_profit=effective_tp, requested_size=size,
             budget=risk_budget_usdt, decision_id=decision_id, decision_at=decision_at, horizon=horizon)
     except Exception as exc:
-        return False, f"Final risk preflight rejected: {type(exc).__name__}: {exc}"
+        reason = f"Final risk preflight rejected: {type(exc).__name__}: {exc}"
+        strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': None, 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'preflight_rejected', 'details': {'error_type': type(exc).__name__, 'message': str(exc)[:500]}, 'at': time.time()})
+        return False, reason
     LAST_ENTRY_PLAN.clear(); LAST_ENTRY_PLAN.update(plan)
     save_horizon_intent(inst_id, pos_side, horizon, decision_id)
     size = plan['size']
@@ -612,6 +616,7 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
     strategy_evidence.best_effort(market._selected().identity, 'entry_submission',
         {'client_id': client_id, 'plan': plan, 'transport_ok': result['ok'], 'response': result.get('data')})
     if not result["ok"]:
+        strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': plan.get('candidate_id'), 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'submission_unknown', 'client_id': client_id, 'details': {'transport_ok': False, 'error_type': result.get('error_type'), 'status': result.get('status_code')}, 'at': time.time()})
         return False, "Entry outcome unknown; durable reservation retained for read-only reconciliation"
     payload = result.get("data")
     order_id = None
@@ -625,6 +630,7 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
     elif isinstance(payload, list) and payload and isinstance(payload[0], dict):
         order_id = payload[0].get("ordId")
     if not order_id:
+        strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': plan.get('candidate_id'), 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'accepted_missing_order_id', 'client_id': client_id, 'at': time.time()})
         return False, "exchange accepted response without a verifiable order id"
     strategy_evidence.finish_intent(client_id, 'acknowledged', {'order_id': str(order_id), 'size': size})
     return True, str(order_id)
