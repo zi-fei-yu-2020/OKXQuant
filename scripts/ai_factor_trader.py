@@ -1995,6 +1995,10 @@ def execute_portfolio():
     reserved_slot_count = active_pos_count + len(pending_inst_ids)
     reserved_long_count = long_count + pending_long_count
     reserved_short_count = short_count + pending_short_count
+    # One correlated crypto direction per 15M execution cycle. This is a
+    # portfolio concentration guard, not a signal veto: the first accepted
+    # candidate claims the group; later same-direction candidates are rejected.
+    related_cycle_claims = set()
 
     bal_res = run_json_cmd(okx_private_command("okx account balance --json"))
     if not isinstance(bal_res, list):
@@ -2157,7 +2161,8 @@ def execute_portfolio():
                 allow_entry = False
 
                 # Case A: Standard Initial Entry (No existing position & slot available)
-                if not curr_pos and inst_id not in pending_inst_ids and reserved_slot_count < max_active_positions and reserved_long_count < max_same_direction:
+                related_key = f"{inst_id.split('-')[0].upper()}_long"
+                if not curr_pos and inst_id not in pending_inst_ids and related_key not in related_cycle_claims and reserved_slot_count < max_active_positions and reserved_long_count < max_same_direction:
                     allow_entry = True  # Evidence/geometry and account risk, never model score.
 
                 # Case B: Strict Pyramiding Scale-In (Existing long position in profit/breakeven)
@@ -2197,7 +2202,7 @@ def execute_portfolio():
                             print(f"[Pyramiding 拦截] {f['name']} 数理数据无效、动能衰竭或延续概率偏低 (加速度={c_accel:+.2f}, 概率={p_cont:.1f}%)，禁止追多加仓")
 
                 if not allow_entry:
-                    record_entry_rejection(inst_id, ai_info, "entry_gate_blocked", active_position=bool(curr_pos), pending_order=inst_id in pending_inst_ids, slots_full=reserved_slot_count >= max_active_positions, action=action)
+                    record_entry_rejection(inst_id, ai_info, "entry_gate_blocked", active_position=bool(curr_pos), pending_order=inst_id in pending_inst_ids, slots_full=reserved_slot_count >= max_active_positions, correlated_cycle_claim=related_key in related_cycle_claims, action=action)
                 if not allow_entry:
                     record_entry_rejection(inst_id, ai_info, "entry_gate_blocked", active_position=bool(curr_pos), pending_order=inst_id in pending_inst_ids, slots_full=reserved_slot_count >= max_active_positions, action=action)
                 if allow_entry:
@@ -2243,6 +2248,7 @@ def execute_portfolio():
                         else:
                             executed_actions.append(f"[{f['name']}] AI限价多单已提交待成交（数量经最终风险预算裁剪）@{limit_px} (order={order_ref}, TP={tp_px}, SL={sl_px})")
                             pending_inst_ids.add(inst_id)
+                            related_cycle_claims.add(related_key)
                             reserved_slot_count += 1
                             reserved_long_count += 1
                             if notify_trade_open:
@@ -2266,7 +2272,8 @@ def execute_portfolio():
                 allow_entry = False
 
                 # Case A: Standard Initial Entry
-                if not curr_pos and inst_id not in pending_inst_ids and reserved_slot_count < max_active_positions and reserved_short_count < max_same_direction:
+                related_key = f"{inst_id.split('-')[0].upper()}_short"
+                if not curr_pos and inst_id not in pending_inst_ids and related_key not in related_cycle_claims and reserved_slot_count < max_active_positions and reserved_short_count < max_same_direction:
                     allow_entry = True  # Evidence/geometry and account risk, never model score.
 
                 # Case B: Strict Pyramiding Scale-In (Existing short position in profit/breakeven)

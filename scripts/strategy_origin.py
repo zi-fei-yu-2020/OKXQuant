@@ -34,15 +34,19 @@ def index(scope):
 
 def resolve(history,archive,origins,reconciliation=None):
     side='long' if history.get('direction',history.get('posSide'))=='long' else 'short'
-    result={'strategy':'开多（来源未关联）' if side=='long' else '开空（来源未关联）','strategy_evidence':'unlinked','horizon':'unknown','strategy_type':'unknown'}
+    result={'strategy':'持仓来源待确认','strategy_evidence':'unlinked','source_status':'external_or_unlinked','horizon':'unknown','strategy_type':'unknown'}
     # Reuse complete lifecycle fill/fee reconciliation. Timestamp proximity alone
     # cannot prove which opening order belongs to a position.
     verified=reconciliation or {}
     if verified.get('status')!='verified':return result
     ids=verified.get('opening_order_ids')
     if not isinstance(ids,list) or not ids:return result
+    # A verified exchange opening order without a matching local decision is
+    # still an automatic OKXQuant order, not an external/manual holding.
+    if len(ids)==1 and ids[0] not in origins:
+        return {'strategy':'系统自动开仓（决策证据缺失）','strategy_evidence':'automatic_entry_unlinked','source_status':'automatic_unlinked','decision_id':None,'candidate_id':None,'horizon':'unknown','strategy_type':'unknown','opening_order_ids':ids}
     if len(set(ids))!=1:
-        return {'strategy':'多次入场 · '+('多' if side=='long' else '空'),'strategy_evidence':'multiple_opening_orders'}
+        return {'strategy':'多次入场 · '+('多' if side=='long' else '空'),'strategy_evidence':'multiple_opening_orders','source_status':'automatic_unlinked','horizon':'unknown','strategy_type':'unknown'}
     source=origins.get(ids[0])
     if not source or source['instId']!=history.get('instId') or source['side']!=side:return result
-    return {**source,'strategy':source['strategy']+' · '+('多' if side=='long' else '空')}
+    return {**source,'source_status':'linked','strategy':source['strategy']+' · '+('多' if side=='long' else '空')}
