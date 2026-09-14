@@ -65,16 +65,18 @@ function clean(v: any, fallback = '--'): string {
   return v || fallback
 }
 
-function isUnlinkedHolding(t: any): boolean {
-  return t?.status === 'holding' && /来源未关联|未关联/.test(String(t?.strategy || ''))
+function sourcePendingLabel(t: any): string {
+  if (t?.source_status === 'automatic_unlinked' || t?.strategy_evidence === 'automatic_entry_unlinked') return '系统自动开仓（决策证据缺失）'
+  if (t?.source_status === 'external_or_unlinked' || /来源未关联|未关联/.test(String(t?.strategy || ''))) return '持仓来源待确认'
+  return ''
 }
 
 function strategyLabel(t: any): string {
-  return isUnlinkedHolding(t) ? '持仓来源待确认' : clean(t.strategy, '观望')
+  return sourcePendingLabel(t) || clean(t.strategy, '观望')
 }
 
 function horizonLabel(v: unknown, t?: any): string {
-  if (isUnlinkedHolding(t)) return '待确认'
+  if (sourcePendingLabel(t)) return '待确认'
   return v === 'scalp' ? '短线' : v === 'swing' ? '波段' : '未知'
 }
 </script>

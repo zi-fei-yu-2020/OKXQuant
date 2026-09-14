@@ -237,6 +237,7 @@ def build_lifecycle_ledger(*, notify=True):
             "lever": f"{lever:g}x" if lever is not None else "--",
             "strategy": strat_tag,
             "strategy_evidence": origin["strategy_evidence"],
+            "source_status": origin.get("source_status") or ("linked" if origin.get("strategy_evidence") == "opening_fill_order_decision_link" else "external_or_unlinked"),
             "strategy_decision_id": origin.get("decision_id"),
             "decision_id": origin.get("decision_id"),
             "candidate_id": origin.get("candidate_id"),
