@@ -2161,7 +2161,7 @@ def execute_portfolio():
                 allow_entry = False
 
                 # Case A: Standard Initial Entry (No existing position & slot available)
-                related_key = f"{inst_id.split('-')[0].upper()}_long"
+                related_key = 'correlated_crypto_long' if inst_id.split('-')[0].upper() in {'BTC','ETH','SOL','DOGE','SUI','XRP'} else f"{inst_id.split('-')[0].upper()}_long"
                 if not curr_pos and inst_id not in pending_inst_ids and related_key not in related_cycle_claims and reserved_slot_count < max_active_positions and reserved_long_count < max_same_direction:
                     allow_entry = True  # Evidence/geometry and account risk, never model score.
 
@@ -2272,7 +2272,7 @@ def execute_portfolio():
                 allow_entry = False
 
                 # Case A: Standard Initial Entry
-                related_key = f"{inst_id.split('-')[0].upper()}_short"
+                related_key = 'correlated_crypto_short' if inst_id.split('-')[0].upper() in {'BTC','ETH','SOL','DOGE','SUI','XRP'} else f"{inst_id.split('-')[0].upper()}_short"
                 if not curr_pos and inst_id not in pending_inst_ids and related_key not in related_cycle_claims and reserved_slot_count < max_active_positions and reserved_short_count < max_same_direction:
                     allow_entry = True  # Evidence/geometry and account risk, never model score.
 
