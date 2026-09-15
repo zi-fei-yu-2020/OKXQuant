@@ -9,7 +9,7 @@ import time
 from scripts import trading_prompt as contract, wait_audit, entry_candidates
 
 VERSION = 'wait-repair-v1'
-TIMEOUT = 20.
+TIMEOUT = 35.
 MAX_TARGETS = 12
 ALLOWED_FIELDS = {'action', 'summary_reason', 'confidence', 'wait_audit', 'candidate_reviews'}
 SYSTEM = '''你是结构化 WAIT 审计纠错器，不是新的交易决策器。
@@ -96,6 +96,9 @@ def attempt(raw, validated, packages, *, request=None, positions=None, previous_
     except Exception as exc:
         report['status'] = 'failed'
         report['error_type'] = type(exc).__name__
+        from okxquant_backend.llm_transport import public_failure
+        report['model_failure'] = public_failure(exc)
+        report['latency_ms'] = round((time.monotonic() - started) * 1000)
         code = getattr(exc, 'status_code', None)
         report['http_status'] = code if type(code) is int and 0 <= code <= 599 else None
         # No retry, management edits, new entry or invalid-audit promotion.
@@ -108,7 +111,7 @@ def attempt(raw, validated, packages, *, request=None, positions=None, previous_
 def public_report(report, inst=None):
     """Small display projection. Raw rejected text stays in the scoped evidence DB."""
     if inst is None:
-        return {key: report.get(key) for key in ('version','status','attempted','targets','corrected','original_errors','remaining_errors','error_type','http_status','latency_ms')}
+        return {key: report.get(key) for key in ('version','status','attempted','targets','corrected','original_errors','remaining_errors','error_type','http_status','latency_ms','model_failure')}
     if inst not in report.get('targets', []):
         return None
     attempted = bool(report['attempted']) and inst in report.get('requested_symbols', [])

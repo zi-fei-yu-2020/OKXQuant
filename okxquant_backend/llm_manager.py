@@ -1095,6 +1095,7 @@ def execute_llm_request(
     timeout: float = 50.0,
     max_attempts: Optional[int] = None,
     require_complete: bool = False,
+    attempt_timeout: Optional[float] = None,
 ) -> Tuple[str, str, Dict[str, Any], int]:
     """Unified executor for LLM calls across all 3 protocols.
     Returns: (content, reasoning_content, usage_dict, latency_ms)
@@ -1119,7 +1120,10 @@ def execute_llm_request(
         reasoning_type=target_rtype,
     )
 
-    res_json, _, latency_ms, attempts = request_json(endpoint, headers, payload, timeout, **({"max_attempts":max_attempts} if max_attempts is not None else {}))
+    retry_options = {"max_attempts": max_attempts} if max_attempts is not None else {}
+    if attempt_timeout is not None:
+        retry_options["attempt_timeout"] = attempt_timeout
+    res_json, _, latency_ms, attempts = request_json(endpoint, headers, payload, timeout, **retry_options)
 
     # Structured trading output must never consume a provider-declared partial answer.
     if require_complete:
