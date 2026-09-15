@@ -56,6 +56,15 @@ def materialize(package, plan, now, policy=None):
             'data_as_of':package['data_as_of'],'position_basis':{'side':None,'size':0},'decision':checked}
 
 
+def closed_frame_time():
+    """At a minute boundary, wait within this invocation instead of skipping forever."""
+    now=time.time()
+    if now%60<3:
+        time.sleep(3.05-now%60)
+        now=time.time()
+    return now
+
+
 def run(*, observe_only=False):
     from scripts.okx_runtime import freeze_environment, unfreeze_environment
     import ai_factor_trader as trader
@@ -70,9 +79,7 @@ def run(*, observe_only=False):
         execution_env=trader.freeze_okx_environment()
         if execution_env.identity!=env.identity or execution_env.mode!='demo':
             raise ValueError('DEMO execution binding changed')
-        now=time.time(); anchor=int(now)//60
-        # Wait for the just-closed minute to be published. Next scheduler tick re-evaluates.
-        if now%60<3: return {'status':'awaiting_closed_minute'}
+        now=closed_frame_time(); anchor=int(now)//60
         market.begin_signal_frame(now)
         items=load_instruments(); support=pool_support(items,env.mode,refresh=True)
         tradable=[i for i in items if support['items'].get(i['instId'],{}).get('can_open')]
