@@ -42,6 +42,15 @@ class MinuteScalpTests(unittest.TestCase):
             self.assertEqual(entry_candidates.validate_live_quote(p,plan['id'],p['price']),plan)
             self.assertEqual(p,before)
 
+    def test_confirmed_five_minute_turn_does_not_wait_for_slow_average_cross(self):
+        p=minute_package()
+        rows=p['entry_candles']['5M']['rows']
+        for i,r in enumerate(rows): r.update(open=102-i*.1,close=102-i*.1,high=104,low=98)
+        rows[-2].update(open=101,close=99.8)
+        rows[-1].update(open=99.8,close=100.9)
+        result=entry_candidates.catalog(p)
+        self.assertTrue(any(x['setup']=='scalp_reversal_1m' for x in result['plans']),result)
+
     def test_no_trigger_and_missing_minute_data_never_force_entry(self):
         p=minute_package();p['entry_candles']['1M']['rows'][-1].update(open=100,close=100,high=101,low=99)
         self.assertFalse(entry_candidates.catalog(p)['plans'])
