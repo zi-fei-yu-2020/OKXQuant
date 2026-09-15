@@ -67,7 +67,14 @@ export const useDashboardStore = defineStore('dashboard', () => {
     })
   })
   const macroAnalysis = computed(() => resolveMacroAnalysis(data.value))
-  const macroAssessment = computed(() => macroAnalysis.value.text || macroAnalysis.value.message)
+  const macroAssessment = computed(() => {
+    const status = macroAnalysis.value.status
+    if (status === 'ready') return '本轮宏观分析已生成，完整内容请查看 AI 决策历史'
+    if (status === 'stale') return '当前展示历史宏观分析，不作为本轮开仓依据'
+    if (status === 'failed' || status === 'incomplete') return '本轮决策审计不完整，未形成可用宏观结论'
+    if (status === 'running') return '宏观分析生成中'
+    return macroAnalysis.value.message || '尚未取得可用宏观分析'
+  })
   const macroLabel = computed(() => macroStatusLabel(macroAnalysis.value.status))
   const llmRuntime = computed(() => data.value?.llm_runtime || {
     model: 'gemini-3.8-flash-high',

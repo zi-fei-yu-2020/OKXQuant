@@ -13,7 +13,7 @@ onMounted(() => {
 })
 onUnmounted(() => clearInterval(timer))
 import {
-  LayoutDashboard,
+LayoutDashboard,
   Brain,
   Newspaper,
   Sparkles,

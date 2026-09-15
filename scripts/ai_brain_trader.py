@@ -901,7 +901,7 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
         atomic_write_json(os.path.join(DATA_DIR, 'trading_output_validation.json'), brain_output['validation'])
         decisions_dict = brain_output.get("decisions", {})
         pos_mgmt_list = brain_output.get("position_management", [])
-        macro_summary = str(brain_output.get("macro_assessment", "宏观中性震荡"))[:120]
+        macro_summary = str(brain_output.get("macro_assessment", "宏观中性震荡")).strip()[:4000]
         if not isinstance(decisions_dict, dict):
             decisions_dict = {}
         if not isinstance(pos_mgmt_list, list):
