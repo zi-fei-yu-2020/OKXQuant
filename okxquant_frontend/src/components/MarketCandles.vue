@@ -238,7 +238,7 @@ onUnmounted(() => {
       <div v-if="!chartReady" class="market-chart__loading absolute inset-0 flex items-center justify-center px-5 text-center pointer-events-none" role="status" aria-live="polite">
         <div class="market-chart__loading-panel">
           <LoaderCircle class="market-chart__loading-icon size-5 animate-spin" aria-hidden="true" />
-          <div><div class="text-sm font-medium">正在加载 K 线</div><div class="mt-1 text-xs" style="color:var(--text-muted)">行情连接中，系统会自动重试</div></div>
+          <span class="text-sm font-medium">加载</span>
         </div>
       </div>
     </div>
