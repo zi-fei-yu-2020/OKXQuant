@@ -91,7 +91,7 @@ def output_schema():
             'summary_reason':{'type':'string'},'supporting_evidence':{'type':'array','minItems':2,'maxItems':12,'items':ref},
             'counter_evidence':{'type':'array','maxItems':12,'items':ref},'counter_evidence_status':{'enum':['observed','none_observed']},
             'uncertainty':{'type':'string'},'valid_for_seconds':{'type':'integer','minimum':1,'maximum':300,'description':'新提交候选准入有效期，不是已挂订单的自动撤单时间'},
-            'invalidation':{'type':'object','required':['price','timeframe','condition'],'properties':{'price':{'type':'number'},'timeframe':{'enum':['15M','1H','4H']},'condition':{'type':'string'}}},
+            'invalidation':{'type':'object','required':['price','timeframe','condition'],'properties':{'price':{'type':'number'},'timeframe':{'enum':['1M','5M','15M','1H','4H']},'condition':{'type':'string'}}},
             'margin_usdt':{'type':'number','minimum':0},'leverage':{'type':'number','minimum':1,'maximum':20}}}
     wait['properties']['candidate_reviews']={'type':'array','items':{'type':'object','required':['candidate_id','reason','evidence'],
         'properties':{'candidate_id':{'type':'string'},'reason':{'type':'string'},'evidence':{'type':'array','minItems':1,'items':ref}}}}
@@ -396,7 +396,7 @@ def candidate(package,raw,catalog,*,allow_open=True,previous_wait_review=None,ri
         elif status!='none_observed' or counter!=[]:raise ContractError('Explicit counter-evidence assessment required')
         if not text(raw.get('uncertainty')):raise ContractError('Residual uncertainty missing')
         invalidation=raw.get('invalidation')
-        if not isinstance(invalidation,dict) or not text(invalidation.get('condition')) or invalidation.get('timeframe') not in {'15M','1H','4H'}:raise ContractError('Checkable invalidation missing')
+        if not isinstance(invalidation,dict) or not text(invalidation.get('condition')) or invalidation.get('timeframe') not in {'1M','5M','15M','1H','4H'}:raise ContractError('Checkable invalidation missing')
         if not math.isclose(numeric(invalidation.get('price')),sl,rel_tol=1e-9):raise ContractError('Invalidation price must match stop')
         ttl=raw.get('valid_for_seconds')
         if isinstance(ttl,bool) or not isinstance(ttl,int) or not 1<=ttl<=300:raise ContractError('Candidate validity must be 1..300 seconds')

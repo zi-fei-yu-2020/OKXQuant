@@ -32,6 +32,7 @@ JOBS = (
     JobSpec("evidence_sync", "evidence_sync.py", 300, 60),
     JobSpec("ledger_sync", "ledger_monitor.py", 60, 50),
     JobSpec("trader", "ai_factor_trader.py", 15 * 60, 840),
+    JobSpec("demo_scalp", "demo_scalp.py", 60, 120),
     JobSpec("factor_library", "factor_library.py", 60, 55),
     JobSpec("news", "news_sentiment_harvester.py", 10 * 60, 300),
     JobSpec("daily_briefing", "daily_summary_and_backup.py", None, 600, "briefing_times", ("08:00", "20:00")),
@@ -62,7 +63,7 @@ def current_jobs() -> tuple[JobSpec, ...]:
     # Read the writable configuration each tick so a pause does not need a restart.
     from scripts.okx_runtime import _load_dotenv
     automatic = _load_dotenv().get("OKXQUANT_AUTOTRADE_ENABLED", "1") == "1"
-    jobs = tuple(job for job in JOBS if automatic or job.name != "trader")
+    jobs = tuple(job for job in JOBS if automatic or job.name not in {"trader", "demo_scalp"})
     return (*jobs, *backup_job_specs())
 
 

@@ -105,7 +105,7 @@ def validate_independent_direction(package, action):
     return trend
 
 
-def catalog(package, policy=None):
+def _swing_catalog(package, policy=None):
     from scripts.risk_policy import Policy
     policy=policy or vars(Policy())
     result={'version':VERSION,'plans':[],'checks':[],'order_authorized':False}
@@ -206,54 +206,19 @@ def catalog(package, policy=None):
                       'order_authorized':False}
                 plan['id']=hashlib.sha256(json.dumps(plan,sort_keys=True,ensure_ascii=False,allow_nan=False).encode()).hexdigest()[:24]
                 result['plans'].append(plan)
-        # Independent 1M/5M scalp candidates. These are additive to the swing catalog.
-        # A 1M trigger needs a closed 5M directional confirmation and volume expansion.
-        try:
-            one=verified_bars(package,'1M'); five=verified_bars(package,'5M')
-            if len(one)>=22 and len(five)>=12:
-                last,prev=one[-1],one[-2]; f5=five[-1]
-                hi=max(b['high'] for b in one[-21:-1]); lo=min(b['low'] for b in one[-21:-1])
-                avg_vol=sum(b['volume'] for b in one[-6:-1])/5
-                atr1=max((b['high']-b['low'] for b in one[-14:]), default=0.0)
-                vol_ok=avg_vol>0 and last['volume']>=avg_vol*1.15
-                long_trigger=last['close']>hi and last['open']<=hi and f5['close']>=f5['open'] and vol_ok
-                short_trigger=last['close']<lo and last['open']>=lo and f5['close']<=f5['open'] and vol_ok
-                for side,triggered in (('long',long_trigger),('short',short_trigger)):
-                    action='BUY_LONG' if side=='long' else 'SELL_SHORT'
-                    if not triggered:
-                        rejected('scalp_breakout_1m',side,'scalp_1m_trigger_not_met'); continue
-                    entry=number(package.get('askPx') if side=='long' else package.get('bidPx'))
-                    if atr1<=0: rejected('scalp_breakout_1m',side,'scalp_1m_volatility_unavailable'); continue
-                    stop=(entry-atr1*1.4) if side=='long' else (entry+atr1*1.4)
-                    target=(entry+atr1*2.4) if side=='long' else (entry-atr1*2.4)
-                    if not (0<stop<entry<target if side=='long' else 0<target<entry<stop): rejected('scalp_breakout_1m',side,'invalid_geometry'); continue
-                    cost=entry*policy['maker_fee']+max(stop,target)*policy['taker_fee']+entry*policy['slippage']
-                    rr=(abs(target-entry)-cost)/(abs(entry-stop)+cost)
-                    if rr<policy['minimum_net_rr']: rejected('scalp_breakout_1m',side,'net_rr_below_policy',net_rr=rr); continue
-                    plan={'version':'scalp-1m-plans-v1','instrument':package['instId'],'setup':'scalp_breakout_1m','action':action,'entry_price':entry,'stop_loss_price':stop,'take_profit_price':target,'created_at':at,'trigger_close_ms':last['close_ms'],'valid_for_seconds':60,'net_rr':rr,'horizon':'scalp','target_basis':'1m_atr_2.4','stop_basis':'1m_atr_1.4','supporting_evidence':[{'ref':'/price','value':package['price'],'interpretation':'当前可执行报价'},{'ref':'/vol_ratio','value':package.get('vol_ratio',1.0),'interpretation':'成交量扩张背景'},{'ref':'/structure_1h','value':package.get('structure_1h',''),'interpretation':'1H方向背景需由模型复核'}],'invalidation':{'price':stop,'timeframe':'15M','condition':'1M突破失败并回到触发区间内'},'order_authorized':False}
-                    plan['id']=hashlib.sha256(json.dumps(plan,sort_keys=True,ensure_ascii=False,allow_nan=False).encode()).hexdigest()[:24]
-                    result['plans'].append(plan)
-                # 1M pullback/reversal: enter only after a closed 1M reclaim and 5M direction agreement.
-                for setup, long_ok, short_ok in (
-                    ('scalp_pullback_1m', last['low'] <= prev['low'] and last['close'] > prev['close'] and f5['close'] >= f5['open'],
-                     last['high'] >= prev['high'] and last['close'] < prev['close'] and f5['close'] <= f5['open']),
-                    ('scalp_reversal_1m', last['close'] > last['open'] and prev['close'] < prev['open'] and f5['close'] > f5['open'],
-                     last['close'] < last['open'] and prev['close'] > prev['open'] and f5['close'] < f5['open'])):
-                    for side,triggered in (('long',long_ok),('short',short_ok)):
-                        if not triggered: continue
-                        action='BUY_LONG' if side=='long' else 'SELL_SHORT'; entry=number(package.get('askPx') if side=='long' else package.get('bidPx'))
-                        stop=(min(last['low'],prev['low'])-atr1*0.8) if side=='long' else (max(last['high'],prev['high'])+atr1*0.8)
-                        target=(entry+atr1*1.8) if side=='long' else (entry-atr1*1.8)
-                        if not (0<stop<entry<target if side=='long' else 0<target<entry<stop): continue
-                        cost=entry*policy['maker_fee']+max(stop,target)*policy['taker_fee']+entry*policy['slippage']; rr=(abs(target-entry)-cost)/(abs(entry-stop)+cost)
-                        if rr<policy['minimum_net_rr']: continue
-                        plan={'version':'scalp-1m-plans-v1','instrument':package['instId'],'setup':setup,'action':action,'entry_price':entry,'stop_loss_price':stop,'take_profit_price':target,'created_at':at,'trigger_close_ms':last['close_ms'],'valid_for_seconds':60,'net_rr':rr,'horizon':'scalp','target_basis':'1m_atr_1.8','stop_basis':'1m_microstructure_0.8atr','supporting_evidence':[{'ref':'/price','value':package['price'],'interpretation':'当前可执行报价'},{'ref':'/entry_candles/1M/last/close','value':last['close'],'interpretation':'1M已收盘微结构触发'},{'ref':'/entry_candles/5M/last/close','value':f5['close'],'interpretation':'5M方向确认'}],'invalidation':{'price':stop,'timeframe':'15M','condition':'1M微结构触发失败'},'order_authorized':False}
-                        plan['id']=hashlib.sha256(json.dumps(plan,sort_keys=True,ensure_ascii=False,allow_nan=False).encode()).hexdigest()[:24]; result['plans'].append(plan)
-        except (ValueError,TypeError,KeyError,OverflowError):
-            pass
         return result
     except (ValueError,TypeError,KeyError,OverflowError) as exc:
         result['plans']=[];result['error']=str(exc);return result
+
+
+def catalog(package, policy=None):
+    from scripts.risk_policy import Policy
+    from scripts.scalp_candidates import catalog as scalp_catalog
+    policy=policy or vars(Policy())
+    if package.get('strategy_engine') == 'demo_scalp_v2':
+        return scalp_catalog(package, policy)
+    # Legacy 15M AI engine does not impersonate a minute execution loop.
+    return _swing_catalog(package, policy)
 
 
 def expand_selection(package, raw, policy=None):
@@ -267,7 +232,8 @@ def expand_selection(package, raw, policy=None):
         if key in raw and raw[key]!=selected[key]: raise ValueError('不得改写程序候选的价格或失效点')
     result={**deepcopy(raw),**{k:deepcopy(selected[k]) for k in ('entry_price','stop_loss_price','take_profit_price','invalidation','supporting_evidence','valid_for_seconds')}}
     result['confidence']=raw.get('confidence',0)
-    result['candidate_origin']=VERSION
+    result['candidate_origin']=selected['version']
+    result['horizon']=selected['horizon']
     return result
 
 
@@ -276,8 +242,11 @@ def validate_live_quote(package, candidate_id, current, policy=None):
     current=number(current)
     plan=next((p for p in catalog(package,policy)['plans'] if p['id']==candidate_id),None)
     if plan is None: raise ValueError('program_plan_no_longer_matches_evidence_or_policy')
+    if package.get('strategy_engine') == 'demo_scalp_v2':
+        from scripts.scalp_candidates import validate_quote
+        return validate_quote(package,plan,current)
     bars=verified_bars(package,'15M');bar=bars[-1];sign=1 if plan['action']=='BUY_LONG' else -1
-    if plan['setup']=='pullback_reclaim':level=bars[-2]['close']
+    if plan['setup'] in {'pullback_reclaim','range_reversion'}:level=bars[-2]['close']
     else:level=max(b['high'] for b in bars[-9:-1]) if sign==1 else min(b['low'] for b in bars[-9:-1])
     atr=sum(max(b['high']-b['low'],abs(b['high']-a['close']),abs(b['low']-a['close'])) for a,b in zip(bars[-15:-1],bars[-14:]))/14
     if (current-level)*sign<=0:raise ValueError('program_trigger_lost_during_inference')
