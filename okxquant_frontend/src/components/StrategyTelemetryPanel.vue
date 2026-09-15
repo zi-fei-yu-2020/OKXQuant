@@ -18,11 +18,11 @@ const statusLabel = computed(() => localize(wait.value?.status || 'WAIT') || '�
 const profileLabel = computed(() => { const id = execution.value.id; return id === 'standard' ? '标准风控' : id === 'small300' ? '300U 小资金' : execution.value.label || id || '未设置' })
 const waitLabel = computed(() => {
   const code = String(waitState.value?.code || '').toUpperCase()
-  if (code === 'AUDIT_INCOMPLETE') return '未完成'
-  if (code === 'AI_UNAVAILABLE') return '不可用'
-  if (code === 'DATA_UNAVAILABLE') return '数据不可用'
-  if (code === 'EXECUTION_REJECTED') return '执行未通过'
-  return localize(waitState.value?.detail || wait.value?.unavailable_reason) || '等待候选'
+  const status = String(wait.value?.status || '').toLowerCase()
+  if (code === 'AUDIT_INCOMPLETE' || status === 'incomplete') return '未完成'
+  if (code === 'AI_UNAVAILABLE' || code === 'DATA_UNAVAILABLE' || status === 'unavailable') return '不可用'
+  if (code === 'EXECUTION_REJECTED' || status === 'execution_rejected') return '执行未通过'
+  return '等待'
 })
 const dailyLossPct = computed(() => {
   const pnl = Number(store.data?.today_stats?.total_pnl)
