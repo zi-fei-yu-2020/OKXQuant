@@ -28,12 +28,14 @@ def stamp(value):
     except ValueError:return 0.
 
 
-def record_close(env, *, inst_id, side, size, started_at, confirmed_at, reason='strategy_close',position=None,result=None,status='confirmed',attempt_id=None,transport_code=None):
+def record_close(env, *, inst_id, side, size, started_at, confirmed_at, reason='strategy_close',position=None,result=None,status='confirmed',attempt_id=None,transport_code=None,observed_size=None,client_id=None,transport='existing_cli_close'):
     position=position or {}
     result_rows=result if isinstance(result,list) else [result] if isinstance(result,dict) else []
     payload={'instId':inst_id,'posSide':side,'size':abs(float(size)),'started_at':started_at,'confirmed_at':confirmed_at,
              'reason_code':reason if reason in LABELS else 'strategy_close','status':status,'attempt_id':attempt_id,'transport_code':transport_code,'position_id':str(position.get('posId') or ''),
-             'position_created_at':position.get('cTime'),'transport':'existing_cli_close','response_order_ids':[str(r['ordId']) for r in result_rows if isinstance(r,dict) and str(r.get('ordId') or '').isdigit()]}
+             'position_created_at':position.get('cTime'),'transport':transport,'observed_size':observed_size,'client_id':client_id,
+             'position_snapshot':{k:position.get(k) for k in ('instId','posSide','posId','cTime','pos','avgPx','markPx','upl','lever')},
+             'response_order_ids':[str(r['ordId']) for r in result_rows if isinstance(r,dict) and str(r.get('ordId') or '').isdigit()]}
     identity=evidence.best_effort(env.identity,'close_execution',payload)
     try:
         if status in {'confirmed','flat_observed'}:ledger_monitor.request_refresh('strategy_close')

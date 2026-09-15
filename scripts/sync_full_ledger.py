@@ -115,6 +115,8 @@ def build_lifecycle_ledger(*, notify=True):
 
     from scripts.strategy_origin import index as strategy_index, resolve as strategy_origin
     origins=strategy_index(env.identity)
+    from scripts.trade_quality import observation_index, annotate
+    observations=observation_index(env.identity)
 
     # Process Active Holding Positions FIRST
     for p in pos_data:
@@ -248,6 +250,9 @@ def build_lifecycle_ledger(*, notify=True):
             "opening_features": origin.get("opening_features") or {},
             "news_snapshot": origin.get("news_snapshot") or {},
             "evidence_status": evidence_status,
+            "decision_horizon": origin.get("decision_horizon"),
+            "execution_horizon": origin.get("execution_horizon"),
+            "strategy_engine": origin.get("strategy_engine"),
             "strategy_type": origin.get("strategy_type") or origin.get("setup") or "unknown",
             "horizon": origin.get("horizon", "unknown"),
             "margin": margin_usdt,
@@ -275,6 +280,7 @@ def build_lifecycle_ledger(*, notify=True):
             **attribution,
             **allocation
         })
+        annotate(trades_lifecycle[-1],h,observations,attribution_inputs['executions'])
 
     # Preserve old finalized history; replace stale holding rows only with verified data.
     fresh_ids={row['id'] for row in trades_lifecycle}

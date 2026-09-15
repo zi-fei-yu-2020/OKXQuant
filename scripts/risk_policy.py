@@ -30,6 +30,7 @@ class Policy:
     minimum_net_rr: float = 2
     max_entry_distance_pct: float = .02
     max_leverage: float = 5
+    scalp_max_leverage: float = 20  # Independent DEMO short-horizon ceiling.
 
     def __post_init__(self):
         for name,value in vars(self).items():

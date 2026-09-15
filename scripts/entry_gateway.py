@@ -168,7 +168,8 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     from dataclasses import replace
     from scripts.strategy_modes import mode_for
     mode=mode_for(horizon)
-    policy=replace(policy, max_leverage=min(float(policy.max_leverage), float(mode['max_leverage'])), per_trade_equity_pct=min(float(policy.per_trade_equity_pct), float(mode['risk_per_trade_equity_pct'])))
+    from scripts.execution_leverage import mode_policy, choose as choose_leverage, apply as apply_leverage
+    policy=mode_policy(policy,horizon,env)
     reconcile_intents(env)
     from pathlib import Path
     cooldown_file=Path(__file__).resolve().parents[1]/'data'/'stop_cooldown.json'
@@ -212,6 +213,8 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     leverage_rows=_request('GET','/api/v5/account/leverage-info',{'instId':inst_id,'mgnMode':'cross'},env)
     lev=next((p for p in leverage_rows if p.get('posSide') in {side,'net',''}),None)
     if not lev: raise risk.RiskRejected('Actual exchange leverage unavailable')
+    current_leverage=risk.number(lev['lever'],positive=True)
+    target_leverage=choose_leverage(policy,horizon,env,current_leverage,existing,decision)
     ticker=public_market.get_json('https://www.okx.com/api/v5/market/ticker?instId='+inst_id,simulated=env.simulated)['data'][0]
     current=risk.number(ticker.get('last'),positive=True)
     if not 0 <= time.time()*1000-risk.number(ticker.get('ts'),positive=True) <= 15000:
@@ -238,7 +241,7 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     allocation=cap_allocation(allocation,active_execution["execution"],positions,pending,metadata,inst_id,pending_leverage,env=env,observation=observed_equity,balance=balances[0])
     plan=risk.order_plan(metadata=metadata[inst_id],side=side,entry=entry,stop=stop,take_profit=take_profit,
                          requested_size=requested_size,budget_usdt=budget,equity=allocation.equity,available=allocation.available,
-                         leverage=lev['lever'],policy=allocation.policy,existing_margin=sum(risk.number(p.get('imr') if p.get('imr') not in (None,'') else p.get('margin') or 0) for p in existing),portfolio=portfolio)
+                         leverage=target_leverage,policy=allocation.policy,existing_margin=sum(risk.number(p.get('imr') if p.get('imr') not in (None,'') else p.get('margin') or 0) for p in existing),portfolio=portfolio)
     # Include the proposed order's realized risk in the correlated cluster check.
     if active_execution['execution']['id']=='small300' and str(inst_id).split('-')[0].upper() in {'BTC','ETH','SOL','DOGE'}:
         if portfolio.get('correlated',0.0) + plan['risk_usdt'] > allocation.equity*0.04:
@@ -277,5 +280,25 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
             peer=json.loads(raw)
             if inst_id.split('-')[0] in cluster and str(peer.get('instId','')).split('-')[0] in cluster and peer.get('side')==side:
                 raise risk.RiskRejected('Correlated same-direction entry already reserved in this 15M window')
+    actual_leverage=apply_leverage(env,inst_id,side,target_leverage,current_leverage,decision_id,_request)
+    if time.time() >= float(decision.get('valid_until') or 0):
+        raise risk.RiskRejected('Candidate expired during leverage confirmation')
+    if actual_leverage!=current_leverage:
+        after_positions=_request('GET','/api/v5/account/positions',{'instType':'SWAP'},env)
+        if identities(after_positions)!=identities(positions):
+            raise risk.RiskRejected('Portfolio changed during leverage confirmation; fresh risk calculation required')
+        fresh_ticker=public_market.get_json('https://www.okx.com/api/v5/market/ticker?instId='+inst_id,simulated=env.simulated)['data'][0]
+        fresh_price=risk.number(fresh_ticker.get('last'),positive=True)
+        if not 0<=time.time()*1000-risk.number(fresh_ticker.get('ts'),positive=True)<=15000:
+            raise risk.RiskRejected('Quote stale after leverage confirmation')
+        if abs(entry-fresh_price)/fresh_price>policy.max_entry_distance_pct:
+            raise risk.RiskRejected('Price changed during leverage confirmation')
+        if decision.get('candidate_id'):
+            try:validate_live_quote(record.get('features',{}),decision['candidate_id'],fresh_price,vars(policy))
+            except (ValueError,TypeError,KeyError) as exc:
+                raise risk.RiskRejected('Signal changed during leverage confirmation: '+str(exc)) from None
+    plan['leverage']=actual_leverage
+    plan['leverage_verified']=True
+    plan['previous_leverage']=current_leverage
     client_id=evidence.begin_intent(env.identity,decision_id,inst_id,plan)
     return plan,client_id

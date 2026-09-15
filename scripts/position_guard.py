@@ -89,6 +89,8 @@ def run_guard(*, observe_only=False):
                             trader.add_stop_cooldown(inst,side,'Independent guard safety exit')
                         actions.append({'instrument':inst,'status':'protection_unknown_exit','closed':closed})
                     continue
+                from scripts.trade_quality import record_observation
+                if not observe_only:record_observation(env.identity,position,trackers.get(key,{}))
                 item=items[inst]
                 factors=trader.fetch_single_instrument_data(item,[position],0)
                 mark=float(position.get('markPx') or 0)

@@ -415,9 +415,11 @@ def candidate(package,raw,catalog,*,allow_open=True,previous_wait_review=None,ri
         ttl=raw.get('valid_for_seconds')
         if isinstance(ttl,bool) or not isinstance(ttl,int) or not 1<=ttl<=300:raise ContractError('Candidate validity must be 1..300 seconds')
         if not text(raw.get('summary_reason')):raise ContractError('Candidate rationale missing')
-        for key,default in [('margin_usdt',0),('leverage',3)]:
+        from scripts.strategy_modes import mode_for
+        sizing_mode=mode_for(result.get('horizon','swing'))
+        for key,default in [('margin_usdt',0),('leverage',sizing_mode['default_leverage'])]:
             result[key]=numeric(raw.get(key,default))
-            if result[key]<0 or (key=='leverage' and not 1<=result[key]<=5):raise ContractError('Invalid compatibility sizing proposal')
+            if result[key]<0 or (key=='leverage' and not 1<=result[key]<=sizing_mode['max_leverage']):raise ContractError('Invalid compatibility sizing proposal')
         if not raw.get('candidate_id'):
             from scripts.entry_candidates import validate_independent_direction
             try:validate_independent_direction(package,action)
