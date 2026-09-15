@@ -151,6 +151,10 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     if (recorded_execution and recorded_execution!=active_execution["signature"]) or (active_execution["execution"]["id"]=="small300" and not recorded_execution):
         raise risk.RiskRejected("Execution preset changed since inference; require a fresh decision")
     policy=risk.load_policy()
+    from dataclasses import replace
+    from scripts.strategy_modes import mode_for
+    mode=mode_for(horizon)
+    policy=replace(policy, max_leverage=min(float(policy.max_leverage), float(mode['max_leverage'])), per_trade_equity_pct=min(float(policy.per_trade_equity_pct), float(mode['risk_per_trade_equity_pct'])))
     reconcile_intents(env)
     from pathlib import Path
     cooldown_file=Path(__file__).resolve().parents[1]/'data'/'stop_cooldown.json'

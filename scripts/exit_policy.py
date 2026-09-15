@@ -71,9 +71,9 @@ def resolve(tracker, runtime_reader):
                   'error_type': type(exc).__name__}
     tracker['exitPolicyStatus'] = status
     selected=thresholds(status['preset_id'])
-    if status['preset_id']=='small300':
-        horizon=str(tracker.get('horizon','swing')).lower()
-        selected=deepcopy(HORIZON_PRESETS.get(horizon,HORIZON_PRESETS['swing']))
+    horizon=str(tracker.get('horizon','swing')).lower()
+    if horizon in HORIZON_PRESETS:
+        selected=deepcopy(HORIZON_PRESETS[horizon])
     return selected, status
 
 
