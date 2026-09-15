@@ -16,7 +16,7 @@ import type { ChartBar, ChartPeriod, CandleSnapshot } from '../utils/marketChart
 const props = defineProps<{ active: boolean }>()
 const store = useDashboardStore(), { theme } = useTheme()
 const instruments = computed(() => chartInstruments(store.positions, store.pendingOrders, store.data?.factors))
-const instrument = ref('BTC-USDT-SWAP'), period = ref<ChartPeriod>('1H')
+const instrument = ref('BTC-USDT-SWAP'), period = ref<ChartPeriod>('1m')
 const bars = shallowRef<ChartBar[]>([]), canvas = ref<HTMLDivElement | null>(null)
 const delayed = ref(true), hasGaps = ref(false), manualBusy = ref(false), chartReady = ref(false)
 const indicatorDialog = ref(false), showLines = ref(true)
