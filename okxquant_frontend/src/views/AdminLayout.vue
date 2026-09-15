@@ -42,7 +42,7 @@ function logout() {
     <aside class="workspace-sidebar">
       <RouterLink to="/admin/overview" class="workspace-brand"
         ><span class="brand-mark"><Activity class="size-5" aria-hidden="true" /></span
-        ><span>OKXQuant<span class="workspace-brand__sub">Quantum workspace</span></span
+        ><span>OKXQuant<span class="workspace-brand__sub">工作台</span></span
         ><span class="workspace-version">7.3</span></RouterLink
       >
       <SidebarNav />

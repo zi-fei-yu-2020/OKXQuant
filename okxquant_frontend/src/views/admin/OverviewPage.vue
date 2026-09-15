@@ -137,7 +137,7 @@ const quickNav = [
             class="text-sm sm:text-base font-black font-sans tracking-wide"
             style="color: var(--text-main)"
           >
-            OKXQuant QUANTUM CONTROL CENTER
+            OKXQuant 控制中心
           </h2>
           <span
             class="px-2 py-0.2 rounded text-xs font-sans font-bold border"

@@ -149,5 +149,5 @@ export const publicPages: Record<string, string> = {
 export function pageTitle(path: string) {
   if (path === '/admin/login') return '登录控制台'
   if (path.startsWith('/admin/')) return adminPages.find(p=>'/admin/'+p.id===path)?.label || '控制台'
-  return publicPages[path] || (path.startsWith('/docs/') ? '使用文档' : 'OKXQuant Quantum')
+  return publicPages[path] || (path.startsWith('/docs/') ? '使用文档' : 'OKXQuant')
 }

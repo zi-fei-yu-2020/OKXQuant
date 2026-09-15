@@ -40,8 +40,7 @@ const tabs = [
       <RouterLink to="/" class="terminal-brand"
         ><span class="brand-mark"><Activity class="size-5" aria-hidden="true" /></span
         ><span
-          >OKXQuant
-          <span class="text-[var(--text-muted)] font-normal hidden sm:inline">Quantum</span></span
+          >OKXQuant</span
         ></RouterLink
       >
       <nav class="terminal-nav" aria-label="监控导航">
