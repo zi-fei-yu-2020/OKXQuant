@@ -4,11 +4,12 @@ Targets from volatility are explicitly projections, never represented as observe
 import hashlib
 import json
 
-VERSION = 'scalp-minute-v2.1'
+VERSION = 'scalp-minute-v3'
 
 
 def catalog(package, policy):
     from scripts.entry_candidates import verified_bars, number
+    from scripts.demo_scalp_policy import descriptor
     result = {'version': VERSION, 'plans': [], 'checks': [], 'order_authorized': False}
     def reject(side, reason, **details):
         result['checks'].append({'setup': 'scalp_momentum_1m', 'side': side,
@@ -69,7 +70,7 @@ def catalog(package, policy):
             mode=mode_for('scalp'); mode['engine']='demo_scalp_v2'
             plan={'version':VERSION,'instrument':package['instId'],'setup':setup,'action':action,
                   'entry_price':entry,'stop_loss_price':stop,'take_profit_price':target,
-                  'horizon':'scalp','strategy_mode':mode,
+                  'horizon':'scalp','strategy_mode':mode,'entry_policy':descriptor(),
                   'created_at':package['data_as_of'],'trigger_close_ms':last['close_ms'],
                   'valid_for_seconds':60,'net_rr':rr,'entry_timeframe':'1M',
                   'trigger_level':level,'entry_atr':a1,'chase_atr':.6,

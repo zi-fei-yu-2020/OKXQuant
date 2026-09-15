@@ -50,7 +50,7 @@ def materialize(package, plan, now, policy=None):
     checked=trading_prompt.candidate(package,proposal,trading_prompt.facts_for(package),risk_contract=vars(policy) if policy else None)
     if checked.get('contract_valid') is not True: raise ValueError(checked.get('validation_reason','Invalid minute candidate'))
     checked.update(contract_version=trading_prompt.VERSION,entry_plans=entry_candidates.catalog(package,vars(policy) if policy else None),
-                   horizon='scalp',strategy_engine='demo_scalp_v2',strategy_mode=plan['strategy_mode'],
+                   horizon='scalp',strategy_engine='demo_scalp_v2',strategy_mode=plan['strategy_mode'],entry_policy=plan['entry_policy'],
                    valid_until=min(package['data_as_of']+60,now+60))
     return {'instId':package['instId'],'name':package.get('name'),
             'data_as_of':package['data_as_of'],'position_basis':{'side':None,'size':0},'decision':checked}
@@ -83,7 +83,8 @@ def run(*, observe_only=False):
             p['environment_support']=support['items'][p['instId']];p['news_snapshot']=news
         policy=load_policy(); candidates,diagnostics=chosen_entries(packages,policy)
         result={'status':'observed' if observe_only else 'evaluated','engine':'demo_scalp_v2',
-                'at':now,'candidate_count':len(candidates),'checks':diagnostics,'selected':None}
+                'at':now,'candidate_count':len(candidates),'checks':diagnostics,'selected':None,
+                'entry_policy':__import__('scripts.demo_scalp_policy',fromlist=['descriptor']).descriptor()}
         if observe_only: return result
         with writer(timeout=5):
             # Idempotent minute claim before any submission, survives process restart.

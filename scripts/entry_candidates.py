@@ -216,7 +216,8 @@ def catalog(package, policy=None):
     from scripts.scalp_candidates import catalog as scalp_catalog
     policy=policy or vars(Policy())
     if package.get('strategy_engine') == 'demo_scalp_v2':
-        return scalp_catalog(package, policy)
+        from scripts.demo_scalp_policy import parameters
+        return scalp_catalog(package, parameters(policy))
     # Legacy 15M AI engine does not impersonate a minute execution loop.
     return _swing_catalog(package, policy)
 
