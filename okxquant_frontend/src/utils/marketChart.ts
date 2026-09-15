@@ -7,7 +7,7 @@ export const CHART_PERIODS = [
   { id: '4H', label: '4时', ms: 14400000, period: { type: 'hour', span: 4 } },
   { id: '1D', label: '1日', ms: 86400000, period: { type: 'day', span: 1 } },
 ] satisfies Array<{ id: string; label: string; ms: number; period: Period }>
-export type ChartPeriod = '15m' | '1H' | '4H' | '1D'
+export type ChartPeriod = '1m' | '15m' | '1H' | '4H' | '1D'
 export interface ChartBar extends KLineData { volume: number; turnover: number; confirmed: boolean }
 export interface CandleSnapshot {
   bars: ChartBar[]; precision: number; asOf: number; stale: boolean; hasGaps: boolean
