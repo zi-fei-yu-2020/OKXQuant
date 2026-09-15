@@ -215,6 +215,16 @@ class PositionExitIntegrationTests(unittest.TestCase):
                 self.assertAlmostEqual(evidence['profit_atr'], -.2)
                 self.assertEqual(evidence['atr']['source'], 'atr_15m')
 
+    def test_demo_minute_mode_exits_at_one_hour_even_with_small_profit(self):
+        self.cycle(100.2, age=3600)
+        from scripts.strategy_modes import mode_for
+        mode=mode_for('scalp'); mode['engine']='demo_scalp_v2'
+        self.trackers[f'{INST}_long'].update(horizon='scalp',mode=mode)
+        with patch('scripts.minute_exit.enrich_volatility') as enrich:
+            self.assertTrue(self.cycle(100.3)[0])
+        enrich.assert_called_once()
+        self.assertEqual(self.close.call_args.kwargs['exit_reason'],'time_exit')
+
     def test_time_boundary_and_small_gain_condition_are_explicit(self):
         self.assertFalse(self.cycle(99.9, age=21600)[0])
         self.trackers.clear()

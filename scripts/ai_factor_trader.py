@@ -220,10 +220,10 @@ def load_horizon_intents():
         with open(HORIZON_INTENTS_FILE, encoding='utf-8') as f: return json.load(f)
     except Exception: return {}
 
-def save_horizon_intent(inst_id, side, horizon, decision_id=None):
+def save_horizon_intent(inst_id, side, horizon, decision_id=None, strategy_mode=None):
     data=load_horizon_intents(); from scripts.strategy_modes import mode_for
-    mode=mode_for(horizon)
-    data[f'{inst_id}_{side}']={'horizon': horizon if horizon in {'scalp','swing'} else 'swing','mode_version':mode.get('version','strategy-modes-v2'),'mode_signature':mode.get('signature',''),'entry_timeframe':mode['entry_timeframe'],'confirmation_timeframe':mode['confirmation_timeframe'],'bias_timeframe':mode['bias_timeframe'],'max_holding_seconds':mode['max_holding_seconds'],'decision_id':decision_id,'ts':int(time.time())}
+    mode=strategy_mode or mode_for(horizon)
+    data[f'{inst_id}_{side}']={'horizon': horizon if horizon in {'scalp','swing'} else 'swing','mode_version':mode.get('version','strategy-modes-v2'),'mode_signature':mode.get('signature',''),'entry_timeframe':mode['entry_timeframe'],'confirmation_timeframe':mode['confirmation_timeframe'],'bias_timeframe':mode['bias_timeframe'],'max_holding_seconds':mode['max_holding_seconds'],'mode':mode,'decision_id':decision_id,'ts':int(time.time())}
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(HORIZON_INTENTS_FILE,'w',encoding='utf-8') as f: json.dump(data,f,ensure_ascii=False,indent=2)
 
@@ -540,8 +540,6 @@ def prune_trackers(trackers: Dict[str, Any], real_pos_dict: Dict[str, Any]) -> i
     return removed
 
 
-@trade_lock.serialized
-
 def record_entry_rejection(inst_id, ai_info, reason, **details):
     """Persist why a selected AI entry did not reach entry_gateway."""
     try:
@@ -554,6 +552,7 @@ def record_entry_rejection(inst_id, ai_info, reason, **details):
     except Exception:
         pass
 
+@trade_lock.serialized
 def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: float, price: float, tp_px: float, sl_px: float, *, risk_budget_usdt=15, decision_id=None, decision_at=None, allow_demo_translation=True, horizon='swing') -> Tuple[bool, str]:
     """Submit a protected limit order; acceptance is not treated as a fill."""
     # Check if we are running in simulated/demo mode and price diverged significantly from demo orderbook
@@ -606,7 +605,7 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
         strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': None, 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'preflight_rejected', 'details': {'error_type': type(exc).__name__, 'message': str(exc)[:500]}, 'at': time.time()})
         return False, reason
     LAST_ENTRY_PLAN.clear(); LAST_ENTRY_PLAN.update(plan)
-    save_horizon_intent(inst_id, pos_side, horizon, decision_id)
+    save_horizon_intent(inst_id, pos_side, horizon, decision_id, strategy_mode=plan.get('strategy_mode'))
     size = plan['size']
     effective_px, effective_sl, effective_tp = plan['entry'], plan['stop'], plan['take_profit']
     command = okx_private_command(
@@ -1289,10 +1288,11 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
             'identity':position_identity(curr_pos,market._selected().identity),'orders':rows,
             'adopted_stop':adopted_stop,'source':'trader','cloud_stop_changed':False})
         score, action, reasons, strat_tag, strat_desc = evaluate_asset_signal(f)
+        entry_mode = (load_horizon_intents().get(pos_key) or {}).get("mode")
         horizon_intent = consume_horizon_intent(inst_id, side_name)
         trackers[pos_key] = {
             "horizon": horizon_intent,
-            "mode": __import__("scripts.strategy_modes",fromlist=["mode_for"]).mode_for(horizon_intent),
+            "mode": entry_mode or __import__("scripts.strategy_modes",fromlist=["mode_for"]).mode_for(horizon_intent),
             "instId": inst_id,
             "name": name,
             "side": curr_pos["side"],
@@ -1313,6 +1313,15 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
         }
 
     t = trackers[pos_key]
+    # The independent guard may create a tracker before the 15M trader sees it.
+    # Adopt the frozen submission mode only within this exact new position's entry window.
+    saved=load_horizon_intents().get(pos_key) or {}
+    created=float(curr_pos.get('cTime') or 0)/1000
+    if not t.get('mode') and saved.get('mode') and 0 <= created-float(saved.get('ts',0)) <= 300:
+        t['mode']=saved['mode']; t['horizon']=saved['horizon'];t['decision_id']=saved.get('decision_id')
+    if t.get('mode',{}).get('engine') == 'demo_scalp_v2':
+        from scripts.minute_exit import enrich_volatility
+        enrich_volatility(f,inst_id,market)
     global CURRENT_HORIZON
     CURRENT_HORIZON = str(t.get('horizon','swing')).lower()
     # Exit volatility must follow the persisted position mode. Without this
@@ -1426,13 +1435,15 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
     # 2. Time exit: signed price profit below the selected ATR allowance.
     # This includes losses and small gains, not necessarily sideways/no volatility.
     hold_duration_sec = now_ts - t["entryTs"]
-    if exit_atr > 0 and hold_duration_sec > ex['time_stop_seconds'] and cur_profit_px < ex['time_stop_profit_atr'] * exit_atr:
+    minute_timeout = t.get('mode',{}).get('engine') == 'demo_scalp_v2' and hold_duration_sec >= 3600
+    if minute_timeout or (exit_atr > 0 and hold_duration_sec > ex['time_stop_seconds'] and cur_profit_px < ex['time_stop_profit_atr'] * exit_atr):
         exit_evidence = {'rule': 'time_exit', 'policy': dict(t['exitPolicyStatus']),
                          'hold_seconds': hold_duration_sec, 'threshold_seconds': ex['time_stop_seconds'],
-                         'profit_price': cur_profit_px, 'profit_atr': cur_profit_px / exit_atr,
+                         'profit_price': cur_profit_px, 'profit_atr': cur_profit_px / exit_atr if exit_atr > 0 else None,
                          'profit_threshold_atr': ex['time_stop_profit_atr'], 'atr': dict(t['exitVolatility'])}
         time_reason = (f"预设 {t['exitPolicyStatus']['preset_id']}：持仓 {hold_duration_sec/3600:.2f}h > {ex['time_stop_seconds']/3600:g}h，"
-                       f"价格浮盈 {cur_profit_px/exit_atr:.3f} ATR < {ex['time_stop_profit_atr']:g} ATR，时间退出")
+                       f"价格浮盈 {cur_profit_px/exit_atr if exit_atr>0 else 0:.3f} ATR < {ex['time_stop_profit_atr']:g} ATR，时间退出")
+        if minute_timeout: time_reason = "程序短线持仓已满60分钟，执行时间退出"
         t['lastExitAttempt'] = exit_evidence
         closed, close_detail = close_position_confirmed(inst_id, "long" if is_long else "short", pos_sz, exit_reason='time_exit', position=curr_pos)
         if not closed:

@@ -121,6 +121,15 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     if getattr(env,'connection_id','') and (record.get('connection_id')!=env.connection_id or record.get('binding_version')!=env.binding_version):
         raise risk.RiskRejected('Account binding changed after decision; fresh inference required')
     decision=record.get('decision',{})
+    minute_engine=(record.get('features') or {}).get('strategy_engine') == 'demo_scalp_v2'
+    if minute_engine:
+        from scripts.demo_scalp import enabled
+        if env.mode != 'demo' or not enabled(env):
+            raise risk.RiskRejected('Minute experiment is enabled for DEMO only')
+        # Frozen identity must agree at every boundary; never trust a caller's horizon.
+        if decision.get('horizon') != 'scalp' or horizon != 'scalp':
+            raise risk.RiskRejected('Minute strategy mode mismatch')
+
     from scripts.trading_prompt import VERSION
     if decision.get('contract_version')!=VERSION or decision.get('contract_valid') is not True:
         raise risk.RiskRejected('Decision output contract was not validated')
@@ -235,7 +244,7 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
         return sorted((str(p.get('instId')),str(p.get('posSide')),str(p.get('posId')),str(p.get('cTime')),str(p.get('pos')),str(p.get('avgPx'))) for p in rows if abs(risk.number(p.get('pos') or 0))>0)
     if identities(latest_positions)!=identities(positions):
         raise risk.RiskRejected('Positions changed during preflight; defer to a fresh decision cycle')
-    if allocation.enabled:
+    if allocation.enabled or minute_engine:
         fresh_pending=_request('GET','/api/v5/trade/orders-pending',{'instType':'SWAP'},env)
         def pending_identity(rows):
             return sorted((str(r.get('ordId')),str(r.get('instId')),str(r.get('posSide')),str(r.get('sz')),str(r.get('accFillSz')),str(r.get('px'))) for r in capital_pool.entry_orders(rows))
@@ -248,5 +257,19 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     plan['portfolio_before']=portfolio
     plan['decision_id']=decision_id
     plan['scope']=env.identity
+    plan['candidate_id']=decision.get('candidate_id')
+    plan['strategy_mode']=decision.get('strategy_mode')
+    if minute_engine:
+        slot=int(record['as_of_ms'])//900000
+        plan['entry_engine']='demo_scalp_v2'
+        plan['correlation_slot']=slot
+        cluster={'BTC','ETH','SOL','DOGE','SUI','XRP'}
+        with evidence.connection() as db:
+            peers=db.execute('SELECT payload FROM intents WHERE scope=? AND at>=? AND at<?',
+                             (env.identity,slot*900,(slot+1)*900)).fetchall()
+        for (raw,) in peers:
+            peer=json.loads(raw)
+            if inst_id.split('-')[0] in cluster and str(peer.get('instId','')).split('-')[0] in cluster and peer.get('side')==side:
+                raise risk.RiskRejected('Correlated same-direction entry already reserved in this 15M window')
     client_id=evidence.begin_intent(env.identity,decision_id,inst_id,plan)
     return plan,client_id

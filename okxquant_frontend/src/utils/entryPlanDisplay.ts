@@ -27,6 +27,8 @@ export function checkLabel(reason: string): string {
     position_limit_reached: '持仓数量已达上限',
     pending_order_exists: '同标的已有在途挂单',
     stop_cooldown_active: '同方向止损冷却中',
+    scalp_15m_bias_opposed: '15分方向仍在反向运行',
+    scalp_volume_insufficient: '短线成交量不足',
     scalp_1m_trigger_not_met: '1M 短线触发条件未满足',
     scalp_1m_volatility_unavailable: '1M 短线波动率不可用',
     scalp_5m_confirmation_not_met: '5M 确认条件未满足',
@@ -35,7 +37,7 @@ export function checkLabel(reason: string): string {
 }
 
 export function setupLabel(setup: string): string {
-  return ({ all: '全部形态', pullback_reclaim: '回踩回收', closed_range_breakout: '区间突破' } as Record<string,string>)[setup] || setup || '未知形态'
+  return ({ all: '全部形态', scalp_momentum_1m: '程序1分短线', scalp_breakout_1m: '程序1分突破', scalp_pullback_1m: '程序1分回踩', pullback_reclaim: '回踩回收', closed_range_breakout: '区间突破' } as Record<string,string>)[setup] || setup || '未知形态'
 }
 export function sideLabel(side: string): string { return side === 'long' ? '做多' : side === 'short' ? '做空' : '方向未明' }
 export function decisionLabel(item: CycleItem): string {

@@ -164,6 +164,13 @@ class ProgramPlanTests(unittest.TestCase):
         p.update(price=99.5,bidPx=99.49,askPx=99.51,macro_4h='4H_MACRO_RANGE',rsi_1h=45,rsi_15m=48,vwap_bias=-0.1,atr_1h=1.0)
         result=plans.catalog(p, {**vars(__import__('scripts.risk_policy', fromlist=['Policy']).Policy()), 'minimum_net_rr': 0.8})
         self.assertTrue(any(x['setup']=='range_reversion' for x in result['plans']), result)
+        plan=next(x for x in result['plans'] if x['setup']=='range_reversion')
+        policy={**vars(__import__('scripts.risk_policy',fromlist=['Policy']).Policy()),'minimum_net_rr':.8}
+        # A reclaim at 99.5 is valid WITHOUT breaking the 99.8 upper boundary.
+        self.assertEqual(plans.validate_live_quote(p,plan['id'],99.5,policy),plan)
+        with self.assertRaisesRegex(ValueError,'program_trigger_lost'):
+            plans.validate_live_quote(p,plan['id'],98.8,policy)
+
 
 
 if __name__=='__main__':unittest.main()

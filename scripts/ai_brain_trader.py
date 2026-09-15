@@ -1028,6 +1028,7 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                     "model_action": str(raw_proposal.get("action", "MISSING")).upper()[:24],
                     "model_confidence": model_score,
                     "candidate_id": d_item.get("candidate_id"),
+                    "horizon": d_item.get("horizon", "swing"),
                     "candidate_origin": d_item.get("candidate_origin"),
                     "entry_plans": plan_catalog,
                     "candidate_reviews": d_item.get("candidate_reviews", raw_proposal.get("candidate_reviews", [])),
