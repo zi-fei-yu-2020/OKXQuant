@@ -102,9 +102,7 @@ function getActionLabel(action?: string, status?: string) {
         >
           {{ store.macroAssessment }}
         </p>
-        <p v-if="store.macroAnalysis.text && store.macroAnalysis.message" class="text-[10px] mt-1 break-words" style="color: var(--text-faint)">
-          {{ store.macroAnalysis.message }}
-        </p>
+
       </div>
     </AppCard>
 
