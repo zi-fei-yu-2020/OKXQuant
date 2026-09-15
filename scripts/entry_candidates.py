@@ -233,6 +233,22 @@ def catalog(package, policy=None):
                     plan={'version':'scalp-1m-plans-v1','instrument':package['instId'],'setup':'scalp_breakout_1m','action':action,'entry_price':entry,'stop_loss_price':stop,'take_profit_price':target,'created_at':at,'trigger_close_ms':last['close_ms'],'valid_for_seconds':60,'net_rr':rr,'horizon':'scalp','target_basis':'1m_atr_2.4','stop_basis':'1m_atr_1.4','supporting_evidence':[{'ref':'/price','value':package['price'],'interpretation':'当前可执行报价'},{'ref':'/vol_ratio','value':package.get('vol_ratio',1.0),'interpretation':'成交量扩张背景'},{'ref':'/structure_1h','value':package.get('structure_1h',''),'interpretation':'1H方向背景需由模型复核'}],'invalidation':{'price':stop,'timeframe':'15M','condition':'1M突破失败并回到触发区间内'},'order_authorized':False}
                     plan['id']=hashlib.sha256(json.dumps(plan,sort_keys=True,ensure_ascii=False,allow_nan=False).encode()).hexdigest()[:24]
                     result['plans'].append(plan)
+                # 1M pullback/reversal: enter only after a closed 1M reclaim and 5M direction agreement.
+                for setup, long_ok, short_ok in (
+                    ('scalp_pullback_1m', last['low'] <= prev['low'] and last['close'] > prev['close'] and f5['close'] >= f5['open'],
+                     last['high'] >= prev['high'] and last['close'] < prev['close'] and f5['close'] <= f5['open']),
+                    ('scalp_reversal_1m', last['close'] > last['open'] and prev['close'] < prev['open'] and f5['close'] > f5['open'],
+                     last['close'] < last['open'] and prev['close'] > prev['open'] and f5['close'] < f5['open'])):
+                    for side,triggered in (('long',long_ok),('short',short_ok)):
+                        if not triggered: continue
+                        action='BUY_LONG' if side=='long' else 'SELL_SHORT'; entry=number(package.get('askPx') if side=='long' else package.get('bidPx'))
+                        stop=(min(last['low'],prev['low'])-atr1*0.8) if side=='long' else (max(last['high'],prev['high'])+atr1*0.8)
+                        target=(entry+atr1*1.8) if side=='long' else (entry-atr1*1.8)
+                        if not (0<stop<entry<target if side=='long' else 0<target<entry<stop): continue
+                        cost=entry*policy['maker_fee']+max(stop,target)*policy['taker_fee']+entry*policy['slippage']; rr=(abs(target-entry)-cost)/(abs(entry-stop)+cost)
+                        if rr<policy['minimum_net_rr']: continue
+                        plan={'version':'scalp-1m-plans-v1','instrument':package['instId'],'setup':setup,'action':action,'entry_price':entry,'stop_loss_price':stop,'take_profit_price':target,'created_at':at,'trigger_close_ms':last['close_ms'],'valid_for_seconds':60,'net_rr':rr,'horizon':'scalp','target_basis':'1m_atr_1.8','stop_basis':'1m_microstructure_0.8atr','supporting_evidence':[{'ref':'/price','value':package['price'],'interpretation':'当前可执行报价'},{'ref':'/entry_candles/1M/last/close','value':last['close'],'interpretation':'1M已收盘微结构触发'},{'ref':'/entry_candles/5M/last/close','value':f5['close'],'interpretation':'5M方向确认'}],'invalidation':{'price':stop,'timeframe':'15M','condition':'1M微结构触发失败'},'order_authorized':False}
+                        plan['id']=hashlib.sha256(json.dumps(plan,sort_keys=True,ensure_ascii=False,allow_nan=False).encode()).hexdigest()[:24]; result['plans'].append(plan)
         except (ValueError,TypeError,KeyError,OverflowError):
             pass
         return result
