@@ -85,6 +85,14 @@ class MinuteScalpTests(unittest.TestCase):
             config.return_value={'OKXQUANT_AUTOTRADE_ENABLED':'0'}
             self.assertFalse(demo_scalp.enabled(SimpleNamespace(mode='demo')))
 
+    def test_minute_boundary_waits_in_current_invocation_not_next_minute(self):
+        with patch.object(demo_scalp.time,'time',side_effect=[120.7,123.05]),patch.object(demo_scalp.time,'sleep') as sleep:
+            self.assertEqual(demo_scalp.closed_frame_time(),123.05)
+            self.assertAlmostEqual(sleep.call_args.args[0],2.35)
+        with patch.object(demo_scalp.time,'time',return_value=124),patch.object(demo_scalp.time,'sleep') as sleep:
+            self.assertEqual(demo_scalp.closed_frame_time(),124)
+            sleep.assert_not_called()
+
     def test_scheduler_keeps_pause_and_minute_frequency(self):
         from okxquant_gateway.scheduler import JOBS,current_jobs
         self.assertEqual(next(j.interval_seconds for j in JOBS if j.name=='demo_scalp'),60)
