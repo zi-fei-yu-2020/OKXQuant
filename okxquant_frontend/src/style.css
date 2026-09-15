@@ -229,8 +229,10 @@
   border-radius: 10px;
   flex-shrink: 0;
   color: white;
-  background: #4658d7;
+  background: transparent;
+  overflow: hidden;
 }
+.brand-mark__image { width: 34px; height: 34px; display: block; object-fit: cover; border-radius: 10px; }
 .ui-button {
   display: inline-flex;
   justify-content: center;
