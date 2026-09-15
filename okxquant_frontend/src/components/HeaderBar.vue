@@ -13,7 +13,7 @@ onMounted(() => {
 })
 onUnmounted(() => clearInterval(timer))
 import {
-LayoutDashboard,
+  LayoutDashboard,
   Brain,
   Newspaper,
   Sparkles,
@@ -37,7 +37,21 @@ const tabs = [
   <header class="terminal-header">
     <div class="terminal-header__inner">
       <RouterLink to="/" class="terminal-brand"
-        ><span class="brand-mark"><img src="/favicon.svg" alt="OKXQuant" class="brand-mark__image" /></span></RouterLink
+        ><span class="brand-mark"><img src="/favicon.svg" alt="OKXQuant" class="brand-mark__image" /></span><span
+          >OKXQuant</span
+        ></RouterLink
+      >
+      <nav class="terminal-nav" aria-label="监控导航">
+        <RouterLink
+          v-for="tab in tabs"
+          :key="tab.to"
+          :to="tab.to"
+          class="terminal-nav__item"
+          exact-active-class="is-active"
+          :class="{ 'is-active': tab.to === '/' && route.meta.tab === 'trading' }"
+          ><component :is="tab.icon" class="size-4" aria-hidden="true" /><span>{{
+            tab.label
+          }}</span></RouterLink
         >
       </nav>
       <div class="flex items-center gap-1.5">
