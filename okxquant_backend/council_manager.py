@@ -1,4 +1,4 @@
-"""OKXQuant Quantum Hedge Fund Investment Committee (Trading Desk Council).
+"""OKXQuant Hedge Fund Investment Committee (Trading Desk Council).
 Fully Re-architected in v0.1.0 with Full Account Awareness:
 1. Symmetrical Trader Roles (Equal Peer Traders):
    - Trader A: Senior Trend-Pullback Trader (Conservative & High Win-rate)

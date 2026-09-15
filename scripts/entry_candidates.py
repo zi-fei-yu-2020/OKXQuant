@@ -214,6 +214,7 @@ def catalog(package, policy=None):
                 last,prev=one[-1],one[-2]; f5=five[-1]
                 hi=max(b['high'] for b in one[-21:-1]); lo=min(b['low'] for b in one[-21:-1])
                 avg_vol=sum(b['volume'] for b in one[-6:-1])/5
+                atr1=max((b['high']-b['low'] for b in one[-14:]), default=0.0)
                 vol_ok=avg_vol>0 and last['volume']>=avg_vol*1.15
                 long_trigger=last['close']>hi and last['open']<=hi and f5['close']>=f5['open'] and vol_ok
                 short_trigger=last['close']<lo and last['open']>=lo and f5['close']<=f5['open'] and vol_ok
@@ -222,7 +223,6 @@ def catalog(package, policy=None):
                     if not triggered:
                         rejected('scalp_breakout_1m',side,'scalp_1m_trigger_not_met'); continue
                     entry=number(package.get('askPx') if side=='long' else package.get('bidPx'))
-                    atr1=max((b['high']-b['low'] for b in one[-14:]), default=0.0)
                     if atr1<=0: rejected('scalp_breakout_1m',side,'scalp_1m_volatility_unavailable'); continue
                     stop=(entry-atr1*1.4) if side=='long' else (entry+atr1*1.4)
                     target=(entry+atr1*2.4) if side=='long' else (entry-atr1*2.4)

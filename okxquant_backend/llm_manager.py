@@ -847,7 +847,7 @@ def fetch_remote_models(
 
     last_err = ""
     for ep, hdrs in endpoints:
-        hdrs["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OKXQuant-Quantum-Trader/6.6"
+        hdrs["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OKXQuant/6.6"
         req = urllib.request.Request(ep, headers=hdrs)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -951,7 +951,7 @@ def build_request_spec(
 
         headers = {
             "Content-Type": "application/json",
-            "User-Agent": "OKXQuant-Quantum-Trader/5.4 (Claude-Messages)",
+            "User-Agent": "OKXQuant/5.4 (Claude-Messages)",
             "anthropic-version": "2023-06-01",
         }
         if api_key:
@@ -999,7 +999,7 @@ def build_request_spec(
 
         headers = {
             "Content-Type": "application/json",
-            "User-Agent": "OKXQuant-Quantum-Trader/5.4 (OpenAI-Responses)",
+            "User-Agent": "OKXQuant/5.4 (OpenAI-Responses)",
         }
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -1024,7 +1024,7 @@ def build_request_spec(
 
         headers = {
             "Content-Type": "application/json",
-            "User-Agent": "OKXQuant-Quantum-Trader/5.4 (OpenAI-Chat)",
+            "User-Agent": "OKXQuant/5.4 (OpenAI-Chat)",
         }
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"

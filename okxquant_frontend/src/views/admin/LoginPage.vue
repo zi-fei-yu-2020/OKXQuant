@@ -41,7 +41,7 @@ async function handleLogin() {
     <header class="login-topbar">
       <RouterLink to="/" class="terminal-brand"
         ><span class="brand-mark"><Activity class="size-5" /></span
-        ><span>OKXQuant Quantum</span></RouterLink
+        ><span>OKXQuant</span></RouterLink
       ><button
         class="ui-icon-button"
         :aria-label="theme === 'dark' ? '切换浅色主题' : '切换深色主题'"

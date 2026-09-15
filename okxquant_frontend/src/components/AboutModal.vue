@@ -206,7 +206,7 @@ async function copyToClipboard(text: string, targetName: string) {
 
         <!-- Footer -->
         <div class="pt-2 text-center text-[10px]" style="color: var(--text-faint)">
-          OKXQuant QUANTUM TRADER · ENTERPRISE QUANTITATIVE FRAMEWORK
+          OKXQuant · ENTERPRISE QUANTITATIVE FRAMEWORK
         </div>
       </div></AppDialog
     >

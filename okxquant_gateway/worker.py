@@ -37,7 +37,7 @@ def format_message(row: dict[str, object]) -> str:
         created = created.replace("T", " ")[:19]
     title = str(row.get("title", "")).strip()
     body = str(row.get("message", "")).strip()
-    return f"【OKXQuant Quantum】{title}\n⏱️ 时间：{created}\n━━━━━━━━━━━━━━\n{body}"
+    return f"【OKXQuant】{title}\n⏱️ 时间：{created}\n━━━━━━━━━━━━━━\n{body}"
 
 
 def run() -> None:

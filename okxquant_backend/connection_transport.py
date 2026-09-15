@@ -130,7 +130,7 @@ def _http(method, path, params, headers, timeout):
     query = urllib.parse.urlencode(params or {}) if method == 'GET' else ''
     body = json.dumps(params or {}, separators=(',', ':'), ensure_ascii=False).encode() if method == 'POST' else None
     req = urllib.request.Request('https://www.okx.com'+path+('?' + query if query else ''), data=body,
-                                 headers={'Content-Type':'application/json', 'Accept':'application/json', 'User-Agent':'OKXQuant-Quantum-Trader/0.1.0', **headers}, method=method)
+                                 headers={'Content-Type':'application/json', 'Accept':'application/json', 'User-Agent':'OKXQuant/0.1.0', **headers}, method=method)
     try:
         with urllib.request.build_opener(NoRedirect()).open(req, timeout=min(10, max(.1, timeout))) as response:
             payload = json.loads(response.read(4*1024*1024).decode('utf8'))

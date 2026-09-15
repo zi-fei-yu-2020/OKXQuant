@@ -1603,7 +1603,7 @@ def update_application(payload: UpdateRequest, x_okxquant_admin_token: str | Non
         "after": status_after,
         "git_output": output,
         "restart_required": True,
-        "restart_note": "请重启 okxquant-quantum 与 okxquant-scheduler 服务，让新代码接管后台与调度。",
+        "restart_note": "请重启 okxquant-backend 与 okxquant-scheduler 服务，让新代码接管后台与调度。",
     }
 
 
