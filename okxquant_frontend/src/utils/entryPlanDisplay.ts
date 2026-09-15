@@ -3,8 +3,34 @@ export type CycleItem = NonNullable<DecisionCycle['items']>[number]
 export type PlanCheck = NonNullable<CycleItem['entry_plans']>['checks'][number]
 
 export function checkLabel(reason: string): string {
-  return ({ existing_macro_direction_veto: '大周期方向限制', quote_moved_beyond_closed_trigger: '报价已偏离收盘触发位置', no_observed_target: '缺少可观察的目标位', pullback_requires_established_trend:'回踩缺少同向1H趋势，反转需重新确认', closed_candle_trigger_not_met: '收盘触发条件未满足', net_rr_below_policy: '成本后盈亏比未达要求', invalid_geometry: '价格结构无效', market_data_invalid: '行情不可用', environment_not_verified_for_entry: '交易环境尚未核验', entry_candle_provenance_missing: '缺少同一时点的收盘证据' } as Record<string,string>)[reason] || reason || '检查未就绪'
+  const labels: Record<string, string> = {
+    existing_macro_direction_veto: '大周期方向限制',
+    quote_moved_beyond_closed_trigger: '报价已偏离收盘触发位置',
+    no_observed_target: '缺少可观察的目标位',
+    pullback_requires_established_trend: '缺少同向趋势，不能当作回踩',
+    closed_candle_trigger_not_met: '等待收盘触发',
+    net_rr_below_policy: '成本后净盈亏比不足',
+    net_rr_below_minimum: '净盈亏比不足',
+    invalid_geometry: '价格结构无效',
+    trend_tail_overextended: '趋势末端过度延伸，暂不追单',
+    market_data_invalid: '行情数据无效',
+    environment_not_verified_for_entry: '交易环境尚未核验',
+    entry_candle_provenance_missing: '缺少同一时点的收盘证据',
+    zero_entry_volatility: '入场波动率无效',
+    macro_environment_missing: '缺少大周期市场状态',
+    closed_trigger_invalidated_by_quote: '当前报价已使收盘触发失效',
+    entry_gate_blocked: '执行前置条件未通过',
+    candidate_expired: '候选已过期',
+    decision_stale: '决策已过期',
+    pending_snapshot_unknown: '挂单状态无法核验',
+    account_balance_unavailable: '账户余额不可用',
+    position_limit_reached: '持仓数量已达上限',
+    pending_order_exists: '同标的已有在途挂单',
+    stop_cooldown_active: '同方向止损冷却中',
+  }
+  return labels[reason] || reason || '检查未就绪'
 }
+
 export function setupLabel(setup: string): string {
   return ({ all: '全部形态', pullback_reclaim: '回踩回收', closed_range_breakout: '区间突破' } as Record<string,string>)[setup] || setup || '未知形态'
 }
@@ -66,7 +92,7 @@ export function directionSummary(row: AuditDisplayRow, side: 'long' | 'short') {
     const selected = plans.find(plan => plan.id === row.item?.candidate_id)
     return { text: selected ? `${setupLabel(selected.setup)} · 模型已选择` : `${plans.length} 个程序方案 · 模型未选择`, extra: 0 }
   }
-  const priority: Record<string,number> = { pullback_requires_established_trend:2, market_data_invalid:0, entry_candle_provenance_missing:0,
+  const priority: Record<string,number> = { trend_tail_overextended:1, pullback_requires_established_trend:2, market_data_invalid:0, entry_candle_provenance_missing:0,
     environment_not_verified_for_entry:0, invalid_geometry:1, no_observed_target:2,
     net_rr_below_policy:3, existing_macro_direction_veto:4, quote_moved_beyond_closed_trigger:5,
     closed_candle_trigger_not_met:6 }
@@ -74,7 +100,7 @@ export function directionSummary(row: AuditDisplayRow, side: 'long' | 'short') {
     .sort((a,b) => (priority[a.reason] ?? 0) - (priority[b.reason] ?? 0))
   const primary = groups[0]
   if (primary) {
-    const shortLabels: Record<string,string> = { pullback_requires_established_trend:'缺少同向趋势，不能当作回踩', no_observed_target:'缺少目标位', net_rr_below_policy:'净盈亏比不足',
+    const shortLabels: Record<string,string> = { pullback_requires_established_trend:'缺少同向趋势，不能当作回踩', trend_tail_overextended:'趋势末端过度延伸，暂不追单', no_observed_target:'缺少目标位', net_rr_below_policy:'净盈亏比不足',
       closed_candle_trigger_not_met:'等待收盘触发', existing_macro_direction_veto:'大周期方向限制' }
     const ratios = primary.ratios.length ? `（${primary.ratios.map(value => value.toFixed(2)).join(' / ')}）` : ''
     return { text: (shortLabels[primary.reason] || checkLabel(primary.reason)) + ratios, extra: groups.length - 1 }

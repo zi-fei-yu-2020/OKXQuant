@@ -221,7 +221,9 @@ def load_horizon_intents():
     except Exception: return {}
 
 def save_horizon_intent(inst_id, side, horizon, decision_id=None):
-    data=load_horizon_intents(); data[f'{inst_id}_{side}']={'horizon': horizon if horizon in {'scalp','swing'} else 'swing','decision_id':decision_id,'ts':int(time.time())}
+    data=load_horizon_intents(); from scripts.strategy_modes import mode_for
+    mode=mode_for(horizon)
+    data[f'{inst_id}_{side}']={'horizon': horizon if horizon in {'scalp','swing'} else 'swing','mode_version':mode.get('version','strategy-modes-v2'),'mode_signature':mode.get('signature',''),'entry_timeframe':mode['entry_timeframe'],'confirmation_timeframe':mode['confirmation_timeframe'],'bias_timeframe':mode['bias_timeframe'],'max_holding_seconds':mode['max_holding_seconds'],'decision_id':decision_id,'ts':int(time.time())}
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(HORIZON_INTENTS_FILE,'w',encoding='utf-8') as f: json.dump(data,f,ensure_ascii=False,indent=2)
 
@@ -558,7 +560,9 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
     env = market._selected()
     availability = support.opening_status(inst_id, env.mode)
     if not availability["can_open"]:
-        return False, availability["message"]
+        reason = str(availability.get("message") or "opening_environment_unavailable")
+        strategy_evidence.best_effort(getattr(env,'identity','unknown'), 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': None, 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'opening_environment_unavailable', 'details': {'message': reason}, 'at': time.time()})
+        return False, reason
     effective_px = price
     effective_tp = tp_px
     effective_sl = sl_px
@@ -598,7 +602,9 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
             entry=effective_px, stop=effective_sl, take_profit=effective_tp, requested_size=size,
             budget=risk_budget_usdt, decision_id=decision_id, decision_at=decision_at, horizon=horizon)
     except Exception as exc:
-        return False, f"Final risk preflight rejected: {type(exc).__name__}: {exc}"
+        reason = f"Final risk preflight rejected: {type(exc).__name__}: {exc}"
+        strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': None, 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'preflight_rejected', 'details': {'error_type': type(exc).__name__, 'message': str(exc)[:500]}, 'at': time.time()})
+        return False, reason
     LAST_ENTRY_PLAN.clear(); LAST_ENTRY_PLAN.update(plan)
     save_horizon_intent(inst_id, pos_side, horizon, decision_id)
     size = plan['size']
@@ -612,6 +618,7 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
     strategy_evidence.best_effort(market._selected().identity, 'entry_submission',
         {'client_id': client_id, 'plan': plan, 'transport_ok': result['ok'], 'response': result.get('data')})
     if not result["ok"]:
+        strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': plan.get('candidate_id'), 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'submission_unknown', 'client_id': client_id, 'details': {'transport_ok': False, 'error_type': result.get('error_type'), 'status': result.get('status_code')}, 'at': time.time()})
         return False, "Entry outcome unknown; durable reservation retained for read-only reconciliation"
     payload = result.get("data")
     order_id = None
@@ -625,6 +632,7 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
     elif isinstance(payload, list) and payload and isinstance(payload[0], dict):
         order_id = payload[0].get("ordId")
     if not order_id:
+        strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': plan.get('candidate_id'), 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'accepted_missing_order_id', 'client_id': client_id, 'at': time.time()})
         return False, "exchange accepted response without a verifiable order id"
     strategy_evidence.finish_intent(client_id, 'acknowledged', {'order_id': str(order_id), 'size': size})
     return True, str(order_id)
@@ -1281,8 +1289,10 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
             'identity':position_identity(curr_pos,market._selected().identity),'orders':rows,
             'adopted_stop':adopted_stop,'source':'trader','cloud_stop_changed':False})
         score, action, reasons, strat_tag, strat_desc = evaluate_asset_signal(f)
+        horizon_intent = consume_horizon_intent(inst_id, side_name)
         trackers[pos_key] = {
-            "horizon": consume_horizon_intent(inst_id, side_name),
+            "horizon": horizon_intent,
+            "mode": __import__("scripts.strategy_modes",fromlist=["mode_for"]).mode_for(horizon_intent),
             "instId": inst_id,
             "name": name,
             "side": curr_pos["side"],
@@ -2135,7 +2145,7 @@ def execute_portfolio():
             # room for noise. Final risk is still calculated from stop distance.
             from scripts.strategy_modes import leverage_for
             default_leverage = leverage_for(horizon)
-            ai_lever = leverage_for(horizon, ai_decision.get("leverage", default_leverage))
+            ai_lever = leverage_for(horizon, ai_decision.get("leverage") if ai_decision.get("leverage") is not None else None, ai_conf)
             
             # If AI planned margin & leverage, calculate custom contract size
             if ai_margin > 0 and ai_lever >= 1.0 and f["price"] > 0 and ct_val > 0:
