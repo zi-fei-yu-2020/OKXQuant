@@ -1315,6 +1315,10 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
     t = trackers[pos_key]
     global CURRENT_HORIZON
     CURRENT_HORIZON = str(t.get('horizon','swing')).lower()
+    # Exit volatility must follow the persisted position mode. Without this
+    # explicit propagation, scalp positions silently fall back to ATR(15M).
+    f['horizon'] = CURRENT_HORIZON
+    f['mode'] = t.get('mode') or __import__('scripts.strategy_modes',fromlist=['mode_for']).mode_for(CURRENT_HORIZON)
     ex = _exit_preset(t, executed_actions, name)
     volatility = exit_policy.volatility(f)
     exit_atr = volatility['value']
