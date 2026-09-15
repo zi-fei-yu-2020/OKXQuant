@@ -151,5 +151,61 @@ class LLMTransportTests(unittest.TestCase):
             request_json(self.endpoint, {}, {}, 30, 4)
 
 
+class SeparateAttemptBudgetTests(unittest.TestCase):
+    def test_slow_first_attempt_can_retry_same_request_within_total_budget(self):
+        clock=[0.]
+        calls=[]
+        payload={'model':'unchanged-model','reasoning_effort':'high','messages':[{'role':'user','content':'same evidence'}]}
+        def send(request,timeout):
+            calls.append((request.data,timeout))
+            if len(calls)==1:
+                clock[0]+=timeout
+                raise urllib.error.URLError(TimeoutError('PRIVATE-TIMEOUT'))
+            clock[0]+=60
+            response=MagicMock()
+            response.__enter__.return_value=response
+            response.getcode.return_value=200
+            response.read.return_value=b'{"ok":true}'
+            return response
+        with patch('urllib.request.urlopen',side_effect=send), patch('okxquant_backend.llm_transport.time.monotonic',side_effect=lambda:clock[0]), patch('okxquant_backend.llm_transport.time.sleep',side_effect=lambda delay:clock.__setitem__(0,clock[0]+delay)):
+            result=request_json('https://model.example',{},payload,160,max_attempts=2,attempt_timeout=75)
+        self.assertEqual(result[3],2)
+        self.assertEqual(result[2],135500)
+        self.assertEqual([call[1] for call in calls],[75,75])
+        self.assertEqual(calls[0][0],calls[1][0])
+        self.assertEqual(json.loads(calls[0][0]),payload)
+
+    def test_exhaustion_is_bounded_and_preserves_safe_timeout_category(self):
+        from okxquant_backend.llm_transport import public_failure
+        clock=[0.];timeouts=[]
+        def send(request,timeout):
+            timeouts.append(timeout);clock[0]+=timeout
+            raise TimeoutError('PRIVATE-SECRET')
+        with patch('urllib.request.urlopen',side_effect=send), patch('okxquant_backend.llm_transport.time.monotonic',side_effect=lambda:clock[0]), patch('okxquant_backend.llm_transport.time.sleep',side_effect=lambda delay:clock.__setitem__(0,clock[0]+delay)):
+            with self.assertRaises(LLMRequestError) as caught:
+                request_json('https://model.example',{}, {},100,max_attempts=2,attempt_timeout=75)
+        self.assertEqual(timeouts,[75,24.5])
+        detail=public_failure(caught.exception)
+        self.assertEqual(detail['attempts'],2)
+        self.assertEqual(detail['category'],'request_timeout')
+        self.assertIn('超时',detail['message'])
+        self.assertNotIn('PRIVATE-SECRET',json.dumps(detail))
+
+    def test_response_arriving_after_total_deadline_is_not_accepted(self):
+        response=MagicMock();response.__enter__.return_value=response
+        response.getcode.return_value=200;response.read.return_value=b'{"ok":true}'
+        with patch('urllib.request.urlopen',return_value=response),patch('okxquant_backend.llm_transport.time.monotonic',side_effect=[0,0,161]):
+            with self.assertRaises(LLMRequestError) as caught:
+                request_json('https://model.example',{}, {},160,max_attempts=2,attempt_timeout=75)
+        self.assertEqual(caught.exception.category,'deadline_exceeded')
+
+    def test_invalid_attempt_timeout_is_rejected_before_network(self):
+        for timeout in (0,-1,float('nan'),float('inf'),True):
+            with self.subTest(timeout=timeout),patch('urllib.request.urlopen') as send:
+                with self.assertRaises(ValueError):
+                    request_json('https://model.example',{}, {},160,attempt_timeout=timeout)
+                send.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

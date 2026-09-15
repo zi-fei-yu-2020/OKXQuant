@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, Mock, patch
 import urllib.request
 
 import scripts
+from okxquant_backend.llm_transport import LLMRequestError
 from scripts import trading_prompt, wait_audit, risk_policy
 
 
@@ -206,6 +207,23 @@ class BrainRegressions(unittest.TestCase):
                 self.assertEqual("/smart_money/weighted_long_pct" in facts, action == "BUY_LONG")
         self.llm.assert_not_called()
 
+    def test_main_transport_budget_and_durable_failure_reason(self):
+        self.council_config.return_value={'enabled':False}
+        self.llm.side_effect=LLMRequestError(0,2,'request_timeout')
+        result=self.brain.execute_batch_ai_brain_cycle(active_positions_detail=[],usdt_available=1000)
+        self.assertIsNone(result)
+        self.assertEqual(self.llm.call_args.kwargs['timeout'],160)
+        self.assertEqual(self.llm.call_args.kwargs['attempt_timeout'],75)
+        self.assertEqual(self.llm.call_args.kwargs['max_attempts'],2)
+        report=json.loads((self.root/'trading_output_validation.json').read_text(encoding='utf-8'))
+        self.assertEqual(report['reason'],self.brain.get_last_inference_error())
+        self.assertIn('超时',report['reason'])
+        self.assertEqual(report['model_failure']['attempts'],2)
+        events=[c for c in self.evidence.best_effort.call_args_list if c.args[1]=='model_request_failure']
+        self.assertEqual(len(events),1)
+        self.assertEqual(events[0].args[2]['category'],'request_timeout')
+        self.writer.assert_not_called();self.barrier.assert_not_called()
+
     def test_invalid_wait_gets_one_bounded_correction_before_any_write(self):
         from test_wait_repair import macro_wait
         fixed=macro_wait();bad=copy.deepcopy(fixed);bad['wait_audit']['short']['code']='position_constraint'
@@ -217,7 +235,7 @@ class BrainRegressions(unittest.TestCase):
         self.assertEqual(result[INST]['decision']['wait_repair']['status'],'corrected')
         self.assertEqual(self.llm.call_count,2)
         self.assertEqual(self.llm.call_args.kwargs['max_attempts'],1)
-        self.assertEqual(self.llm.call_args.kwargs['timeout'],20)
+        self.assertEqual(self.llm.call_args.kwargs['timeout'],35)
         self.writer.assert_not_called();self.barrier.assert_not_called()
         events=[c for c in self.evidence.best_effort.call_args_list if c.args[1]=='wait_audit_repair']
         self.assertEqual(len(events),1)
@@ -228,10 +246,12 @@ class BrainRegressions(unittest.TestCase):
         bad=macro_wait();bad['wait_audit']['short']['code']='position_constraint'
         initial=proposal();initial['decisions'][INST]=bad
         self.council_config.return_value={'enabled':False}
-        self.llm.side_effect=[(json.dumps(initial),'',{},1),TimeoutError('fixture')]
+        self.llm.side_effect=[(json.dumps(initial),'',{},1),LLMRequestError(0,1,'request_timeout')]
         result=self.run_cycle()
         self.assertEqual(result[INST]['decision']['decision_status'],'incomplete')
         self.assertEqual(result[INST]['decision']['wait_repair']['status'],'failed')
+        events=[c for c in self.evidence.best_effort.call_args_list if c.args[1]=='wait_audit_repair']
+        self.assertEqual(events[0].args[2]['report']['model_failure']['category'],'request_timeout')
         self.assertEqual(self.llm.call_count,2)
         self.writer.assert_not_called();self.barrier.assert_not_called()
 

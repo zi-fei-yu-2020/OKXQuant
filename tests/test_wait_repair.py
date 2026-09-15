@@ -22,6 +22,27 @@ def macro_wait(p=None):
 
 
 class ConstraintTests(unittest.TestCase):
+    def test_prompt_dedup_preserves_evidence_and_does_not_mutate_validation_input(self):
+        prior={'required':True,'review_id':'prior-id','changed_refs':['/price'],
+               'previous_conditions':{'long':{'conditions':[{'ref':'/price','op':'gt','value':100}], 'reason':'x'*2000}},
+               'trigger_checks':{'long':True}}
+        runtime={'previous_wait_reviews':{INST:prior},'market_matrix':'unique market evidence'}
+        before=copy.deepcopy(runtime)
+        bundle=contract.compose({'id':'test'},runtime,[package()])
+        payload=json.JSONDecoder().raw_decode(bundle.user)[0]
+        compact=payload['runtime_data']['previous_wait_reviews'][INST]
+        self.assertEqual(runtime,before)
+        self.assertEqual(bundle.previous_wait_reviews,before['previous_wait_reviews'])
+        self.assertEqual(payload['runtime_data']['market_matrix'],runtime['market_matrix'])
+        reconstructed=copy.deepcopy(compact)
+        for key,refpath in reconstructed.pop('shared_evidence_refs').items():
+            value=payload
+            for token in refpath.lstrip('/').split('/'):
+                value=value[token.replace('~1','/').replace('~0','~')]
+            reconstructed[key]=value
+        self.assertEqual(reconstructed,prior)
+        self.assertLess(len(json.dumps(compact)),len(json.dumps(prior)))
+
     def test_macro_constraint_is_valid_for_the_blocked_direction_without_positions(self):
         for macro in ('4H_MACRO_BULL','4H_MACRO_BEAR'):
             p={**package(),'macro_4h':macro}
@@ -77,7 +98,7 @@ class RepairTests(unittest.TestCase):
         before=copy.deepcopy((self.raw,self.validated,self.p));result,report,request=self.call()
         self.assertTrue(result['decisions'][INST]['contract_valid']);self.assertEqual(result['decisions'][INST]['action'],'WAIT')
         self.assertEqual(report['corrected'],[INST]);self.assertEqual(report['status'],'corrected')
-        request.assert_called_once();self.assertEqual(request.call_args.kwargs['max_attempts'],1);self.assertEqual(request.call_args.kwargs['timeout'],20)
+        request.assert_called_once();self.assertEqual(request.call_args.kwargs['max_attempts'],1);self.assertEqual(request.call_args.kwargs['timeout'],35)
         payload=json.loads(request.call_args.kwargs['messages'][1]['content'])
         self.assertEqual(payload['frozen_facts'][INST],contract.facts_for(self.p))
         self.assertEqual(report['original_waits'][INST]['value'],self.raw['decisions'][INST])
@@ -131,7 +152,7 @@ class RepairTests(unittest.TestCase):
             callback.assert_called_once();self.assertEqual(report['status'],'failed')
             self.assertFalse(result['decisions'][INST]['contract_valid']);self.assertNotIn('secret',json.dumps(report))
     def test_response_after_time_budget_is_not_applied_but_is_archived(self):
-        with patch.object(wait_repair.time,'monotonic',side_effect=[0,22,22]):
+        with patch.object(wait_repair.time,'monotonic',side_effect=[0,37,37,37]):
             result,report,request=self.call()
         self.assertFalse(result['decisions'][INST]['contract_valid'])
         self.assertEqual(report['status'],'failed');self.assertIn('response_snapshot',report)
@@ -164,6 +185,9 @@ class LLMBudgetTests(unittest.TestCase):
             self.assertEqual(request.call_args.args[3],20)
             llm_manager.execute_llm_request(**args)
             self.assertEqual(request.call_args.kwargs,{})
+            llm_manager.execute_llm_request(**{**args,'timeout':160},max_attempts=2,attempt_timeout=75)
+            self.assertEqual(request.call_args.kwargs,{'max_attempts':2,'attempt_timeout':75})
+            self.assertEqual(request.call_args.args[3],160)
 
 
 class CounterTests(unittest.TestCase):

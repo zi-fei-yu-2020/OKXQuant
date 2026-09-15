@@ -822,7 +822,7 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                         reasoning_effort=effort,
                         temperature=0.2,
                         response_format={"type": "json_object"},
-                        timeout=50.0,
+                        timeout=160.0, attempt_timeout=75.0, max_attempts=2,
                         require_complete=True,
                     )
                     raw_res = {"usage": usage_dict} if isinstance(usage_dict, dict) else {}
@@ -1144,19 +1144,24 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
         return standard_cache
 
     except Exception as e:
-        code = getattr(e, "status_code", None) or getattr(e, "code", None)
-        attempts = getattr(e, "attempts", None)
-        LAST_INFERENCE_ERROR = ("模型输出契约不合格：" + str(e)) if isinstance(e, trading_prompt.ContractError) else (f"模型接口 HTTP {code}" if code else type(e).__name__)
-        atomic_write_json(os.path.join(DATA_DIR, 'trading_output_validation.json'), {'status':'rejected','contract_version':trading_prompt.VERSION,'reason':LAST_INFERENCE_ERROR, 'json_response':json_report, 'updated_at':time.time()})
+        from okxquant_backend.llm_transport import public_failure
+        failure = public_failure(e)
+        if failure:
+            LAST_INFERENCE_ERROR = failure['message']
+        else:
+            code = getattr(e, 'status_code', None) or getattr(e, 'code', None)
+            LAST_INFERENCE_ERROR = ('模型输出契约不合格：' + str(e)) if isinstance(e, trading_prompt.ContractError) else (f'模型接口 HTTP {code}' if code else type(e).__name__)
+        # Persist AFTER building the full reason; UI, logs and audit see the same failure.
+        atomic_write_json(os.path.join(DATA_DIR, 'trading_output_validation.json'),
+            {'status':'rejected','contract_version':trading_prompt.VERSION,'reason':LAST_INFERENCE_ERROR,
+             'model_failure':failure,'json_response':json_report,'updated_at':time.time()})
+        if failure:
+            strategy_evidence.best_effort(market._selected().identity, 'model_request_failure',
+                {**failure,'caller':'trading_brain','frame_time':time_str,'model':model_name})
         if json_report:
             strategy_evidence.best_effort(market._selected().identity, 'model_json_response', json_report)
-        provider_reason = getattr(e, "provider_reason", "")
-        if provider_reason:
-            LAST_INFERENCE_ERROR += f"（{provider_reason}）"
-        if attempts:
-            LAST_INFERENCE_ERROR += f"，已尝试 {attempts} 次"
-        telemetry.finish("failed", error=e)
-        print(f"[AI Brain Batch] Error in batch inference: {e}")
+        telemetry.finish('failed', error=e)
+        print(f'[AI Brain Batch] Error in batch inference: {LAST_INFERENCE_ERROR}')
         return None
 
 def get_latest_ai_decision(inst_id: str, max_age_seconds: int = DECISION_MAX_AGE_SECONDS) -> Optional[Dict[str, Any]]:

@@ -50,19 +50,48 @@ def error_diagnostics(error: urllib.error.HTTPError) -> tuple[str, str]:
     return provider_code, request_id
 
 
+ERROR_LABELS = {
+    'request_timeout': '模型请求超时', 'network_error': '模型网络请求失败',
+    'connection_error': '模型连接失败', 'dns_error': '模型地址解析失败',
+    'certificate_error': '模型连接证书校验失败', 'deadline_exceeded': '模型调用总时限已耗尽',
+    'invalid_response': '模型网关响应格式无效', 'invalid_json_response': '模型网关返回的内容不是有效JSON',
+    'empty_model_output': '模型返回空正文', 'http_error': '模型接口请求失败',
+}
+
+
+def network_category(error):
+    reason = error.reason if isinstance(error, urllib.error.URLError) else error
+    if isinstance(reason, ssl.SSLError): return 'certificate_error'
+    if isinstance(reason, TimeoutError) or getattr(reason, 'errno', None) == errno.ETIMEDOUT: return 'request_timeout'
+    if isinstance(reason, socket.gaierror): return 'dns_error'
+    if isinstance(reason, ConnectionError): return 'connection_error'
+    return 'network_error'
+
+
 class LLMRequestError(RuntimeError):
     def __init__(self, status_code: int, attempts: int, category: str,
                  provider_code: str = "", request_id: str = ""):
         self.status_code = status_code
         self.attempts = attempts
-        self.category = category
+        self.category = category if category in ERROR_LABELS else 'network_error'
         self.provider_code = provider_code if provider_code in PROVIDER_ERROR_LABELS else ""
         self.provider_reason = PROVIDER_ERROR_LABELS.get(self.provider_code, "")
         self.request_id = request_id if re.fullmatch(r"[0-9]{20}[A-Za-z0-9]{8,64}", request_id) else ""
-        label = f"HTTP {status_code}" if status_code else category
+        label = ERROR_LABELS[self.category]
+        if status_code: label += f'（HTTP {status_code}）'
         if self.provider_reason:
             label += f"（{self.provider_reason}）"
         super().__init__(f"模型请求失败：{label}，已尝试 {attempts} 次；未更换模型或降低思考强度")
+
+
+def public_failure(error):
+    """Allowlisted diagnostics only: never return exception cause, body, URL or credentials."""
+    if not isinstance(error, LLMRequestError):
+        return None
+    return {'error_type': 'LLMRequestError', 'category': error.category,
+            'http_status': error.status_code or None, 'attempts': error.attempts,
+            'provider_error_code': error.provider_code, 'request_id': error.request_id,
+            'message': str(error)}
 
 
 def retry_delay(header: str | None, attempt: int) -> float:
@@ -93,14 +122,18 @@ def _transient_network_error(error: BaseException) -> bool:
 
 
 def request_json(endpoint: str, headers: dict[str, str], payload: dict[str, Any], timeout: float,
-                 max_attempts: int = 3) -> tuple[dict[str, Any], int, int, int]:
+                 max_attempts: int = 3, attempt_timeout: float | None = None) -> tuple[dict[str, Any], int, int, int]:
     """Return JSON, HTTP status, end-to-end latency and attempts used.
 
     All attempts share one timeout budget. Retry-After is respected: when it
     exceeds the remaining budget, fail instead of sending an early retry.
+    attempt_timeout caps socket connect/read waits, not a hard wall-clock kill.
+    Responses received after the shared deadline are never accepted.
     """
     if not math.isfinite(timeout) or timeout <= 0 or not 1 <= max_attempts <= 3:
         raise ValueError("Invalid inference timeout or retry limit")
+    if attempt_timeout is not None and (isinstance(attempt_timeout, bool) or not math.isfinite(attempt_timeout) or attempt_timeout <= 0):
+        raise ValueError('Invalid per-attempt timeout')
     encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     start = time.monotonic()
     deadline = start + timeout
@@ -116,9 +149,12 @@ def request_json(endpoint: str, headers: dict[str, str], payload: dict[str, Any]
         failure: BaseException | None = None
         try:
             request = urllib.request.Request(endpoint, data=encoded, headers=headers)
-            with urllib.request.urlopen(request, timeout=remaining) as response:
+            request_timeout = min(remaining, attempt_timeout) if attempt_timeout is not None else remaining
+            with urllib.request.urlopen(request, timeout=request_timeout) as response:
                 status = response.getcode()
                 decoded = json.loads(response.read().decode("utf-8"))
+            if time.monotonic() > deadline:
+                raise LLMRequestError(status, attempt, 'deadline_exceeded')
             if not isinstance(decoded, dict) or decoded.get("error"):
                 raise LLMRequestError(status, attempt, "invalid_response")
             return decoded, status, round((time.monotonic() - start) * 1000), attempt
@@ -134,7 +170,9 @@ def request_json(endpoint: str, headers: dict[str, str], payload: dict[str, Any]
                         status, attempt, max_attempts, provider_code or "unknown", request_id or "unavailable")
         except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
             retryable = _transient_network_error(exc)
+            category = network_category(exc)
             failure = exc
+            LOG.warning('LLM transport failure category=%s attempt=%s/%s', category, attempt, max_attempts)
         except (ValueError, UnicodeError) as exc:
             raise LLMRequestError(status, attempt, "invalid_json_response") from exc
         delay = retry_delay(delay_header, attempt)
