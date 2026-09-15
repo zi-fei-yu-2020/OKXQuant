@@ -37,7 +37,7 @@ const tabs = [
   <header class="terminal-header">
     <div class="terminal-header__inner">
       <RouterLink to="/" class="terminal-brand"
-        ><span class="brand-mark"><img src="/favicon.svg" alt="OKXQuant" class="brand-mark__image" /></span><span
+        ><span class="brand-mark"><img src="/favicon.svg?v=okxquant-20260915" alt="OKXQuant" class="brand-mark__image" /></span><span
           >OKXQuant</span
         ></RouterLink
       >
