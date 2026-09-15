@@ -414,6 +414,10 @@ def query_positions(timeout=20) -> Tuple[bool, List[Dict[str, Any]], str]:
 
 def close_position_confirmed(inst_id: str, pos_side: str, before_size: float, *, exit_reason='strategy_close', position=None) -> Tuple[bool, str]:
     """Close a position and verify at the exchange before changing local state."""
+    env=market._selected()
+    if getattr(env,"configured",False) and position and position.get("posId") and position.get("cTime"):
+        from scripts.close_execution import close
+        return close(env,inst_id,pos_side,before_size,position,exit_reason)
     # Pre-cancel any conflicting pending/reduce-only orders for this instrument to release available size
     try:
         ord_res = run_cmd_result(okx_private_command(f"okx swap orders --instId {inst_id} --json"), timeout=10)
@@ -1282,6 +1286,9 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
             executed_actions.append(f"[{name}] 新持仓保护经有界复查仍未确认（{initial['detail']}），安全退出确认={closed}；{detail}")
             return closed, '初始保护核验未知'
         rows = initial['orders']
+        if initial.get('current_position'):
+            curr_pos={**curr_pos,**initial['current_position']}
+            pos_sz=float(curr_pos['pos']);entry_px=float(curr_pos['avgPx'])
         adopted_stop = (min if is_long else max)(float(o['slTriggerPx']) for o in rows)
         adopted_tp = float(rows[0]['tpTriggerPx'])
         strategy_evidence.best_effort(market._selected().identity,'position_protection_adoption',{
@@ -1408,6 +1415,15 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
     protected, protection_detail = ensure_cloud_position_protection(
         inst_id, "long" if is_long else "short", pos_sz, float(t["takeProfitPx"]), hard_stop_px
     )
+    if not protected and protection_detail.startswith('UNKNOWN:'):
+        # A stale/transitioning algo snapshot is not an immediate close command.
+        from scripts.initial_protection import verify as verify_protection_again
+        fresh=verify_protection_again(market._selected(),inst_id,'long' if is_long else 'short',pos_sz,curr_pos,query_positions)
+        if fresh['status']=='verified':
+            protected=True
+        elif fresh['status'] in ('flat','changed'):
+            executed_actions.append(f'[{name}] 保护复查时持仓已变化，未复用旧快照平仓')
+            return False,'等待持仓同步'
     if not protected:
         closed, close_detail = close_position_confirmed(inst_id, "long" if is_long else "short", pos_sz, exit_reason='oco_unverified', position=curr_pos)
         if not closed:

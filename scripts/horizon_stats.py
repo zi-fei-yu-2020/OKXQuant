@@ -10,27 +10,44 @@ DATA=ROOT/"data"
 PATH=DATA/"horizon_stats.json"
 
 def rebuild(rows):
-    result={"scalp":{},"swing":{},"unknown":{},"by_strategy":{}}
+    from scripts.trade_quality import finite,loss_class
+    result={"scalp":{},"swing":{},"unknown":{},"by_strategy":{},"by_version":{},"by_loss_class":{},"pending_settlements":0}
+    buckets=[]
+    def bucket(group,key,**meta):
+        if key not in group:
+            group[key]=dict(meta);buckets.append(group[key])
+        return group[key]
+    buckets.extend(result[h] for h in ('scalp','swing','unknown'))
     for row in rows if isinstance(rows,list) else []:
-        if row.get("status") not in {"closed","closed_pending"}: continue
-        h=str(row.get("horizon") or "unknown").lower()
-        if h not in result:h="unknown"
-        b=result[h]; b["closed"]=int(b.get("closed",0))+1
-        strategy=str(row.get("strategy_type") or row.get("setup") or "unknown")
-        key=f"{h}:{strategy}"
-        sb=result["by_strategy"].setdefault(key,{"horizon":h,"strategy_type":strategy})
-        sb["closed"]=int(sb.get("closed",0))+1
-        pnl=float(row.get("net_pnl",row.get("pnl",0)) or 0); fee=float(row.get("fee",0) or 0)
-        b["wins"]=int(b.get("wins",0))+int(pnl>0); b["losses"]=int(b.get("losses",0))+int(pnl<=0)
-        sb["wins"]=int(sb.get("wins",0))+int(pnl>0); sb["losses"]=int(sb.get("losses",0))+int(pnl<=0)
-        b["net_pnl"]=round(float(b.get("net_pnl",0))+pnl,8); b["fees"]=round(float(b.get("fees",0))+fee,8)
-        sb["net_pnl"]=round(float(sb.get("net_pnl",0))+pnl,8); sb["fees"]=round(float(sb.get("fees",0))+fee,8)
-        hold=float(row.get("duration_seconds",0) or 0); b["hold_seconds"]=round(float(b.get("hold_seconds",0))+hold,3)
-    for name,b in result.items():
-        if name=="by_strategy": continue
-        n=b.get("closed",0); b["win_rate"]=round(b.get("wins",0)/n,6) if n else 0.0; b["avg_pnl"]=round(b.get("net_pnl",0)/n,8) if n else 0.0; b["avg_hold_seconds"]=round(b.get("hold_seconds",0)/n,3) if n else 0.0; b.pop("hold_seconds",None)
-    for b in result["by_strategy"].values():
-        n=b.get("closed",0); b["win_rate"]=round(b.get("wins",0)/n,6) if n else 0.0; b["avg_pnl"]=round(b.get("net_pnl",0)/n,8) if n else 0.0
+        if row.get('status') not in ('closed','closed_pending'):continue
+        pnl=finite(row.get('net_pnl',row.get('pnl')))
+        if row.get('status')!='closed' or pnl is None:
+            result['pending_settlements']+=1;continue
+        h=str(row.get('horizon') or 'unknown').lower()
+        if h not in ('scalp','swing'):h='unknown'
+        strategy=str(row.get('strategy_type') or row.get('setup') or 'unknown')
+        version=str(row.get('strategy_version') or 'unknown');engine=str(row.get('strategy_engine') or 'unknown')
+        sb=bucket(result['by_strategy'],f'{h}:{strategy}',horizon=h,strategy_type=strategy)
+        vb=bucket(result['by_version'],f'{version}:{engine}:{h}:{strategy}',strategy_version=version,strategy_engine=engine,horizon=h,setup=strategy)
+        classification=loss_class(row)
+        cb=bucket(result['by_loss_class'],classification,classification=classification)
+        for b in (result[h],sb,vb,cb):
+            b['closed']=b.get('closed',0)+1
+            for k,yes in (('wins',pnl>0),('losses',pnl<0),('breakeven',pnl==0)):
+                b[k]=b.get(k,0)+int(yes)
+            b['net_pnl']=round(b.get('net_pnl',0)+pnl,8)
+            b['fees']=round(b.get('fees',0)+(finite(row.get('fee')) or 0),8)
+            b['gross_pnl']=round(b.get('gross_pnl',0)+(finite(row.get('gross_pnl')) or 0),8)
+            hold=finite(row.get('duration_seconds'))
+            if hold is not None and hold>=0:
+                b['hold_seconds']=b.get('hold_seconds',0)+hold;b['hold_samples']=b.get('hold_samples',0)+1
+            b['evidence_complete']=b.get('evidence_complete',0)+int(row.get('evidence_status')=='complete')
+    for b in buckets:
+        n=b.get('closed',0)
+        b['win_rate']=round(b.get('wins',0)/n,6) if n else 0.
+        b['avg_pnl']=round(b.get('net_pnl',0)/n,8) if n else 0.
+        holds=b.pop('hold_samples',0);total=b.pop('hold_seconds',0)
+        b['avg_hold_seconds']=round(total/holds,3) if holds else 0.
     return result
 
 def write(rows):

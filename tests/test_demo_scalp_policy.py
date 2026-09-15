@@ -46,11 +46,14 @@ class DemoPolicyTests(unittest.TestCase):
         row=demo_scalp.materialize(p,plan,now,base)
         env=OKXEnvironment('demo','fake','fake','fake')
         meta={**META,'instId':p['instId'],'tickSz':'0.00000001','lotSz':'0.001','minSz':'0.001'}
+        exchange_leverage=[3.]
         def private(method,path,params,selected):
+            if path.endswith('/set-leverage'):
+                self.assertEqual(method,'POST');exchange_leverage[0]=float(params['lever']);return [{'lever':params['lever']}]
             self.assertEqual(method,'GET')
             if path.endswith('/positions') or path.endswith('/orders-pending'):return []
             if path.endswith('/balance'):return [{'totalEq':'5000','uTime':str(int(now*1000)),'details':[{'ccy':'USDT','availEq':'5000'}]}]
-            if path.endswith('/leverage-info'):return [{'posSide':'long','lever':'3'}]
+            if path.endswith('/leverage-info'):return [{'posSide':'long','lever':str(exchange_leverage[0])}]
             self.fail(path)
         def public(url,**kwargs):
             return {'data':[meta] if '/instruments?' in url else [{'last':str(p['price']),'ts':str(int(now*1000))}]}
@@ -62,6 +65,9 @@ class DemoPolicyTests(unittest.TestCase):
             actual,cid=entry_gateway.prepare(env,**kwargs)
             self.assertTrue(1.2<=actual['net_rr']<2,actual['net_rr'])
             self.assertLessEqual(actual['risk_usdt'],15)
+            self.assertEqual(actual['leverage'],10)
+            self.assertTrue(actual['leverage_verified'])
+            self.assertEqual(exchange_leverage[0],10)
             self.assertEqual(actual['entry_policy'],demo_scalp_policy.descriptor())
             self.assertEqual(evidence.unresolved(env.identity)[0][0],cid)
             # A missing decision STILL fails before querying or submitting any order.

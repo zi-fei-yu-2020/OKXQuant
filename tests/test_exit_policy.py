@@ -189,7 +189,9 @@ class PositionExitIntegrationTests(unittest.TestCase):
         self.assertEqual(self.close.call_args.kwargs['exit_reason'], 'hard_stop')
         self.trackers.clear()
         self.cloud.return_value = (False, 'UNKNOWN: unavailable')
-        self.assertTrue(self.cycle(100.)[0])
+        with patch('scripts.initial_protection.verify',return_value={'status':'unverified','detail':'read unavailable'}) as recheck:
+            self.assertTrue(self.cycle(100.)[0])
+        recheck.assert_called_once()
         self.assertEqual(self.close.call_args.kwargs['exit_reason'], 'oco_unverified')
 
     def test_fresh_unknown_preset_cannot_silently_wait_six_hours(self):

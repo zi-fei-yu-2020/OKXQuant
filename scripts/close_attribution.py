@@ -82,7 +82,18 @@ def order_source(order,history,orders,algos,executions,scope):
             if not start<=fill_time(order)<=end+2000 or not 0<=end-start<=900000:continue
             if event.get('position_id') and history.get('posId') and str(event['position_id'])!=str(history['posId']):continue
             if event.get('position_created_at') and history.get('cTime') and abs(number(event['position_created_at'])-number(history['cTime']))>1000:continue
-            if event.get('size') and not math.isclose(number(event['size']),number(order.get('accFillSz')),rel_tol=.001,abs_tol=1e-8):continue
+            quantity_matches=not event.get('size') or math.isclose(number(event['size']),number(order.get('accFillSz')),rel_tol=.001,abs_tol=1e-8)
+            # Legacy CLI closes were whole-position closes, while size was only a
+            # pre-dispatch observation. Require exact lifecycle AND full unique fill;
+            # do not fabricate a direct order-ID link or apply this to sized orders.
+            legacy_full_close=(event.get('transport')=='existing_cli_close'
+                and event.get('position_id') and event.get('position_created_at')
+                and history.get('posId') and history.get('cTime')
+                and 0<number(event.get('size'))<number(order.get('accFillSz'))
+                and number(history.get('closeTotalPos'))>0
+                and math.isclose(number(history['closeTotalPos']),number(order.get('accFillSz')),rel_tol=.001,abs_tol=1e-8)
+                and math.isclose(number(history.get('openMaxPos')),number(order.get('accFillSz')),rel_tol=.001,abs_tol=1e-8))
+            if not quantity_matches and not legacy_full_close:continue
             competing=[o for o in orders if start<=fill_time(o)<=end+2000]
             if len(competing)!=1:continue  # A temporal coincidence is not enough to choose among multiple orders.
             candidates.append(event)
