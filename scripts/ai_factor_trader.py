@@ -2133,8 +2133,9 @@ def execute_portfolio():
             # The model may suggest a value, but the default is horizon-aware:
             # short trades use capital more efficiently; swing trades leave more
             # room for noise. Final risk is still calculated from stop distance.
-            default_leverage = 5.0 if horizon == "scalp" else 3.0
-            ai_lever = float(ai_decision.get("leverage", default_leverage) or default_leverage)
+            from scripts.strategy_modes import leverage_for
+            default_leverage = leverage_for(horizon)
+            ai_lever = leverage_for(horizon, ai_decision.get("leverage", default_leverage))
             
             # If AI planned margin & leverage, calculate custom contract size
             if ai_margin > 0 and ai_lever >= 1.0 and f["price"] > 0 and ct_val > 0:
