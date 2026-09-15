@@ -17,7 +17,7 @@ MIN_BREAKOUT_ATR = 1.0
 EXTENDED_RSI_SHORT = 30.0
 EXTENDED_RSI_LONG = 70.0
 EXTENDED_VWAP = 0.65
-WIDTHS = {'15M': 900_000, '1H': 3_600_000}
+WIDTHS = {'1M': 60_000, '5M': 300_000, '15M': 900_000, '1H': 3_600_000}
 
 
 def number(value):
@@ -206,6 +206,35 @@ def catalog(package, policy=None):
                       'order_authorized':False}
                 plan['id']=hashlib.sha256(json.dumps(plan,sort_keys=True,ensure_ascii=False,allow_nan=False).encode()).hexdigest()[:24]
                 result['plans'].append(plan)
+        # Independent 1M/5M scalp candidates. These are additive to the swing catalog.
+        # A 1M trigger needs a closed 5M directional confirmation and volume expansion.
+        try:
+            one=verified_bars(package,'1M'); five=verified_bars(package,'5M')
+            if len(one)>=22 and len(five)>=12:
+                last,prev=one[-1],one[-2]; f5=five[-1]
+                hi=max(b['high'] for b in one[-21:-1]); lo=min(b['low'] for b in one[-21:-1])
+                avg_vol=sum(b['volume'] for b in one[-6:-1])/5
+                vol_ok=avg_vol>0 and last['volume']>=avg_vol*1.15
+                long_trigger=last['close']>hi and last['open']<=hi and f5['close']>=f5['open'] and vol_ok
+                short_trigger=last['close']<lo and last['open']>=lo and f5['close']<=f5['open'] and vol_ok
+                for side,triggered in (('long',long_trigger),('short',short_trigger)):
+                    action='BUY_LONG' if side=='long' else 'SELL_SHORT'
+                    if not triggered:
+                        rejected('scalp_breakout_1m',side,'scalp_1m_trigger_not_met'); continue
+                    entry=number(package.get('askPx') if side=='long' else package.get('bidPx'))
+                    atr1=max((b['high']-b['low'] for b in one[-14:]), default=0.0)
+                    if atr1<=0: rejected('scalp_breakout_1m',side,'scalp_1m_volatility_unavailable'); continue
+                    stop=(entry-atr1*1.4) if side=='long' else (entry+atr1*1.4)
+                    target=(entry+atr1*2.4) if side=='long' else (entry-atr1*2.4)
+                    if not (0<stop<entry<target if side=='long' else 0<target<entry<stop): rejected('scalp_breakout_1m',side,'invalid_geometry'); continue
+                    cost=entry*policy['maker_fee']+max(stop,target)*policy['taker_fee']+entry*policy['slippage']
+                    rr=(abs(target-entry)-cost)/(abs(entry-stop)+cost)
+                    if rr<policy['minimum_net_rr']: rejected('scalp_breakout_1m',side,'net_rr_below_policy',net_rr=rr); continue
+                    plan={'version':'scalp-1m-plans-v1','instrument':package['instId'],'setup':'scalp_breakout_1m','action':action,'entry_price':entry,'stop_loss_price':stop,'take_profit_price':target,'created_at':at,'trigger_close_ms':last['close_ms'],'valid_for_seconds':60,'net_rr':rr,'horizon':'scalp','target_basis':'1m_atr_2.4','stop_basis':'1m_atr_1.4','supporting_evidence':[{'ref':'/price','value':package['price'],'interpretation':'当前可执行报价'},{'ref':'/vol_ratio','value':package.get('vol_ratio',1.0),'interpretation':'成交量扩张背景'},{'ref':'/structure_1h','value':package.get('structure_1h',''),'interpretation':'1H方向背景需由模型复核'}],'invalidation':{'price':stop,'timeframe':'15M','condition':'1M突破失败并回到触发区间内'},'order_authorized':False}
+                    plan['id']=hashlib.sha256(json.dumps(plan,sort_keys=True,ensure_ascii=False,allow_nan=False).encode()).hexdigest()[:24]
+                    result['plans'].append(plan)
+        except (ValueError,TypeError,KeyError,OverflowError):
+            pass
         return result
     except (ValueError,TypeError,KeyError,OverflowError) as exc:
         result['plans']=[];result['error']=str(exc);return result

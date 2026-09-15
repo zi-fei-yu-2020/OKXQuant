@@ -242,6 +242,17 @@ def fetch_single_instrument_package(item: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         pass
 
+    # 1M/5M closed candles feed the independent scalp catalog.
+    for tf, limit in (('1M', 80), ('5M', 48)):
+        try:
+            d = market.signal_json(f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar={tf.lower()}&limit={limit}")
+            if d.get('code') == '0' and d.get('data'):
+                from scripts.entry_candidates import seal_candles
+                pkg['entry_candles'][tf] = seal_candles(d['data'], tf, int(pkg['data_as_of']*1000))
+                pkg[f'recent_{tf.lower()}'] = [[float(c[1]),float(c[2]),float(c[3]),float(c[4]),round(float(c[5]),1)] for c in d['data'][:24]]
+        except Exception:
+            pass
+
     # 2. 15M Candles (recent 24, about 6 hours) & Technical Indicators Calculation
     try:
         d = market.signal_json(f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar=15m&limit=24")
