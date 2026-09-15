@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Path, Query, Response
 from scripts import public_market
 
 router = APIRouter(prefix='/api/v1/market', tags=['chart'])
-BAR_MS = {'15m': 900000, '1H': 3600000, '4H': 14400000, '1D': 86400000}
+BAR_MS = {'1m': 60000, '15m': 900000, '1H': 3600000, '4H': 14400000, '1D': 86400000}
 
 
 def numeric(value, *, positive=False):
@@ -53,7 +53,7 @@ def normalize_candles(raw, now_ms):
 def chart_candles(
     response: Response,
     inst_id: str = Path(pattern=r'^[A-Z0-9]{1,24}-USDT-SWAP$'),
-    bar: Literal['15m', '1H', '4H', '1D'] = '1H',
+    bar: Literal['1m', '15m', '1H', '4H', '1D'] = '1H',
     limit: int = Query(default=150, ge=10, le=300),
 ):
     response.headers['Cache-Control'] = 'private, no-store'

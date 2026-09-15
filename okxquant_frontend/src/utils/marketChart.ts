@@ -2,12 +2,13 @@ import { observedNumber } from './observationDisplay.ts'
 import type { KLineData, Period } from 'klinecharts'
 
 export const CHART_PERIODS = [
+  { id: '1m', label: '1分', ms: 60000, period: { type: 'minute', span: 1 } },
   { id: '15m', label: '15分', ms: 900000, period: { type: 'minute', span: 15 } },
   { id: '1H', label: '1时', ms: 3600000, period: { type: 'hour', span: 1 } },
   { id: '4H', label: '4时', ms: 14400000, period: { type: 'hour', span: 4 } },
   { id: '1D', label: '1日', ms: 86400000, period: { type: 'day', span: 1 } },
 ] satisfies Array<{ id: string; label: string; ms: number; period: Period }>
-export type ChartPeriod = '1m' | '15m' | '1H' | '4H' | '1D'
+export type ChartPeriod = (typeof CHART_PERIODS)[number]['id']
 export interface ChartBar extends KLineData { volume: number; turnover: number; confirmed: boolean }
 export interface CandleSnapshot {
   bars: ChartBar[]; precision: number; asOf: number; stale: boolean; hasGaps: boolean

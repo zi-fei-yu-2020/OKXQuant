@@ -15,7 +15,7 @@ test('chart parses complete OHLCV while preserving actual turnover and price pre
  const result=parseCandleSnapshot(payload(),'DOGE-USDT-SWAP','1H')
  assert.equal(result.bars[0].close,.08982);assert.equal(result.precision,5)
  assert.equal(result.bars[0].turnover,17.5);assert.equal(result.bars[0].confirmed,false)
- assert.deepEqual(CHART_PERIODS.map(x=>x.id),['15m','1H','4H','1D'])
+ assert.deepEqual(CHART_PERIODS.map(x=>x.id),['1m','15m','1H','4H','1D'])
 })
 test('wrong instrument, wrong period and invalid OHLC never become chart data',()=>{
  for(const changes of [{instId:'BTC-USDT-SWAP'},{bar:'4H'},{candles:[]},{candles:[candle({close:null})]},{candles:[candle({high:.088})]},{candles:[candle({vol:-1})]},{candles:[candle({turnover:undefined})]},{candles:[candle({confirmed:1})]},{candles:[candle(),candle()]},{price_precision:20},{stale:'false'}]){
@@ -64,4 +64,16 @@ test('only one chart dependency is introduced and it stays lazy-loaded',()=>{
  const view=readFileSync(new URL('../src/views/DashboardView.vue',import.meta.url),'utf8')
  assert.ok(view.includes('<TopHudRibbon /><MarketCandles'))
  assert.ok(view.includes('<TacticalDesk />'))
+})
+
+test('one-minute default has SDK metadata, countdown and a minimal loading label',()=>{
+ const period=CHART_PERIODS[0]
+ assert.equal(period.id,'1m'); assert.equal(period.ms,60000)
+ assert.deepEqual(period.period,{type:'minute',span:1})
+ assert.equal(candleCountdown(start,'1m',start+1000),'00:59')
+ assert.equal(parseCandleSnapshot(payload({bar:'1m'}),'DOGE-USDT-SWAP','1m').bars.length,1)
+ const source=readFileSync(new URL('../src/components/MarketCandles.vue',import.meta.url),'utf8')
+ assert.ok(source.includes("ref<ChartPeriod>('1m')"))
+ assert.ok(source.includes('>加载</span>'))
+ assert.ok(!source.includes('行情连接中'))
 })

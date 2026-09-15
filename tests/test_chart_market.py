@@ -41,6 +41,21 @@ class ChartMarketTests(unittest.TestCase):
         self.assertEqual(parse_qs(url.query),{'instId':['BTC-USDT-SWAP'],'bar':['1H'],'limit':['150']})
         self.assertEqual(self.get.call_args.kwargs,{'timeout':5,'simulated':False})
 
+    def test_one_minute_request_has_correct_interval_and_public_transport(self):
+        anchor = NOW // 60000 * 60000
+        self.get.return_value = {'code': '0', 'data': [row(anchor), row(anchor-60000)]}
+        response = self.client.get('/api/v1/market/BTC-USDT-SWAP/candles?bar=1m&limit=150')
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['bar'], '1m')
+        self.assertEqual(len(data['candles']), 2)
+        self.assertFalse(data['has_gaps'])
+        self.assertFalse(data['stale'])
+        self.assertEqual(parse_qs(urlsplit(self.get.call_args.args[0]).query)['bar'], ['1m'])
+        self.assertFalse(self.get.call_args.kwargs['simulated'])
+        self.get.return_value = {'code': '0', 'data': [row(anchor-120000)]}
+        self.assertTrue(self.client.get('/api/v1/market/BTC-USDT-SWAP/candles?bar=1m').json()['stale'])
+
     def test_dynamic_symbols_are_not_limited_to_the_old_six_coin_list(self):
         self.assertEqual(self.client.get('/api/v1/market/WLD-USDT-SWAP/candles').status_code,200)
         self.assertEqual(self.client.get('/api/v1/market/1000PEPE-USDT-SWAP/candles').status_code,200)
