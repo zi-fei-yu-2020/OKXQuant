@@ -4,7 +4,7 @@ Targets from volatility are explicitly projections, never represented as observe
 import hashlib
 import json
 
-VERSION = 'scalp-minute-v2'
+VERSION = 'scalp-minute-v2.1'
 
 
 def catalog(package, policy):
@@ -33,7 +33,13 @@ def catalog(package, policy):
             action = 'BUY_LONG' if sign == 1 else 'SELL_SHORT'
             entry = ask if sign == 1 else bid
             # Confirmation is relative price structure, not an RSI overbought/oversold veto.
-            if sign*(short_mean-slow_mean) <= 0 or sign*(five[-1]['close']-short_mean) < 0:
+            trend_ok = sign*(short_mean-slow_mean)>0 and sign*(five[-1]['close']-short_mean)>=0
+            # Also admit a newly confirmed 5M turn; don't wait for slow averages to cross.
+            previous_mid=(five[-2]['open']+five[-2]['close'])/2
+            turn_ok = (sign*(five[-2]['close']-five[-2]['open'])<0
+                       and sign*(five[-1]['close']-five[-1]['open'])>0
+                       and sign*(five[-1]['close']-previous_mid)>0)
+            if not (trend_ok or turn_ok):
                 reject(side,'scalp_5m_confirmation_not_met'); continue
             if sign*(bias[-1]['close']-bias_mean) < -a5*.5:
                 reject(side,'scalp_15m_bias_opposed'); continue
@@ -58,7 +64,7 @@ def catalog(package, policy):
             rr=(distance-cost)/(abs(entry-stop)+cost)
             if rr<policy['minimum_net_rr']:
                 reject(side,'net_rr_below_policy',net_rr=rr,target_distance=distance,stop_distance=abs(entry-stop),cost=cost); continue
-            setup='scalp_breakout_1m' if breakout else 'scalp_pullback_1m'
+            setup='scalp_reversal_1m' if turn_ok and not trend_ok else 'scalp_breakout_1m' if breakout else 'scalp_pullback_1m'
             from scripts.strategy_modes import mode_for
             mode=mode_for('scalp'); mode['engine']='demo_scalp_v2'
             plan={'version':VERSION,'instrument':package['instId'],'setup':setup,'action':action,

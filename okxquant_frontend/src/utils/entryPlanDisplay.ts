@@ -37,7 +37,7 @@ export function checkLabel(reason: string): string {
 }
 
 export function setupLabel(setup: string): string {
-  return ({ all: '全部形态', scalp_momentum_1m: '程序1分短线', scalp_breakout_1m: '程序1分突破', scalp_pullback_1m: '程序1分回踩', pullback_reclaim: '回踩回收', closed_range_breakout: '区间突破' } as Record<string,string>)[setup] || setup || '未知形态'
+  return ({ all: '全部形态', scalp_momentum_1m: '程序1分短线', scalp_breakout_1m: '程序1分突破', scalp_pullback_1m: '程序1分回踩', scalp_reversal_1m: '程序1分转向', pullback_reclaim: '回踩回收', closed_range_breakout: '区间突破' } as Record<string,string>)[setup] || setup || '未知形态'
 }
 export function sideLabel(side: string): string { return side === 'long' ? '做多' : side === 'short' ? '做空' : '方向未明' }
 export function decisionLabel(item: CycleItem): string {
