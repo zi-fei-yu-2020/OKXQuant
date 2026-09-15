@@ -160,6 +160,11 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     if (recorded_execution and recorded_execution!=active_execution["signature"]) or (active_execution["execution"]["id"]=="small300" and not recorded_execution):
         raise risk.RiskRejected("Execution preset changed since inference; require a fresh decision")
     policy=risk.load_policy()
+    if minute_engine:
+        from scripts.demo_scalp_policy import descriptor, execution_policy
+        if decision.get('entry_policy') != descriptor():
+            raise risk.RiskRejected('DEMO sampling policy changed; require a fresh decision')
+        policy=execution_policy(policy,env)
     from dataclasses import replace
     from scripts.strategy_modes import mode_for
     mode=mode_for(horizon)
@@ -257,6 +262,7 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     plan['portfolio_before']=portfolio
     plan['decision_id']=decision_id
     plan['scope']=env.identity
+    plan['entry_policy']=decision.get('entry_policy')
     plan['candidate_id']=decision.get('candidate_id')
     plan['strategy_mode']=decision.get('strategy_mode')
     if minute_engine:
