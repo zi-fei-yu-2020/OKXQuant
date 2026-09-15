@@ -72,14 +72,16 @@ def resolve(tracker, runtime_reader):
     tracker['exitPolicyStatus'] = status
     selected=thresholds(status['preset_id'])
     horizon=str(tracker.get('horizon','swing')).lower()
-    if horizon in HORIZON_PRESETS:
+    if horizon in HORIZON_PRESETS and tracker.get('mode'):
         selected=deepcopy(HORIZON_PRESETS[horizon])
     return selected, status
 
 
 def volatility(factor):
     """One observed ATR basis for all dynamic exits; no invented percentage floor."""
-    for field in ('atr_15m', 'atr'):
+    horizon=str((factor.get('horizon') or factor.get('mode') or '')).lower()
+    fields=('atr_1m','atr_5m','atr_15m','atr') if horizon=='scalp' else ('atr_15m','atr_1h','atr')
+    for field in fields:
         value = factor.get(field)
         if isinstance(value, bool):
             continue

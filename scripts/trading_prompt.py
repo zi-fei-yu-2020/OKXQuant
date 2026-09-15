@@ -92,7 +92,7 @@ def output_schema():
             'counter_evidence':{'type':'array','maxItems':12,'items':ref},'counter_evidence_status':{'enum':['observed','none_observed']},
             'uncertainty':{'type':'string'},'valid_for_seconds':{'type':'integer','minimum':1,'maximum':300,'description':'新提交候选准入有效期，不是已挂订单的自动撤单时间'},
             'invalidation':{'type':'object','required':['price','timeframe','condition'],'properties':{'price':{'type':'number'},'timeframe':{'enum':['15M','1H','4H']},'condition':{'type':'string'}}},
-            'margin_usdt':{'type':'number','minimum':0},'leverage':{'type':'number','minimum':1,'maximum':5}}}
+            'margin_usdt':{'type':'number','minimum':0},'leverage':{'type':'number','minimum':1,'maximum':20}}}
     wait['properties']['candidate_reviews']={'type':'array','items':{'type':'object','required':['candidate_id','reason','evidence'],
         'properties':{'candidate_id':{'type':'string'},'reason':{'type':'string'},'evidence':{'type':'array','minItems':1,'items':ref}}}}
     selected={'type':'object','required':['action','candidate_id','summary_reason','counter_evidence','counter_evidence_status','uncertainty'],
@@ -206,6 +206,14 @@ def facts_for(package,position=None):
     for key,group in _SCALARS.items():add('/'+key,package.get(key),group)
     from scripts.entry_candidates import candle_facts
     out.update(candle_facts(package))
+    for tf in ('1M','5M'):
+        try:
+            from scripts.entry_candidates import verified_bars
+            bars=verified_bars(package,tf)
+            for label,bar in [('last',bars[-1]),('previous',bars[-2])]:
+                for key in ('open','high','low','close','volume'):
+                    add('/entry_candles/'+tf+'/'+label+'/'+key,bar[key],'price' if key!='volume' else 'flow')
+        except (ValueError,TypeError,KeyError,OverflowError): pass
     calc=package.get('calculus') or {}
     if calc.get('valid',True):
         for tf,data in (calc.get('timeframes') or {}).items():

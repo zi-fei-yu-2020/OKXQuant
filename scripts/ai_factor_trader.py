@@ -221,7 +221,9 @@ def load_horizon_intents():
     except Exception: return {}
 
 def save_horizon_intent(inst_id, side, horizon, decision_id=None):
-    data=load_horizon_intents(); data[f'{inst_id}_{side}']={'horizon': horizon if horizon in {'scalp','swing'} else 'swing','decision_id':decision_id,'ts':int(time.time())}
+    data=load_horizon_intents(); from scripts.strategy_modes import mode_for
+    mode=mode_for(horizon)
+    data[f'{inst_id}_{side}']={'horizon': horizon if horizon in {'scalp','swing'} else 'swing','mode_version':mode.get('version','strategy-modes-v2'),'mode_signature':mode.get('signature',''),'entry_timeframe':mode['entry_timeframe'],'confirmation_timeframe':mode['confirmation_timeframe'],'bias_timeframe':mode['bias_timeframe'],'max_holding_seconds':mode['max_holding_seconds'],'decision_id':decision_id,'ts':int(time.time())}
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(HORIZON_INTENTS_FILE,'w',encoding='utf-8') as f: json.dump(data,f,ensure_ascii=False,indent=2)
 
@@ -559,7 +561,7 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
     availability = support.opening_status(inst_id, env.mode)
     if not availability["can_open"]:
         reason = str(availability.get("message") or "opening_environment_unavailable")
-        strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': None, 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'opening_environment_unavailable', 'details': {'message': reason}, 'at': time.time()})
+        strategy_evidence.best_effort(getattr(env,'identity','unknown'), 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': None, 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'opening_environment_unavailable', 'details': {'message': reason}, 'at': time.time()})
         return False, reason
     effective_px = price
     effective_tp = tp_px
@@ -1287,8 +1289,10 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
             'identity':position_identity(curr_pos,market._selected().identity),'orders':rows,
             'adopted_stop':adopted_stop,'source':'trader','cloud_stop_changed':False})
         score, action, reasons, strat_tag, strat_desc = evaluate_asset_signal(f)
+        horizon_intent = consume_horizon_intent(inst_id, side_name)
         trackers[pos_key] = {
-            "horizon": consume_horizon_intent(inst_id, side_name),
+            "horizon": horizon_intent,
+            "mode": __import__("scripts.strategy_modes",fromlist=["mode_for"]).mode_for(horizon_intent),
             "instId": inst_id,
             "name": name,
             "side": curr_pos["side"],
@@ -2141,7 +2145,7 @@ def execute_portfolio():
             # room for noise. Final risk is still calculated from stop distance.
             from scripts.strategy_modes import leverage_for
             default_leverage = leverage_for(horizon)
-            ai_lever = leverage_for(horizon, ai_decision.get("leverage", default_leverage))
+            ai_lever = leverage_for(horizon, ai_decision.get("leverage") if ai_decision.get("leverage") is not None else None, ai_conf)
             
             # If AI planned margin & leverage, calculate custom contract size
             if ai_margin > 0 and ai_lever >= 1.0 and f["price"] > 0 and ct_val > 0:
