@@ -55,6 +55,33 @@ def load_policy():
         raw['per_trade_equity_pct'] = min(float(raw.get('per_trade_equity_pct', .02)), .02)
     return Policy(**raw)
 
+def ledger_daily_drawdown(policy=None, *, now=None, rows=None, initial_capital=None, reset_time=None):
+    """Return the lifecycle-ledger daily loss gate used by every opening path."""
+    import json
+    from datetime import datetime, timezone, timedelta
+    from pathlib import Path
+    policy=policy or Policy()
+    root=Path(__file__).resolve().parents[1]
+    try:
+        if initial_capital is None or reset_time is None:
+            from okxquant_backend.account_baseline import load_account_baseline
+            baseline=load_account_baseline(root / 'data')
+            initial=float(baseline.get('initial_capital') or 0) if initial_capital is None else float(initial_capital)
+            reset=str(baseline.get('reset_time') or '1970-01-01 00:00:00') if reset_time is None else str(reset_time)
+        else:
+            initial=float(initial_capital);reset=str(reset_time)
+        if initial<=0:return {'blocked':False,'drawdown':0.,'net_pnl':0.,'reason':'baseline_unavailable'}
+        now_dt=now or datetime.now(timezone(timedelta(hours=8)))
+        day=now_dt.strftime('%Y-%m-%d')
+        if rows is None:
+            rows=json.loads((root/'data'/'trading_ledger.json').read_text(encoding='utf-8'))
+        net=sum(number(r.get('net_pnl',r.get('pnl',0))) for r in rows if isinstance(r,dict) and r.get('status')=='closed' and str(r.get('close_time') or '')[:10]==day and str(r.get('close_time') or '')>=reset)
+        drawdown=max(0.,-net/initial)
+        return {'blocked':drawdown>=policy.daily_drawdown_pct,'drawdown':drawdown,'net_pnl':net,'threshold':policy.daily_drawdown_pct,'day':day,'reason':'lifecycle_ledger_daily_loss'}
+    except (OSError,ValueError,TypeError,KeyError):
+        return {'blocked':False,'drawdown':0.,'net_pnl':0.,'reason':'ledger_unavailable'}
+
+
 def monotonic_stop(side, old, new, current):
     old,new,current = [number(x,positive=True) for x in (old,new,current)]
     return (old < new < current) if side=='long' else (current < new < old) if side=='short' else False
