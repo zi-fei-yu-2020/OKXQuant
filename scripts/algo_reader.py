@@ -31,6 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / 'data' / '.private-algos'
 ENDPOINT = '/api/v5/trade/orders-algo-pending'
 GAP_SECONDS = .30  # Conservative workspace-wide cap, shared across keys/modes.
+ADMISSION_JITTER_GUARD = .04  # Absorb scheduler/file-lock wakeup jitter across CI processes.
 MAX_ATTEMPTS = 3
 MAX_PAGES = 10
 MONITOR_TTL = 2.0
@@ -222,7 +223,7 @@ def _reserve(deadline, priority):
         raise AlgoReadError('rate_limit_cooldown' if state.get('blocked_until', 0) >= deadline else 'deadline_exceeded', code=429 if state.get('blocked_until', 0) >= deadline else 0)
     if until > time.monotonic(): _sleep(until - time.monotonic(), deadline, priority)
     _check(deadline, priority)
-    state['next'] = time.monotonic() + GAP_SECONDS
+    state['next'] = time.monotonic() + GAP_SECONDS + ADMISSION_JITTER_GUARD
     state['last_priority'] = priority
     _atomic(_dir() / 'admission.json', state)
 
