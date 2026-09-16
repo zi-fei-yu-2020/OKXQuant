@@ -419,13 +419,28 @@ def _inject_local_data_into_stale(stale, positions, timestamp_full):
         except Exception:
             pass
 
-    # Trades table — local ledger file
+    # Trades table and settled statistics remain locally refreshable even when
+    # private account endpoints are temporarily stale/unavailable.
+    local_ledger_rows = []
     if os.path.exists(LEDGER_JSON_FILE):
         try:
             with open(LEDGER_JSON_FILE, "r", encoding="utf-8") as f:
-                stale["trades"] = json.load(f)[:60]
+                local_ledger_rows = json.load(f)
+                stale["trades"] = local_ledger_rows[:60]
         except Exception:
             pass
+    try:
+        from scripts.dashboard_stats import today_lifecycle_stats
+        from okxquant_backend.account_baseline import load_account_baseline
+        _today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime("%Y-%m-%d")
+        _reset = load_account_baseline().get("reset_time", "1970-01-01 00:00:00")
+        _local_today = today_lifecycle_stats(local_ledger_rows, _today, _reset)
+        _old_today = dict(stale.get("today_stats") or {})
+        _local_today.pop("settled_rows", None)
+        _local_today["total_pnl"] = _local_today["net_realized"] + _safe_float(_old_today.get("total_pnl"), 0.0) - _safe_float(_old_today.get("net_realized"), 0.0)
+        stale["today_stats"] = {**_old_today, **_local_today, "source": "lifecycle_ledger_stale_account"}
+    except Exception:
+        pass
 
     from okxquant_backend.macro_status import fields as macro_fields
     from scripts import ledger_monitor, wait_audit, capital_pool, scenario_shadow, entry_opportunities
