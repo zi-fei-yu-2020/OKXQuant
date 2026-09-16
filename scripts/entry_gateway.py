@@ -160,6 +160,9 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     if (recorded_execution and recorded_execution!=active_execution["signature"]) or (active_execution["execution"]["id"]=="small300" and not recorded_execution):
         raise risk.RiskRejected("Execution preset changed since inference; require a fresh decision")
     policy=risk.load_policy()
+    ledger_gate=risk.ledger_daily_drawdown(policy)
+    if ledger_gate.get('blocked'):
+        raise risk.RiskRejected(f"日内亏损熔断：{ledger_gate.get('net_pnl',0):.2f}U / 阈值 {ledger_gate.get('threshold',0):.2%}")
     if minute_engine:
         from scripts.demo_scalp_policy import descriptor, execution_policy
         if decision.get('entry_policy') != descriptor():

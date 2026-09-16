@@ -220,10 +220,10 @@ def load_horizon_intents():
         with open(HORIZON_INTENTS_FILE, encoding='utf-8') as f: return json.load(f)
     except Exception: return {}
 
-def save_horizon_intent(inst_id, side, horizon, decision_id=None, strategy_mode=None):
+def save_horizon_intent(inst_id, side, horizon, decision_id=None, strategy_mode=None, setup=None):
     data=load_horizon_intents(); from scripts.strategy_modes import mode_for
     mode=strategy_mode or mode_for(horizon)
-    data[f'{inst_id}_{side}']={'horizon': horizon if horizon in {'scalp','swing'} else 'swing','mode_version':mode.get('version','strategy-modes-v2'),'mode_signature':mode.get('signature',''),'entry_timeframe':mode['entry_timeframe'],'confirmation_timeframe':mode['confirmation_timeframe'],'bias_timeframe':mode['bias_timeframe'],'max_holding_seconds':mode['max_holding_seconds'],'mode':mode,'decision_id':decision_id,'ts':int(time.time())}
+    data[f'{inst_id}_{side}']={'horizon': horizon if horizon in {'scalp','swing'} else 'swing','mode_version':mode.get('version','strategy-modes-v2'),'mode_signature':mode.get('signature',''),'entry_timeframe':mode['entry_timeframe'],'confirmation_timeframe':mode['confirmation_timeframe'],'bias_timeframe':mode['bias_timeframe'],'max_holding_seconds':mode['max_holding_seconds'],'mode':mode,'setup':setup,'decision_id':decision_id,'ts':int(time.time())}
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(HORIZON_INTENTS_FILE,'w',encoding='utf-8') as f: json.dump(data,f,ensure_ascii=False,indent=2)
 
@@ -388,7 +388,16 @@ def is_circuit_breaker_active():
         except Exception as e:
             return True, f"熔断状态文件损坏，安全暂停开仓: {e}"
 
-    # 3. Daily/peak loss gate uses the authoritative reconciled equity state.
+    # 3. Daily ledger loss gate uses the same settled lifecycle rows shown in the dashboard.
+    try:
+        from scripts.risk_policy import ledger_daily_drawdown, load_policy
+        ledger_gate=ledger_daily_drawdown(load_policy())
+        if ledger_gate.get('blocked'):
+            return True, f"日内账本亏损熔断: {ledger_gate['net_pnl']:.2f}U / 阈值 {ledger_gate['threshold']:.2%}"
+    except Exception as exc:
+        return True, f'日内亏损风控数据读取失败，安全暂停开仓: {type(exc).__name__}'
+
+    # 4. Daily/peak loss gate uses the authoritative reconciled equity state.
     try:
         from scripts import strategy_evidence
         from scripts.okx_runtime import selected_environment
@@ -557,7 +566,7 @@ def record_entry_rejection(inst_id, ai_info, reason, **details):
         pass
 
 @trade_lock.serialized
-def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: float, price: float, tp_px: float, sl_px: float, *, risk_budget_usdt=15, decision_id=None, decision_at=None, allow_demo_translation=True, horizon='swing') -> Tuple[bool, str]:
+def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: float, price: float, tp_px: float, sl_px: float, *, risk_budget_usdt=15, decision_id=None, decision_at=None, allow_demo_translation=True, horizon='swing', setup=None) -> Tuple[bool, str]:
     """Submit a protected limit order; acceptance is not treated as a fill."""
     # Check if we are running in simulated/demo mode and price diverged significantly from demo orderbook
     env = market._selected()
@@ -609,7 +618,7 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
         strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': None, 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'preflight_rejected', 'details': {'error_type': type(exc).__name__, 'message': str(exc)[:500]}, 'at': time.time()})
         return False, reason
     LAST_ENTRY_PLAN.clear(); LAST_ENTRY_PLAN.update(plan)
-    save_horizon_intent(inst_id, pos_side, horizon, decision_id, strategy_mode=plan.get('strategy_mode'))
+    save_horizon_intent(inst_id, pos_side, horizon, decision_id, strategy_mode=plan.get('strategy_mode'), setup=plan.get('setup'))
     size = plan['size']
     effective_px, effective_sl, effective_tp = plan['entry'], plan['stop'], plan['take_profit']
     command = okx_private_command(
@@ -1295,11 +1304,13 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
             'identity':position_identity(curr_pos,market._selected().identity),'orders':rows,
             'adopted_stop':adopted_stop,'source':'trader','cloud_stop_changed':False})
         score, action, reasons, strat_tag, strat_desc = evaluate_asset_signal(f)
-        entry_mode = (load_horizon_intents().get(pos_key) or {}).get("mode")
+        entry_item = load_horizon_intents().get(pos_key) or {}
+        entry_mode = entry_item.get("mode")
         horizon_intent = consume_horizon_intent(inst_id, side_name)
         trackers[pos_key] = {
             "horizon": horizon_intent,
             "mode": entry_mode or __import__("scripts.strategy_modes",fromlist=["mode_for"]).mode_for(horizon_intent),
+            "setup": entry_item.get('setup') or 'unknown',
             "instId": inst_id,
             "name": name,
             "side": curr_pos["side"],
@@ -1336,6 +1347,17 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
     f['horizon'] = CURRENT_HORIZON
     f['mode'] = t.get('mode') or __import__('scripts.strategy_modes',fromlist=['mode_for']).mode_for(CURRENT_HORIZON)
     ex = _exit_preset(t, executed_actions, name)
+    setup=str(t.get('setup') or 'unknown')
+    # Setup-specific management changes behavior after entry; it does not veto
+    # candidates. Reversal/breakout trades must prove follow-through sooner.
+    if CURRENT_HORIZON == 'scalp':
+        ex=dict(ex)
+        if setup == 'scalp_reversal_1m':
+            ex.update(tier1_breakeven_atr=min(ex['tier1_breakeven_atr'], .70), tier2_lock_atr=min(ex['tier2_lock_atr'], 1.35), kinetic_peak_atr=min(ex['kinetic_peak_atr'], 1.0), kinetic_pullback_atr=min(ex['kinetic_pullback_atr'], .45))
+        elif setup == 'scalp_breakout_1m':
+            ex.update(tier1_breakeven_atr=min(ex['tier1_breakeven_atr'], .85), tier2_lock_atr=min(ex['tier2_lock_atr'], 1.60), kinetic_peak_atr=min(ex['kinetic_peak_atr'], 1.1), kinetic_pullback_atr=min(ex['kinetic_pullback_atr'], .50))
+        elif setup == 'scalp_pullback_1m':
+            ex.update(tier1_breakeven_atr=min(ex['tier1_breakeven_atr'], 1.0), tier2_lock_atr=min(ex['tier2_lock_atr'], 1.8))
     volatility = exit_policy.volatility(f)
     exit_atr = volatility['value']
     t['exitVolatility'] = {**volatility, 'observed_at': now_ts}
@@ -1371,6 +1393,23 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
         if not old or (desired>old if is_long else desired<old):
             t['trailingStopPx']=desired;t['localTrailingStopPx']=desired
             t['profitProtection']=protection;t['stage_desc']='成本覆盖后的浮盈保护'
+
+    # Setup failure exit: keep opening frequency, but do not wait for a cloud
+    # hard stop when a 1M setup has failed to follow through.
+    hold_duration_sec = now_ts - t['entryTs']
+    failure_window = {'scalp_reversal_1m': 75, 'scalp_breakout_1m': 90, 'scalp_pullback_1m': 150}.get(setup, 180)
+    failure_loss_atr = .20 if setup == 'scalp_reversal_1m' else .30
+    failure_progress_atr = .35 if setup in {'scalp_reversal_1m','scalp_breakout_1m'} else .20
+    if CURRENT_HORIZON == 'scalp' and hold_duration_sec >= failure_window and cur_profit_px < -failure_loss_atr*exit_atr and peak_profit_px < failure_progress_atr*exit_atr:
+        t['lastExitAttempt']={'rule':'setup_failure_exit','setup':setup,'hold_seconds':hold_duration_sec,'profit_atr':cur_profit_px/exit_atr if exit_atr else None,'peak_profit_atr':peak_profit_px/exit_atr if exit_atr else None}
+        closed,detail=close_position_confirmed(inst_id,'long' if is_long else 'short',pos_sz,exit_reason='strategy_failure_exit',position=curr_pos)
+        if not closed:
+            executed_actions.append(f'[{name}] {setup} 结构失效，主动退出失败：{detail}')
+            return False,'setup失败退出失败'
+        executed_actions.append(f'[{name}] {setup} 未出现延续，主动退出（持仓{hold_duration_sec:.0f}秒，浮盈ATR={cur_profit_px/exit_atr if exit_atr else 0:.2f}）')
+        add_stop_cooldown(inst_id,'long' if is_long else 'short','setup结构失效')
+        trackers.pop(pos_key,None)
+        return True,'setup失败退出'
 
     # 1. Hard Stop Loss (loss protection is independent of profit-lock activation).
     # The tracker stop is the exchange-protection source of truth; if a legacy or
@@ -2258,7 +2297,7 @@ def execute_portfolio():
                     if not candidate_id and tp_px <= limit_px:
                         tp_px = round(limit_px + max(tp_dist, f["price"] * 0.024), prec)
 
-                    accepted, order_ref = submit_protected_limit_order(inst_id, "buy", "long", actual_sz, limit_px, tp_px, sl_px, risk_budget_usdt=f["risk_per_trade_usd"], decision_id=ai_info.get("decision_id"), decision_at=ai_info.get("data_as_of"), allow_demo_translation=not bool(ai_decision.get('candidate_id')), horizon=horizon)
+                    accepted, order_ref = submit_protected_limit_order(inst_id, "buy", "long", actual_sz, limit_px, tp_px, sl_px, risk_budget_usdt=f["risk_per_trade_usd"], decision_id=ai_info.get("decision_id"), decision_at=ai_info.get("data_as_of"), allow_demo_translation=not bool(ai_decision.get('candidate_id')), horizon=horizon, setup=ai_decision.get('setup') or ai_decision.get('strategy_type'))
                     if accepted:
                         actual_sz = LAST_ENTRY_PLAN['size']
                         limit_px, sl_px, tp_px = LAST_ENTRY_PLAN['entry'], LAST_ENTRY_PLAN['stop'], LAST_ENTRY_PLAN['take_profit']

@@ -138,7 +138,7 @@ def run(*, observe_only=False):
                         accepted,detail=trader.submit_protected_limit_order(p['instId'],'buy' if side=='long' else 'sell',
                             side,requested,plan['entry_price'],plan['take_profit_price'],plan['stop_loss_price'],
                             risk_budget_usdt=budget,decision_id=row['decision_id'],decision_at=p['data_as_of'],
-                            allow_demo_translation=False,horizon='scalp')
+                            allow_demo_translation=False,horizon='scalp',setup=plan.get('setup'))
                         result.update(status='submitted' if accepted else 'execution_rejected',detail=detail,decision_id=row['decision_id'])
             evidence.best_effort(env.identity,'demo_scalp_cycle',result)
             from scripts.ledger_monitor import atomic

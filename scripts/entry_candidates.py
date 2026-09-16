@@ -235,6 +235,8 @@ def expand_selection(package, raw, policy=None):
     result['confidence']=raw.get('confidence',0)
     result['candidate_origin']=selected['version']
     result['horizon']=selected['horizon']
+    result['setup']=selected.get('setup','unknown')
+    result['strategy_mode']=deepcopy(selected.get('strategy_mode') or {})
     return result
 
 

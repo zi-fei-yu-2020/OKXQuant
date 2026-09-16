@@ -17,7 +17,7 @@ from scripts import ledger_monitor
 ROOT=Path(__file__).resolve().parents[1]
 GATEWAY_DB=ROOT/'data'/'okxquant_gateway.db'
 HISTORY_TTL=300
-LABELS={'strategy_close':'策略主动平仓','hard_stop':'策略硬止损','oco_unverified':'保护核验失败安全退出',
+LABELS={'strategy_failure_exit':'策略 setup 失败退出','strategy_close':'策略主动平仓','hard_stop':'策略硬止损','oco_unverified':'保护核验失败安全退出',
         'time_exit':'策略时间止损','profit_lock':'策略阶梯锁利','trailing_exit':'策略移动止盈','ai_exit':'AI主动退出','independent_guard':'独立风控安全退出'}
 ORDER_FIELDS=('ordId','instId','side','posSide','state','accFillSz','fillTime','uTime','clOrdId','algoId','linkedAlgoOrd','category','source')
 ALGO_FIELDS=('algoId','instId','side','posSide','state','ordId','ordIdList','actualSide','actualSz','triggerTime','uTime','slTriggerPx','tpTriggerPx','ordType')
