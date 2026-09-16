@@ -65,7 +65,7 @@ def ledger_daily_drawdown(policy=None, *, now=None, rows=None, initial_capital=N
     try:
         if initial_capital is None or reset_time is None:
             from okxquant_backend.account_baseline import load_account_baseline
-            baseline=load_account_baseline(root / 'data')
+            baseline=load_account_baseline()
             initial=float(baseline.get('initial_capital') or 0) if initial_capital is None else float(initial_capital)
             reset=str(baseline.get('reset_time') or '1970-01-01 00:00:00') if reset_time is None else str(reset_time)
         else:
