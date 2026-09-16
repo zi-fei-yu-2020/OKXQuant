@@ -9,6 +9,7 @@ from scripts.okx_runtime import replace_cli_prefix as okx_private_command
 from scripts.instrument_pool import load_instruments
 from scripts.evolution_status import public_status as evolution_status
 from scripts.memory_registry import public_view as memory_publication
+from scripts.dashboard_stats import today_lifecycle_stats
 import os
 import json
 import time
@@ -1123,6 +1124,19 @@ def _update_cache_cycle():
 
     trades_table = valid_ledger_trades[:60]
 
+    # Lifecycle ledger is the authoritative trade-count/PnL source. Bills remain
+    # useful for funding and reconciliation, but recent-bill pagination cannot
+    # represent one trade reliably when fills and fees are split across rows.
+    lifecycle_today = today_lifecycle_stats(ledger_trades, today_bj_str, reset_time_str)
+    if lifecycle_today['source'] == 'lifecycle_ledger':
+        today_win_trades = lifecycle_today['win_trades']
+        today_loss_trades = lifecycle_today['loss_trades']
+        today_realized_gross = lifecycle_today['realized_gross']
+        today_fees = lifecycle_today['fees_paid']
+        today_funding = lifecycle_today['funding_paid']
+        today_win_rate = lifecycle_today['win_rate']
+        today_net_realized_pnl = lifecycle_today['net_realized']
+
     # 8. Read Review & Adaptive Config
     review_data = {}
     if os.path.exists(REPORT_JSON_FILE):
@@ -1285,7 +1299,10 @@ def _update_cache_cycle():
             "total_pnl": round(today_net_realized_pnl + total_pos_upl, 2),
             "win_trades": today_win_trades,
             "loss_trades": today_loss_trades,
-            "win_rate": today_win_rate
+            "win_rate": today_win_rate,
+            "closed_trades": today_win_trades + today_loss_trades,
+            "breakeven_trades": lifecycle_today.get("breakeven_trades", 0),
+            "source": lifecycle_today.get("source", "bills")
         },
         "performance": {
             "all_trades": all_closed,
