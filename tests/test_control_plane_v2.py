@@ -21,7 +21,7 @@ class OKXV5Tests(unittest.TestCase):
             status=200
             def __enter__(self): return self
             def __exit__(self,*_): return False
-            def read(self): return b'{"code":"0","data":[]}'
+            def read(self, size=-1): return b'{"code":"0","data":[]}'
         captured={}
         def open_(request,timeout=0):
             captured["request"]=request; return Response()
@@ -40,7 +40,7 @@ class OKXV5Tests(unittest.TestCase):
             status=200
             def __enter__(self): return self
             def __exit__(self,*_): return False
-            def read(self): return b'{"code":"0","data":[{"sCode":"51008","sMsg":"margin"}]}'
+            def read(self, size=-1): return b'{"code":"0","data":[{"sCode":"51008","sMsg":"margin"}]}'
         with patch.object(okx.urllib.request,"urlopen",return_value=Response()):
             with self.assertRaises(RuntimeError): okx._request("POST","/api/v5/trade/close-position",{"instId":"BTC-USDT-SWAP"},env)
 
