@@ -67,7 +67,7 @@ class LifecycleTests(unittest.TestCase):
         f={'instId':self.pos['instId'],'name':'TEST','market_data_valid':True,'price':100,'atr':1,'atr_15m':1,'ctVal':1,'precision':2,'type':'crypto'}
         trackers={self.key:{'positionIdentity':lifecycle.identity({**self.pos,'posId':'old'},'demo'),'trailingStopPx':99.9,'highWaterMark':120}}
         orders=[{'slTriggerPx':'90','tpTriggerPx':'120'}]
-        with patch.object(trader.market,'_selected',return_value=env),patch('scripts.initial_protection.verify',return_value={'status':'verified','orders':orders}),patch.object(trader,'evaluate_asset_signal',return_value=(0,'HOLD',[],'none','')),patch.object(trader,'ensure_cloud_position_protection',return_value=(True,'verified')),patch.object(trader,'close_position_confirmed') as close:
+        with patch.object(trader.time,'time',return_value=61),patch.object(trader.market,'_selected',return_value=env),patch('scripts.initial_protection.verify',return_value={'status':'verified','orders':orders}),patch.object(trader,'evaluate_asset_signal',return_value=(0,'HOLD',[],'none','')),patch.object(trader,'ensure_cloud_position_protection',return_value=(True,'verified')),patch.object(trader,'close_position_confirmed') as close:
             trader.manage_position_tp_and_trailing(f,self.pos,trackers,'fixture',[])
         self.assertEqual(trackers[self.key]['trailingStopPx'],90)
         self.assertEqual(trackers[self.key]['highWaterMark'],100);close.assert_not_called()
