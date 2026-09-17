@@ -69,6 +69,13 @@ class DemoPolicyTests(unittest.TestCase):
             self.assertTrue(actual['leverage_verified'])
             self.assertEqual(exchange_leverage[0],10)
             self.assertEqual(actual['entry_policy'],demo_scalp_policy.descriptor())
+            self.assertEqual(actual['setup'],plan['setup'])
+            self.assertEqual(actual['entry_context']['candidate_id'],plan['id'])
+            self.assertEqual(actual['entry_context']['decision_id'],did)
+            self.assertEqual(actual['entry_context']['scope'],env.identity)
+            with evidence.connection() as db:
+                stored=json.loads(db.execute('SELECT payload FROM intents WHERE id=?',(cid,)).fetchone()[0])
+            self.assertEqual(stored['entry_context'],actual['entry_context'])
             self.assertEqual(evidence.unresolved(env.identity)[0][0],cid)
             # A missing decision STILL fails before querying or submitting any order.
             with self.assertRaisesRegex(risk_policy.RiskRejected,'Decision evidence not found'):

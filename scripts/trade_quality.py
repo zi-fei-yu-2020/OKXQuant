@@ -21,7 +21,8 @@ def record_observation(scope,position,tracker):
     from scripts.position_lifecycle import identity
     evidence.best_effort(scope,'position_observation',{'identity':identity(position,scope),
         'position':{k:position.get(k) for k in ('instId','posSide','posId','cTime','pos','avgPx','markPx','upl','lever')},
-        'horizon':tracker.get('horizon'),'mode':tracker.get('mode'),
+        'horizon':tracker.get('horizon'),'mode':tracker.get('mode'),'setup':tracker.get('setup'),
+        'management_state':tracker.get('scalpManagement'),'entry_context':tracker.get('entry_context'),
         'exit_evaluation':tracker.get('exitEvaluation'),'stop':tracker.get('trailingStopPx')})
 
 

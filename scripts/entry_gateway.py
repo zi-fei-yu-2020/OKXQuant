@@ -179,7 +179,7 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     if cooldown_file.exists():
         cooldowns=json.loads(cooldown_file.read_text(encoding='utf-8'))
         item=cooldowns.get(f'{inst_id}_{side}', {})
-        if isinstance(item,dict):
+        if isinstance(item,dict) and item.get('reason')!='setup结构失效':
             expires=float(item.get('expires_at',item.get('expires_at_ts',0)) or 0)
             if not expires:
                 expires=float(item.get('ts',0) or 0)+int(item.get('cooldown_seconds',1800) or 1800)
@@ -271,6 +271,10 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     plan['entry_policy']=decision.get('entry_policy')
     plan['candidate_id']=decision.get('candidate_id')
     plan['strategy_mode']=decision.get('strategy_mode')
+    plan['setup']=frozen.get('setup') if decision.get('candidate_id') else decision.get('setup')
+    if minute_engine:
+        from scripts.scalp_management import context as exit_context
+        plan['entry_context']=exit_context(frozen,record.get('features',{}),scope=env.identity,decision_id=decision_id,stop=plan['stop'])
     if minute_engine:
         slot=int(record['as_of_ms'])//900000
         plan['entry_engine']='demo_scalp_v2'
