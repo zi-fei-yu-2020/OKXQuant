@@ -82,17 +82,19 @@ def _request_untracked(method: str, path: str, params: dict[str, Any] | list[dic
     query = urllib.parse.urlencode(cleaned) if method == "GET" else ""
     request_path = path + (f"?{query}" if query else "")
     body_text = json.dumps(cleaned, separators=(",", ":"), ensure_ascii=False) if method != "GET" else ""
-    timestamp = _timestamp(); prehash = timestamp + method + request_path + body_text
-    signature = base64.b64encode(hmac.new(selected.secret_key.encode(), prehash.encode(), hashlib.sha256).digest()).decode()
-    headers = {
-        "Content-Type":"application/json", "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36", "OK-ACCESS-KEY":selected.api_key,
-        "OK-ACCESS-SIGN":signature, "OK-ACCESS-TIMESTAMP":timestamp, "OK-ACCESS-PASSPHRASE":selected.passphrase,
-    }
-    if selected.simulated: headers["x-simulated-trading"] = "1"
-    request = urllib.request.Request(selected.base_url + request_path, data=body_text.encode() if body_text else None, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response: payload = json.loads(response.read().decode("utf-8") or "{}")
-    except Exception as exc: raise RuntimeError(f"OKX V5 网络请求失败：{type(exc).__name__}: {exc}") from exc
+    def make_request():
+        assert_current(selected)
+        timestamp = _timestamp(); prehash = timestamp + method + request_path + body_text
+        signature = base64.b64encode(hmac.new(selected.secret_key.encode(), prehash.encode(), hashlib.sha256).digest()).decode()
+        headers = {
+            "Content-Type":"application/json", "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36", "OK-ACCESS-KEY":selected.api_key,
+            "OK-ACCESS-SIGN":signature, "OK-ACCESS-TIMESTAMP":timestamp, "OK-ACCESS-PASSPHRASE":selected.passphrase,
+        }
+        if selected.simulated: headers["x-simulated-trading"] = "1"
+        request = urllib.request.Request(selected.base_url + request_path, data=body_text.encode() if body_text else None, headers=headers, method=method)
+        return request
+    from .okx_request_transport import request_json
+    payload=request_json(make_request,method=method,path=path,timeout=timeout,scope=selected.identity)
     if str(payload.get("code", "0")) != "0": raise RuntimeError(f"OKX {payload.get('code')}: {payload.get('msg') or '请求失败'}")
     data = payload.get("data") or []
     if not isinstance(data, list): data = [data]
