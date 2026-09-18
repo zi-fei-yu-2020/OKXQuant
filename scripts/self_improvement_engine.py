@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
 OKXQuant AI LLM-Native Self-Improvement & Strategy Evolution Engine v0.1.0 (self_improvement_engine.py)
-Focuses purely on Crypto Alpha generation & dynamic quantitative risk adaptation.
-Eliminates rigid cooldown bans in favor of dynamic volatility-adjusted thresholds,
-asymmetric Kelly bet-sizing, and LLM cognitive post-mortem lessons.
+Evidence-based, review-only reports and pending memory proposals.
+Never submits orders or automatically publishes memory, sizing or risk changes.
 """
 
 # Standalone scheduler children must not depend on an inherited PYTHONPATH.
@@ -45,6 +44,10 @@ AI_MEMORY_MD_FILE = os.path.join(DATA_DIR, "AI_TRADING_MEMORY.md")
 EVOLUTION_LAST_PROMPT_FILE = os.path.join(DATA_DIR, "self_improvement_last_prompt.txt")
 LOG_FILE = os.path.join(LOGS_DIR, "self_improvement.log")
 EVOLUTION_LOCK_FILE = os.path.join(DATA_DIR, ".self_improvement.lock")
+REVIEW_PROTOCOL = 'evidence-feedback-v2'
+REVIEW_TIMEOUT = 180.0
+REVIEW_ATTEMPT_TIMEOUT = 80.0
+REVIEW_MAX_ATTEMPTS = 2
 
 from instrument_pool import load_instruments
 from prompt_library import active_profile, apply_module_layout
@@ -205,13 +208,13 @@ def call_llm_evolution_review(closed_trades: List[Dict[str, Any]], existing_memo
 - 当前聚焦标的池: {TARGET_INSTRUMENTS}
 
 【程序计算的费用与证据反馈（不得以模型估算替换）】：
-{json.dumps(evidence_feedback, ensure_ascii=False, allow_nan=False)}
+见文末完整运行证据 JSON 的 feedback，禁止用估算替代程序统计。
 手续费 fee 为负代表扣费、为正代表返佣；null 表示不可观测，不得补成零。零净盈亏是持平，不是亏损。
 memory_cohorts 按实际记忆指纹、代码版本及执行预设分组，仅是描述性结果；禁止据此宣称某条心法导致盈利或已通过对照实验。
 decision_evidence 只来自同账户真实成交 → 客户端订单意图 → 原始决策的精确链路。linked 表示开仓链路完整，partial 表示仅部分加仓/开仓可关联；缺失字段仍不可观测。它不包含退出时的行情快照，不得补写退出指标。
 
 【逐笔历史交易明细 (按时间排序)】:
-{json.dumps(closed_trades, indent=2, ensure_ascii=False)}
+见文末 financial_rows 全量财务明细与 entry_details 已展开指标；未展开不等于原始归档不存在。
 
 【复盘与长期记忆进化任务】:
 规则变更必须通过 memory_proposals 提交待审核候选，不能宣称已经应用。ADD 为新增；REVISE/DEACTIVATE 必须引用当前已发布正文中的 rule_ 规则ID，不能猜测旧报告里的类别名。supporting_trade_ids 只能引用输入台账的 trade_id，引用不等于程序已认可该经验。NO_CHANGE 必须提交空候选列表。宿主会保存候选，但只有管理员核验真实成交证据并发布后才生效。
@@ -238,6 +241,11 @@ decision_evidence 只来自同账户真实成交 → 客户端订单意图 → �
     profile = active_profile()
     effective_evolution_system = apply_module_layout(EVOLUTION_SYSTEM_PROMPT, profile, "evolution_system", f"{profile.get('name', '稳健')}自进化系统提示词模板")
     effective_evolution_user = apply_module_layout(prompt, profile, "evolution_user", f"{profile.get('name', '稳健')}自进化用户提示词模板")
+    from scripts.evolution_evidence import prompt_payload
+    runtime_evidence=prompt_payload(closed_trades)
+    # Runtime data must not pass through the editor's 12k/module truncation.
+    effective_evolution_user += '\n\n【完整运行证据 JSON】\n' + json.dumps(runtime_evidence,ensure_ascii=False,allow_nan=False,separators=(',',':'))
+    effective_evolution_user += '\n财务清单覆盖全部输入交易；详细指标为明确抽样，不代表总体。只能对已展开指标作事实陈述，不得把未展开误称为原始证据缺失。'
     try:
         snapshot = f"【SYSTEM PROMPT】:\n{effective_evolution_system.strip()}\n\n{'='*70}\n【USER PROMPT ({now_bj_str})】：\n{effective_evolution_user.strip()}"
         fd, temp_path = tempfile.mkstemp(prefix=".evolution-prompt-", suffix=".tmp", dir=DATA_DIR)
@@ -266,7 +274,7 @@ decision_evidence 只来自同账户真实成交 → 客户端订单意图 → �
     )
     try:
         t0 = time.time()
-        log_msg(f"🚀 正在调用 {model_name} ({api_format}) 进行 AI 大脑深度认知复盘与策略参数优化...")
+        log_msg(f"🚀 正在调用 {model_name} ({api_format}) 生成证据复盘与待审核建议（不自动修改策略）...")
         raw_res = None
         content = ""
         if execute_llm_request:
@@ -282,7 +290,8 @@ decision_evidence 只来自同账户真实成交 → 客户端订单意图 → �
                 reasoning_effort=effort,
                 temperature=0.2,
                 response_format={"type": "json_object"},
-                timeout=90.0,
+                timeout=REVIEW_TIMEOUT, attempt_timeout=REVIEW_ATTEMPT_TIMEOUT, max_attempts=REVIEW_MAX_ATTEMPTS,
+                require_complete=True,
             )
             raw_res = {"usage": usage_dict} if isinstance(usage_dict, dict) else {}
         else:
@@ -302,10 +311,13 @@ decision_evidence 只来自同账户真实成交 → 客户端订单意图 → �
                 data=json.dumps(payload).encode("utf-8"),
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
             )
-            with urllib.request.urlopen(req, timeout=90) as resp:
-                res = json.loads(resp.read().decode("utf-8"))
-                content = res["choices"][0]["message"]["content"].strip()
-                raw_res = res
+            from okxquant_backend.llm_transport import request_json
+            from scripts.model_json import verify_completion, text_content
+            res,_,_,_=request_json(req.full_url,dict(req.header_items()),payload,REVIEW_TIMEOUT,
+                max_attempts=REVIEW_MAX_ATTEMPTS,attempt_timeout=REVIEW_ATTEMPT_TIMEOUT)
+            verify_completion(res,'openai_chat')
+            content=text_content(res['choices'][0]['message']['content'])
+            raw_res=res
 
         content = (content or "").strip()
         if content.startswith("```json"):
@@ -323,8 +335,8 @@ decision_evidence 只来自同账户真实成交 → 客户端订单意图 → �
         return review_json
     except Exception as e:
         telemetry.finish("failed", error=e)
-        log_msg(f"Error in LLM evolution review: {e}")
-        return {}
+        log_msg(f"Error in LLM evolution review: {type(e).__name__}")
+        raise
 
 @single_evolution_cycle
 def run_self_evolution(force: bool = False):
@@ -338,12 +350,19 @@ def run_self_evolution(force: bool = False):
     status_file = os.path.join(DATA_DIR, 'self_improvement_status.json')
     def record_status(status, **details):
         atomic_write_json(status_file, {'status': status, 'last_attempt_at': timestamp_str, 'account_scope':memory_scope, **details})
-    record_status('running')
+    def record_failure(phase,exc,**details):
+        messages={'load_sources':'复盘证据读取失败','model_review':'模型调用或输出校验失败',
+                  'review_draft':'复盘草稿保存失败','candidate_persistence':'待审核候选暂存失败',
+                  'report_persistence':'复盘报告保存失败'}
+        from okxquant_backend.llm_transport import public_failure
+        record_status('failed',phase=phase,error_type=type(exc).__name__,
+                      message=messages[phase]+'；保留上次成功报告和运行记忆',model_failure=public_failure(exc),**details)
+    record_status('running',phase='load_sources')
     try:
         memory_state=memory_registry.view(DATA_DIR,scope=memory_scope,legacy_paths={'md':AI_MEMORY_MD_FILE,'json':AI_MEMORY_FILE})
         closed_trades = load_closed_trades(scope=memory_scope)
     except Exception as exc:
-        record_status('failed', error_type=type(exc).__name__)
+        record_failure('load_sources',exc)
         raise RuntimeError('Review source unavailable; previous report and memory preserved') from exc
     total_trades = len(closed_trades)
     ledger_revision = hashlib.sha256(
@@ -353,7 +372,7 @@ def run_self_evolution(force: bool = False):
         try:
             with open(REPORT_JSON_FILE, "r", encoding="utf-8") as f:
                 previous_report = json.load(f)
-            if (previous_report.get('review_status') == 'success' and previous_report.get('review_protocol') == 'evidence-feedback-v1'
+            if (previous_report.get('review_status') == 'success' and previous_report.get('review_protocol') == REVIEW_PROTOCOL
                     and previous_report.get("ledger_revision") == ledger_revision
                     and previous_report.get('account_scope') == memory_scope
                     and previous_report.get('memory_version_at_review') == memory_state['active_version']):
@@ -375,7 +394,8 @@ def run_self_evolution(force: bool = False):
     existing_memory_md=memory_state['content']
     existing_core_lessons=[r['text'] for r in memory_state['rules'] if r.get('enabled',True)]
 
-    # 2. Call LLM for Cognitive Review & Memory Overwriting
+    # 2. Review only; approved memory can change solely via human publication.
+    record_status('running',phase='model_review',ledger_revision=ledger_revision)
     try:
         llm_review = call_llm_evolution_review(closed_trades, existing_memory_md=existing_memory_md, timestamp_str=timestamp_str)
         if not isinstance(llm_review, dict) or llm_review.get('change_status') not in {'NO_CHANGE', 'ADD', 'REVISE', 'INVALIDATE'}:
@@ -385,9 +405,20 @@ def run_self_evolution(force: bool = False):
             if not isinstance(values, list) or any(not isinstance(v, str) or not v.strip() for v in values):
                 raise ValueError('Invalid review field: ' + field)
     except Exception as exc:
-        record_status('failed', error_type=type(exc).__name__, ledger_revision=ledger_revision)
+        record_failure('model_review',exc,ledger_revision=ledger_revision)
         log_msg('Review failed; successful report, approved memory and pending candidates retained')
         raise RuntimeError('Self-improvement model review failed; this ledger revision remains retryable') from exc
+
+    # Preserve the validated response before attempting database/report writes.
+    # It is an audit draft, never automatically reused as current inference or active memory.
+    try:
+        atomic_write_json(os.path.join(DATA_DIR,'self_improvement_review_draft.json'),
+            {'account_scope':memory_scope,'ledger_revision':ledger_revision,'review_protocol':REVIEW_PROTOCOL,
+             'reviewed_at':timestamp_str,'memory_version':memory_state['active_version'],
+             'memory_prompt_hash':memory_state['prompt_hash'],'status':'report_fields_validated_not_published','review':llm_review})
+    except Exception as exc:
+        record_failure('review_draft',exc,ledger_revision=ledger_revision)
+        raise RuntimeError('Review draft persistence failed; approved memory retained') from exc
 
     change_status, _, _ = resolve_memory_update(llm_review.get("change_status", "NO_CHANGE"), [], [])
     insights = llm_review.get("diagnosis_insights", [])
@@ -412,6 +443,7 @@ def run_self_evolution(force: bool = False):
     if proposals is None:
         action={'ADD':'ADD','REVISE':'REVISE','INVALIDATE':'DEACTIVATE'}.get(proposed_change_status)
         proposals=[{'action':action,'text':t} for t in llm_review.get('ai_long_term_memory',[])][:4] if action else []
+    record_status('running',phase='candidate_persistence',ledger_revision=ledger_revision)
     try:
         if memory_registry.scope_of()!=memory_scope:raise ValueError('Account changed during memory review')
         if llm_review.get('change_status')=='NO_CHANGE' and proposals:raise ValueError('NO_CHANGE cannot propose rule changes')
@@ -422,15 +454,19 @@ def run_self_evolution(force: bool = False):
         candidate_ids=memory_registry.stage_review(proposals,ledger_revision,data_dir=DATA_DIR,scope=memory_scope,
             legacy_paths={'md':AI_MEMORY_MD_FILE,'json':AI_MEMORY_FILE})
     except Exception as exc:
-        record_status('failed', error_type=type(exc).__name__, ledger_revision=ledger_revision)
+        record_failure('candidate_persistence',exc,ledger_revision=ledger_revision)
         raise RuntimeError('Memory candidate persistence failed; approved memory retained') from exc
     # A separate successful human publication is the only live rule change.
     long_term_memory=existing_core_lessons
     preserve_existing_memory=True
     change_status='NO_CHANGE'
-    candidates=[c for c in memory_registry.view(DATA_DIR,scope=memory_scope,admin=True)['candidates'] if c['id'] in candidate_ids]
+    try:
+        candidates=[c for c in memory_registry.view(DATA_DIR,scope=memory_scope,admin=True)['candidates'] if c['id'] in candidate_ids] if candidate_ids else []
+    except Exception as exc:
+        record_failure('candidate_persistence',exc,ledger_revision=ledger_revision)
+        raise RuntimeError('Staged candidates cannot be read; approved memory retained') from exc
 
-    # Save as durable OKXQuant Markdown memory file: update timestamp and insights while keeping core lessons if no overwrite
+    # Build a report artifact, never overwrite the active Markdown memory.
     md_content = f"""# OKXQuant AI 交易复盘（报告，不等于已应用的策略变更）
 
 > **本次复盘时间**: {timestamp_str} (北京时间)
@@ -462,18 +498,8 @@ def run_self_evolution(force: bool = False):
             clean_ins = clean_ins.split("]", 1)[1].strip()
         md_content += f"- 💡 [{timestamp_str}] {clean_ins}\n"
 
-    try:
-        review_md_file = os.path.join(DATA_DIR, "self_improvement_review.md")
-        tmp_md = review_md_file + ".tmp"
-        with open(tmp_md, "w", encoding="utf-8") as f:
-            f.write(md_content)
-        os.replace(tmp_md, review_md_file)
-        log_msg(f"📝 复盘报告已写入 {review_md_file}；运行记忆保持不变")
-    except Exception as e:
-        log_msg(f"Markdown 记忆写入异常: {e}")
-
     # 4. Save Dashboard Report
-    from scripts.evolution_evidence import feedback
+    from scripts.evolution_evidence import feedback, prompt_payload
     report_payload = {
         "timestamp": timestamp_str,
         "ledger_revision": ledger_revision,
@@ -483,7 +509,8 @@ def run_self_evolution(force: bool = False):
         "profit_factor": profit_factor,
         "mode": "review_only",
         "review_status": "success",
-        "review_protocol": "evidence-feedback-v1",
+        "review_protocol": REVIEW_PROTOCOL,
+        "evidence_input_coverage": prompt_payload(closed_trades)["coverage"],
         "review_markdown": md_content,
         "completed_at": datetime.datetime.now(tz_bj).strftime('%Y-%m-%d %H:%M:%S'),
         "proposed_change_status": proposed_change_status,
@@ -499,8 +526,24 @@ def run_self_evolution(force: bool = False):
         "core_lessons": long_term_memory
     }
 
-    atomic_write_json(REPORT_JSON_FILE, report_payload)
-    record_status('success', ledger_revision=ledger_revision)
+    record_status('running',phase='report_persistence',ledger_revision=ledger_revision)
+    try:
+        if memory_registry.scope_of()!=memory_scope:raise ValueError('Account changed before report persistence')
+        atomic_write_json(REPORT_JSON_FILE, report_payload)
+    except Exception as exc:
+        record_failure('report_persistence',exc,ledger_revision=ledger_revision)
+        raise RuntimeError('Successful review report could not be saved; previous report retained') from exc
+    try:
+        review_md_file = os.path.join(DATA_DIR, "self_improvement_review.md")
+        tmp_md = review_md_file + ".tmp"
+        with open(tmp_md, "w", encoding="utf-8") as f:
+            f.write(md_content)
+        os.replace(tmp_md, review_md_file)
+        log_msg(f"📝 复盘报告已写入 {review_md_file}；运行记忆保持不变")
+    except Exception as e:
+        log_msg(f"Markdown 记忆写入异常: {e}")
+
+    record_status('success',phase='complete',ledger_revision=ledger_revision)
 
     log_msg(f"🧬 自进化认知复盘完成 | 状态={change_status} | 当前保留 {len(long_term_memory)} 条启发式长期记忆")
     try:

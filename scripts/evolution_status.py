@@ -54,6 +54,10 @@ def public_status(data_dir=None):
         state = last_job['status']
     return {
         'status': state,
+        'failure_stage': attempt.get('phase') if state in ('failed','timeout') else None,
+        'error_type': attempt.get('error_type') if state in ('failed','timeout') else None,
+        'error_message': attempt.get('message') if state in ('failed','timeout') else None,
+        'model_failure': attempt.get('model_failure') if state in ('failed','timeout') else None,
         'last_attempt_at': attempt.get('last_attempt_at') or last_job.get('started_at'),
         'last_success_at': report.get('completed_at') or report.get('timestamp'),
         'active_memory_updated_at': published.get('effective_updated_at',memory.get('updated_at')),
@@ -68,8 +72,8 @@ def public_status(data_dir=None):
         'insights': report.get('insights') or [],
         # Legacy actions_taken are recommendations, not proof of executed changes.
         'recommendations': report.get('recommendations') or report.get('actions_taken') or [],
-        'pending_candidates': sum(c.get('status') == 'pending' for c in candidates),
-        'rejected_candidates': sum(c.get('status') == 'rejected' or c.get('audit_passed') is False for c in candidates),
+        'pending_candidates': published.get('pending_count',0) if published.get('managed') else sum(c.get('status') == 'pending' for c in candidates),
+        'rejected_candidates': published.get('rejected_count',0) if published.get('managed') else sum(c.get('status') == 'rejected' or c.get('audit_passed') is False for c in candidates),
         'review_markdown': '' if scope_mismatch else report['review_markdown'] if isinstance(report.get('review_markdown'), str) else text('self_improvement_review.md'),
         'message': '复盘结果与运行记忆分开保存；NO_CHANGE 或候选未审核通过时，运行记忆日期不推进。',
     }

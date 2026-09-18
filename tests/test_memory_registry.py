@@ -56,6 +56,40 @@ class MemoryRegistryTests(unittest.TestCase):
         self.assertEqual(self.view()['prompt_text'],old)
         self.assertEqual(self.init()['prompt_text'],old)
 
+    def test_empty_review_never_initializes_registry_or_acquires_position_writer(self):
+        before={p.name:p.read_bytes() for p in self.root.iterdir()}
+        with patch.object(trade_lock,'writer',side_effect=TimeoutError('position writer busy')) as writer,patch.object(memory,'_write',side_effect=AssertionError('no write')) as write:
+            self.assertEqual(memory.stage_review([],'revision',data_dir=self.root,scope=self.scope),[])
+        writer.assert_not_called();write.assert_not_called()
+        self.assertEqual(before,{p.name:p.read_bytes() for p in self.root.iterdir()})
+
+    def test_staging_succeeds_with_busy_trade_writer_but_publication_stays_blocked(self):
+        before=self.init()
+        with patch.object(trade_lock,'writer',side_effect=TimeoutError('position writer busy')) as writer:
+            ids=memory.stage_review([{'action':'ADD','text':TEXT2}],'revision',data_dir=self.root,scope=self.scope)
+            writer.assert_not_called()
+            with self.assertRaises(TimeoutError):self.publish(ids[0])
+        after=self.view();self.assertEqual(after['active_version'],before['active_version'])
+        self.assertEqual(after['prompt_hash'],before['prompt_hash']);self.assertEqual(after['effective_updated_at'],before['effective_updated_at'])
+        self.assertEqual(next(c for c in after['candidates'] if c['id']==ids[0])['status'],'pending')
+
+    def test_registry_busy_retries_same_proposals_without_duplicate_candidates(self):
+        self.init();original=memory._write;attempts=[]
+        def writer(root):
+            attempts.append(root)
+            if len(attempts)<3:raise sqlite3.OperationalError('database is locked')
+            return original(root)
+        with patch.object(memory,'_write',side_effect=writer),patch.object(memory.time,'sleep') as sleep:
+            ids=memory.stage_review([{'action':'ADD','text':TEXT2}],'revision',data_dir=self.root,scope=self.scope)
+        self.assertEqual(len(attempts),3);self.assertEqual(sleep.call_count,2)
+        again=memory.stage_review([{'action':'ADD','text':TEXT2}],'revision',data_dir=self.root,scope=self.scope)
+        self.assertEqual(ids,again);self.assertEqual(sum(c['id']==ids[0] for c in self.view()['candidates']),1)
+
+    def test_non_busy_registry_failure_is_not_retried(self):
+        with patch.object(memory,'_write',side_effect=sqlite3.OperationalError('disk I/O error')) as write,patch.object(memory.time,'sleep') as sleep:
+            with self.assertRaises(sqlite3.OperationalError):memory.stage_review([{'action':'ADD','text':TEXT2}],'revision',data_dir=self.root,scope=self.scope)
+        write.assert_called_once();sleep.assert_not_called()
+
     def test_no_change_and_duplicate_review_do_not_erase_pending_queue(self):
         identity=memory.stage_review([{'action':'ADD','text':TEXT2}],'ledger1',data_dir=self.root,scope=self.scope)[0]
         before=self.view();memory.stage_review([],'ledger1',data_dir=self.root,scope=self.scope)
