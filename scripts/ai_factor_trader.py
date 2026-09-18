@@ -1407,13 +1407,14 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
         if management.get('enabled'):
             protection=management['protection']
             t['stage_desc']={'INITIAL_CONFIRMATION':'等待收盘结构确认','FOLLOW_THROUGH':'结构延续',
-                             'COST_PROTECTED':'费用后保本保护','PROFIT_LOCK':'浮盈锁定','FAILED':'收盘结构失效'}.get(management['state'],'持有监控中')
+                             'COST_PROTECTED':'费用后保本保护','PROFIT_LOCK':'浮盈锁定','RISK_REDUCED':'风险已收缩（未净保本）','FAILED':'收盘结构失效'}.get(management['state'],'持有监控中')
     t['exitEvaluation'] = {**protection, 'management_version':management.get('version') if management.get('enabled') else None, 'policy': dict(t['exitPolicyStatus']), 'atr': dict(t['exitVolatility'])}
     if protection.get('active'):
         desired=protection['stop'];old=float(t.get('trailingStopPx') or 0)
         if not old or (desired>old if is_long else desired<old):
             t['trailingStopPx']=desired;t['localTrailingStopPx']=desired
-            t['profitProtection']=protection;t['stage_desc']='成本覆盖后的浮盈保护'
+            t['profitProtection']=protection
+            t['stage_desc']='风险收缩，尚未覆盖全部成本' if protection.get('kind')=='risk_reduction' else '成本覆盖后的浮盈保护'
 
     # 1. Hard Stop Loss (loss protection is independent of profit-lock activation).
     # The tracker stop is the exchange-protection source of truth; if a legacy or
@@ -1422,8 +1423,10 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
     hard_stop_px = float(t.get("trailingStopPx", 0.0) or 0.0)
     hard_stop_hit = hard_stop_px > 0 and ((is_long and cur_px <= hard_stop_px) or (not is_long and cur_px >= hard_stop_px))
     if hard_stop_hit:
-        protection_label = '浮盈保护' if t.get('profitProtection',{}).get('active') else '硬止损'
-        closed, close_detail = close_position_confirmed(inst_id, "long" if is_long else "short", pos_sz, exit_reason='profit_lock' if t.get('profitProtection',{}).get('active') else 'hard_stop', position=curr_pos)
+        reducing=t.get('profitProtection',{}).get('active') and t.get('profitProtection',{}).get('kind')=='risk_reduction'
+        protection_label='风险收缩' if reducing else '浮盈保护' if t.get('profitProtection',{}).get('active') else '硬止损'
+        exit_code='risk_reduction_exit' if reducing else 'profit_lock' if t.get('profitProtection',{}).get('active') else 'hard_stop'
+        closed, close_detail = close_position_confirmed(inst_id, "long" if is_long else "short", pos_sz, exit_reason=exit_code, position=curr_pos)
         if not closed:
             executed_actions.append(f"[{name}] 硬止损平仓失败，仓位仍保留: {close_detail}")
             return False, "硬止损平仓失败"
@@ -1436,7 +1439,7 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
             "inst": name,
             "name": name,
             "action": "平仓",
-            "action_type": "硬止损",
+            "action_type": protection_label,
             "direction": f"平{'多' if is_long else '空'}",
             "side": f"{'多' if is_long else '空'}单硬止损",
             "size": pos_sz,

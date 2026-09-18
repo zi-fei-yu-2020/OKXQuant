@@ -71,9 +71,12 @@ class ScalpManagementTests(unittest.TestCase):
         t=tracker(side='short');t['lowWaterMark']=98.5
         r=evaluate(t,closes=(98.6,98.7),price=99.5,side='short')
         self.assertTrue(r['protection']['active']);self.assertTrue(r['protection']['crossed'])
-    def test_prior_progress_is_not_reclassified_as_failed_initial_confirmation(self):
+    def test_prior_progress_does_not_permanently_exempt_broken_structure(self):
         t=tracker();t['highWaterMark']=100.75
-        self.assertFalse(evaluate(t)['exit'])
+        result=evaluate(t)
+        self.assertTrue(result['exit'])
+        self.assertEqual(result['reason'],'follow_through_lost')
+        self.assertEqual(result['protection']['kind'],'risk_reduction')
     def test_context_adoption_binds_account_lifecycle_and_survives_json_restart(self):
         saved={'entry_context':context(),'decision_id':'decision','ts':600}
         p={'instId':INST,'posSide':'long','posId':'position','cTime':str(CREATED)}
@@ -105,6 +108,54 @@ class ScalpManagementTests(unittest.TestCase):
                 self.assertEqual(row['decision']['setup'],plan['setup'])
             self.assertEqual(entry_candidates.catalog(p),before)
 
+class ProgressiveRiskTests(unittest.TestCase):
+    def test_partial_r_reduces_downside_without_claiming_net_breakeven(self):
+        t=tracker();t['highWaterMark']=100.76
+        r=evaluate(t,closes=(100.5,100.7),price=100.7)
+        self.assertTrue(r['protection']['active']);self.assertEqual(r['state'],'RISK_REDUCED')
+        self.assertAlmostEqual(r['protection']['stop'],99.75)
+        self.assertEqual(r['protection']['kind'],'risk_reduction')
+        self.assertFalse(r['protection']['net_cost_covered'])
+    def test_early_noise_does_not_activate_partial_risk_floor(self):
+        t=tracker();t['highWaterMark']=100.7
+        self.assertFalse(evaluate(t,closes=(100.4,100.6),price=100.6)['protection']['active'])
+    def test_narrow_stop_progress_locks_price_gain_but_not_net_profit(self):
+        t=tracker();t['entry_context']['initial_stop']=99.9;t['highWaterMark']=100.13
+        r=evaluate(t,closes=(100.1,100.12),price=100.12)
+        self.assertTrue(r['protection']['active'])
+        self.assertGreater(r['protection']['stop'],100)
+        self.assertLess(r['protection']['retained_gain'],r['cost_distance'])
+        self.assertFalse(r['protection']['net_cost_covered'])
+    def test_realistic_eth_cost_gate_gap_now_has_risk_reduction(self):
+        t=tracker(side='short');t['entry_context'].update(initial_stop=2451.81,trigger_level=2449.5,entry_atr=1.61,version='scalp-management-v2')
+        t['lowWaterMark']=2449.35-4.86
+        r=sm.evaluate(t,{},entry=2449.35,current=2448.85,side='short',now=725,policy=Policy(),tick=.01)
+        self.assertLess(r['peak_gain'],r['protection']['activation'])
+        self.assertTrue(r['protection']['active']);self.assertTrue(r['protection']['crossed'])
+        self.assertEqual(r['protection']['kind'],'risk_reduction')
+    def test_short_partial_risk_floor_and_json_restart_do_not_widen(self):
+        t=tracker(side='short');t['lowWaterMark']=99.24
+        r=evaluate(t,closes=(99.5,99.3),price=99.3,side='short')
+        self.assertAlmostEqual(r['protection']['stop'],100.25)
+        t['scalpManagement']=r;t=json.loads(json.dumps(t))
+        t['lowWaterMark']=99.9
+        later=evaluate(t,closes=(99.4,99.5),price=99.5,side='short')
+        self.assertLessEqual(later['protection']['stop'],r['protection']['stop'])
+    def test_full_cost_protection_keeps_its_stronger_floor(self):
+        t=tracker();t['highWaterMark']=101.5
+        first=evaluate(t,closes=(101.1,101.4),price=101.4)
+        self.assertTrue(first['protection']['net_cost_covered'])
+        t['scalpManagement']=first;t['highWaterMark']=100.8
+        again=evaluate(t,closes=(101.1,101.),price=101.)
+        self.assertGreaterEqual(again['protection']['stop'],first['protection']['stop'])
+    def test_confirmed_bars_used_for_failure_are_preserved(self):
+        r=evaluate(tracker())
+        self.assertEqual(r['closed_evidence'],[{'close_ms':660000,'close':99.5},{'close_ms':720000,'close':99.4}])
+    def test_v2_entry_context_is_retained_but_eval_is_versioned_v3(self):
+        t=tracker();t['entry_context']['version']='scalp-management-v2'
+        r=evaluate(t);self.assertTrue(r['enabled']);self.assertEqual(r['version'],'scalp-management-v3')
+        self.assertEqual(t['entry_context']['version'],'scalp-management-v2')
+
 class RealManagerTests(unittest.TestCase):
     def test_guard_created_tracker_adopts_frozen_setup_and_failure_has_no_cooldown(self):
         mode=mode_for('scalp');mode['engine']='demo_scalp_v2'
@@ -118,3 +169,14 @@ class RealManagerTests(unittest.TestCase):
             changed,_=trader.manage_position_tp_and_trailing(f,p,tracked,'fixture',[])
         self.assertTrue(changed);self.assertNotIn(INST+'_long',tracked)
         self.assertEqual(close.call_args.kwargs['exit_reason'],'strategy_failure_exit');cooldown.assert_not_called()
+
+    def test_partial_risk_exit_is_not_mislabeled_profit_or_given_cooldown(self):
+        mode=mode_for('scalp');mode['engine']='demo_scalp_v2'
+        p={'instId':INST,'side':'long','posSide':'long','posId':'position','cTime':str(CREATED),'pos':1,'avgPx':100,'upl':-.4}
+        t=tracker();t.update(horizon='scalp',mode=mode,trailingStopPx=99,exchangeStopPx=99,initialRiskStopPx=99,takeProfitPx=105,currentSz=1,highWaterMark=100.76)
+        tracked={INST+'_long':t};f={'instId':INST,'name':'TEST','market_data_valid':True,'price':99.6,'atr':1,'atr_15m':1,'precision':2,'tickSz':'.01','ctVal':1}
+        def enrich(f,*args):f['closed_1m']=bars((99.7,99.6));f['atr_1m']=.2
+        with patch.object(trader.time,'time',return_value=725),patch.object(trader.market,'_selected',return_value=SimpleNamespace(identity='demo')),patch.object(trader,'load_horizon_intents',return_value={}),patch('scripts.minute_exit.enrich_volatility',side_effect=enrich),patch.object(trader,'close_position_confirmed',return_value=(True,'confirmed')) as close,patch.object(trader,'add_stop_cooldown') as cooldown,patch.object(trader,'record_trade') as record,patch.object(trader,'notify_trade_close'):
+            changed,_=trader.manage_position_tp_and_trailing(f,p,tracked,'fixture',[])
+        self.assertTrue(changed);self.assertEqual(close.call_args.kwargs['exit_reason'],'risk_reduction_exit')
+        self.assertEqual(record.call_args.args[0]['action_type'],'风险收缩');cooldown.assert_not_called()
