@@ -31,7 +31,6 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / 'data' / '.private-algos'
 ENDPOINT = '/api/v5/trade/orders-algo-pending'
 GAP_SECONDS = .30  # Conservative workspace-wide cap, shared across keys/modes.
-ADMISSION_JITTER_GUARD = .04  # Absorb scheduler/file-lock wakeup jitter across CI processes.
 MAX_ATTEMPTS = 3
 MAX_PAGES = 10
 MONITOR_TTL = 2.0
@@ -190,7 +189,9 @@ def _sleep(delay, deadline, priority):
         raise AlgoReadError('retry_after_exceeds_budget')
     while time.monotonic() < end:
         _check(deadline, priority)
-        time.sleep(min(.03, end - time.monotonic()))
+        remaining=end-time.monotonic()
+        if remaining<=0:break
+        time.sleep(min(.03, remaining))
 
 
 @contextmanager
@@ -223,9 +224,21 @@ def _reserve(deadline, priority):
         raise AlgoReadError('rate_limit_cooldown' if state.get('blocked_until', 0) >= deadline else 'deadline_exceeded', code=429 if state.get('blocked_until', 0) >= deadline else 0)
     if until > time.monotonic(): _sleep(until - time.monotonic(), deadline, priority)
     _check(deadline, priority)
-    state['next'] = time.monotonic() + GAP_SECONDS + ADMISSION_JITTER_GUARD
+    state['next'] = time.monotonic() + GAP_SECONDS
     state['last_priority'] = priority
     _atomic(_dir() / 'admission.json', state)
+
+
+def _read_finished():
+    """Called under _turn after each wire read, including errors.
+
+    Reserving before an atomic file write cannot bound real request spacing:
+    a descheduled first writer may send much later than its reservation. Keep
+    the OS gate until this post-read anchor is durable, instead of adding jitter guesses.
+    """
+    state=_state()
+    state['next']=max(state.get('next',0),time.monotonic()+GAP_SECONDS)
+    _atomic(_dir()/'admission.json',state)
 
 
 def _retry_delay(value, attempt):
@@ -317,7 +330,10 @@ def _fetch_all(env, deadline, priority):
             if first_started is None: first_started = time.monotonic()
             params = {'instType': 'SWAP', 'ordType': kind, 'limit': '100'}
             if after: params['after'] = after
-            rows = _signed_page(env, params, deadline) if env.configured else _oauth_page(env, params, deadline)
+            try:
+                rows = _signed_page(env, params, deadline) if env.configured else _oauth_page(env, params, deadline)
+            finally:
+                _read_finished()
             for row in rows:
                 algo_id = str(row.get('algoId') or '')
                 if not algo_id or not row.get('instId'): raise _WireError('invalid_order_identity')
@@ -422,9 +438,12 @@ def read_algo_history(env, *, ord_type, timeout=2.0):
         with _turn(deadline,'monitor'):
             _reserve(deadline,'monitor');_check(deadline,'monitor')
             from okxquant_backend.okx_trade_service import _request
-            rows=_request('GET','/api/v5/trade/orders-algo-history',
-                {'ordType':ord_type,'state':'effective','instType':'SWAP','limit':'100'},env,
-                timeout=max(.1,deadline-time.monotonic()))
+            try:
+                rows=_request('GET','/api/v5/trade/orders-algo-history',
+                    {'ordType':ord_type,'state':'effective','instType':'SWAP','limit':'100'},env,
+                    timeout=max(.1,deadline-time.monotonic()))
+            finally:
+                _read_finished()
             if not isinstance(rows,list) or any(not isinstance(r,dict) for r in rows):raise AlgoReadError('invalid_history_response')
             return rows
     except AlgoReadError:raise
