@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import time
 import uuid
 
 DATA = Path(__file__).resolve().parents[1] / 'data'
@@ -218,13 +219,26 @@ def initialize(data_dir=None,scope=None,*,actor='administrator',confirmation='')
 def stage_review(proposals,source_ref,*,data_dir=None,scope=None,legacy_paths=None):
     if not isinstance(proposals,list) or len(proposals)>4:raise MemoryError('每轮最多四条记忆候选')
     root=root_of(data_dir);scope=scope_of(scope)
-    from scripts import trade_lock
-    with trade_lock.writer(timeout=1),_write(root) as (db,existed):
-        if scope_of()!=scope:raise MemoryConflict('Account changed before candidate persistence')
-        _bootstrap(db,root,scope,existed,'self_improvement',legacy_paths)
-        ids=[_proposal(db,scope,p,'self_improvement',source_ref) for p in proposals]
-        _event(db,scope,'review_checked','self_improvement',{'source_ref':source_ref,'candidate_ids':ids})
-    return ids
+    if scope_of()!=scope:raise MemoryConflict('Account changed before candidate persistence')
+    # NO_CHANGE has no candidates to write. In particular it must not acquire
+    # the position writer or initialize/change active memory merely to finish a report.
+    if not proposals:return []
+    for attempt in range(3):
+        try:
+            # Staging only adds immutable, account-scoped pending records.
+            # The registry transaction handles concurrency; publication_gate
+            # remains mandatory for any effective memory change.
+            with _write(root) as (db,existed):
+                if scope_of()!=scope:raise MemoryConflict('Account changed before candidate persistence')
+                _bootstrap(db,root,scope,existed,'self_improvement',legacy_paths)
+                ids=[_proposal(db,scope,p,'self_improvement',source_ref) for p in proposals]
+                _event(db,scope,'review_checked','self_improvement',{'source_ref':source_ref,'candidate_ids':ids})
+            return ids
+        except sqlite3.OperationalError as exc:
+            code=getattr(exc,'sqlite_errorcode',None)
+            busy=(code is not None and (code & 255) in (sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED)) or str(exc).lower() in ('database is locked','database table is locked')
+            if not busy or attempt==2:raise
+            time.sleep(.2*(attempt+1))
 
 
 def propose(proposal,*,data_dir=None,scope=None,actor='administrator',request_id=None):

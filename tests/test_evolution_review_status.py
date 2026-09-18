@@ -21,7 +21,7 @@ class EvolutionReviewTests(unittest.TestCase):
                   'AI_MEMORY_MD_FILE': str(self.root / 'AI_TRADING_MEMORY.md'),
                   'REPORT_JSON_FILE': str(self.root / 'self_improvement_report.json'),
                   'LEDGER_JSON_FILE': str(self.root / 'trading_ledger.json'),
-                  'EVOLUTION_LOCK_FILE': str(self.root / 'lock')}
+                  'EVOLUTION_LOCK_FILE': str(self.root / 'lock'), 'EVOLUTION_LAST_PROMPT_FILE':str(self.root/'last_prompt.txt')}
         for key, value in values.items(): self.stack.enter_context(patch.object(engine, key, value))
         self.stack.enter_context(patch('qq_notifier.notify_evolution_report'))
         self.write('ai_trading_memory.json', {'updated_at': '2026-09-06 20:00:05', 'core_lessons': ['Approved old lesson']})
@@ -29,6 +29,59 @@ class EvolutionReviewTests(unittest.TestCase):
 
     def write(self, name, value):
         (self.root / name).write_text(json.dumps(value), encoding='utf8')
+
+    def test_review_no_change_succeeds_while_trade_writer_is_busy(self):
+        from scripts import trade_lock
+        with patch.object(engine,'load_closed_trades',return_value=[]),patch.object(engine,'call_llm_evolution_review',return_value={'change_status':'NO_CHANGE'}),patch.object(trade_lock,'writer',side_effect=TimeoutError('busy')) as writer:
+            result=engine.run_self_evolution(force=True)
+        writer.assert_not_called();self.assertEqual(result['review_status'],'success')
+        self.assertEqual((self.root/'AI_TRADING_MEMORY.md').read_text(),'APPROVED OLD MEMORY')
+        self.assertFalse((self.root/'memory_registry.db').exists())
+        self.assertEqual(public_status(self.root)['active_memory_updated_at'],'2026-09-06 20:00:05')
+
+    def test_pending_proposals_are_reported_from_registry_without_publishing(self):
+        from scripts import trade_lock,memory_registry
+        self.write('memory_candidates.json',{'candidates':[]})
+        before=memory_registry.view(self.root)
+        reply={'change_status':'ADD','memory_proposals':[{'action':'ADD','text':'观察量能与结构，不凭单个样本判断策略收益。'}]}
+        with patch.object(engine,'load_closed_trades',return_value=[]),patch.object(engine,'call_llm_evolution_review',return_value=reply),patch.object(trade_lock,'writer',side_effect=TimeoutError('busy')) as writer:
+            result=engine.run_self_evolution(force=True)
+        writer.assert_not_called();self.assertEqual(result['pending_candidate_count'],1)
+        self.assertEqual(public_status(self.root)['pending_candidates'],1)
+        self.assertEqual(memory_registry.view(self.root)['prompt_hash'],before['prompt_hash'])
+        self.assertEqual((self.root/'AI_TRADING_MEMORY.md').read_text(),'APPROVED OLD MEMORY')
+
+    def test_failed_staging_preserves_validated_draft_previous_report_and_failure_phase(self):
+        from scripts import memory_registry
+        old={'timestamp':'2026-09-06 20:00:05','ledger_revision':'old'};self.write('self_improvement_report.json',old)
+        review={'change_status':'ADD','memory_proposals':[{'action':'ADD','text':'观察量能与结构，不凭单个样本判断策略收益。'}]}
+        with patch.object(engine,'load_closed_trades',return_value=[]),patch.object(engine,'call_llm_evolution_review',return_value=review),patch.object(memory_registry,'stage_review',side_effect=sqlite3.OperationalError('database is locked')):
+            with self.assertRaises(RuntimeError):engine.run_self_evolution(force=True)
+        self.assertEqual(json.loads((self.root/'self_improvement_report.json').read_text()),old)
+        draft=json.loads((self.root/'self_improvement_review_draft.json').read_text())
+        self.assertEqual(draft['status'],'report_fields_validated_not_published');self.assertEqual(draft['review'],review)
+        self.assertEqual(public_status(self.root)['failure_stage'],'candidate_persistence')
+
+    def test_report_write_failure_keeps_previous_report_and_derived_markdown(self):
+        old={'timestamp':'2026-09-06 20:00:05'};self.write('self_improvement_report.json',old)
+        (self.root/'self_improvement_review.md').write_text('OLD REPORT')
+        atomic=engine.atomic_write_json
+        def write(path,value):
+            if path==engine.REPORT_JSON_FILE:raise OSError('disk unavailable')
+            return atomic(path,value)
+        with patch.object(engine,'load_closed_trades',return_value=[]),patch.object(engine,'call_llm_evolution_review',return_value={'change_status':'NO_CHANGE'}),patch.object(engine,'atomic_write_json',side_effect=write):
+            with self.assertRaises(RuntimeError):engine.run_self_evolution(force=True)
+        self.assertEqual(json.loads((self.root/'self_improvement_report.json').read_text()),old)
+        self.assertEqual((self.root/'self_improvement_review.md').read_text(),'OLD REPORT')
+        self.assertEqual(public_status(self.root)['failure_stage'],'report_persistence')
+
+    def test_transport_error_is_reported_as_model_failure_not_storage_failure(self):
+        from okxquant_backend.llm_transport import LLMRequestError
+        with patch.object(engine,'load_closed_trades',return_value=[]),patch.object(engine,'call_llm_evolution_review',side_effect=LLMRequestError(503,2,'http_error')):
+            with self.assertRaises(RuntimeError):engine.run_self_evolution(force=True)
+        status=public_status(self.root)
+        self.assertEqual(status['failure_stage'],'model_review');self.assertEqual(status['model_failure']['attempts'],2)
+        self.assertEqual(status['model_failure']['http_status'],503)
 
     def test_failed_model_does_not_commit_revision_or_erase_success_and_can_retry(self):
         old = {'timestamp': '2026-09-06 20:00:05', 'ledger_revision': 'old', 'insights': ['prior report']}

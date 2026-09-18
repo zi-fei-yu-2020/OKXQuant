@@ -202,3 +202,26 @@ def feedback(rows):
                                'samples': len(values), 'net_pnl': sum(r['net_pnl'] for r in values),
                                'status': 'descriptive_only'} for (h, s, x), values in sorted(groups.items())],
             'auto_promote': False, 'validation_status': 'forward_comparison_required'}
+
+
+def prompt_payload(rows,*,detail_budget=24000,max_details=8):
+    """All financial rows plus explicitly budgeted entry details; never truncate JSON."""
+    fields=('trade_id','inst','time','open_time','strategy','side','margin','gross_pnl','fee','funding_fee','net_pnl','exit_reason')
+    financial=[{**{k:r.get(k) for k in fields},'entry_evidence_status':(r.get('decision_evidence') or {}).get('status','unobservable')} for r in rows]
+    recent=sorted(rows,key=lambda r:(r.get('time',''),r.get('trade_id','')),reverse=True)
+    extremes=sorted(rows,key=lambda r:abs(r.get('net_pnl') or 0),reverse=True)
+    selected=[];used=0;seen=set()
+    for row in recent[:4]+extremes+recent:
+        identity=row.get('trade_id')
+        if identity in seen:continue
+        seen.add(identity);context=row.get('decision_evidence') or {}
+        if not context.get('entries'):continue
+        detail={'trade_id':identity,'decision_evidence':context}
+        size=len(json.dumps(detail,ensure_ascii=False,allow_nan=False,separators=(',',':')))
+        if len(selected)>=max_details or used+size>detail_budget:continue
+        selected.append(detail);used+=size
+    return {'version':'review-evidence-input-v2','financial_rows':financial,'entry_details':selected,
+            'feedback':feedback(rows),'coverage':{'financial_rows':len(financial),'entry_detail_rows':len(selected),
+            'entry_detail_trade_ids':[r['trade_id'] for r in selected],'entry_detail_chars':used,
+            'entry_detail_budget':detail_budget,'selection':'recent_then_absolute_pnl_extremes_not_random_sample',
+            'unexpanded_details_are_not_missing_archived_evidence':True}}
