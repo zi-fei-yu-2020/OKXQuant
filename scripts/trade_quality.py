@@ -74,5 +74,7 @@ def annotate(row,history,observations,executions):
     if not row.get('close_order_ids'):gaps.append('close_order_ids')
     if not row['exit_market_snapshot']:gaps.append('exit_market_snapshot')
     if (row.get('fee_reconciliation') or {}).get('status')!='verified':gaps.append('fees')
+    from scripts.execution_costs import compare_actual
+    row['cost_comparison']=compare_actual(row.get('execution_cost_model'),history,row.get('fee')) if (row.get('fee_reconciliation') or {}).get('status')=='verified' else {'status':'unavailable','reason':'fees_not_verified'}
     row.update(evidence_status='partial' if gaps else 'complete',evidence_gaps=gaps,loss_classification=loss_class(row))
     return row

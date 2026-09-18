@@ -56,7 +56,9 @@ def evaluate(tracker,factor,*,entry,current,side,now,policy,tick):
     old=tracker.get('scalpManagement') or {};observed_peak=number(tracker.get('highWaterMark' if side=='long' else 'lowWaterMark')) or entry
     gain=sign*(current-entry);peak=max(0.,sign*(observed_peak-entry),number(old.get('peak_gain')) or 0.)
     # Marketable limit entry may pay taker, so do not assume a maker fill.
-    costs=entry*(2*policy.taker_fee+policy.slippage)
+    from scripts.execution_costs import from_policy
+    cost_model=from_policy(entry,entry,policy)
+    costs=cost_model['taker_taker_total']
     buffer=max(tick*2,atr*.2)
     activation=max(costs+buffer, risk*(.6 if ctx.get('alignment')=='countertrend' else .8))
     stage='FOLLOW_THROUGH' if peak>=risk*.5 else 'INITIAL_CONFIRMATION'
@@ -91,7 +93,7 @@ def evaluate(tracker,factor,*,entry,current,side,now,policy,tick):
     result={'version':VERSION,'enabled':True,'state':stage,'exit':False,'reason':'structure_pending',
             'setup':setup,'alignment':ctx.get('alignment'),'peak_gain':peak,
             'initial_risk':risk,'risk_reduction_activation_r':RISK_REDUCTION_R,'profit_r':gain/risk,
-            'peak_r':peak/risk,'entry_atr':atr,'cost_distance':costs,'protection':protection}
+            'peak_r':peak/risk,'entry_atr':atr,'cost_distance':costs,'cost_model':cost_model,'protection':protection}
     if protection.get('active'):result['protected_stop']=protection['stop']
     elif old.get('protected_stop'):result['protected_stop']=old['protected_stop']
     created=number((tracker.get('positionIdentity') or {}).get('cTime'))

@@ -2578,6 +2578,11 @@ def cache(resource: str, x_okxquant_admin_token: str | None = Header(default=Non
         "self-improvement": "self_improvement_report.json",
         "horizon-stats": "horizon_stats.json",
     }
+    if resource == 'scalp-research':
+        require_admin_header(x_okxquant_admin_token, x_okxquant_session)
+        from scripts.scalp_research import public_status
+        from scripts.okx_runtime import selected_environment
+        return JSONResponse(public_status(selected_environment().identity))
     filename = allowed.get(resource)
     if not filename:
         raise HTTPException(status_code=404, detail="unknown cache resource")

@@ -270,6 +270,7 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     plan['scope']=env.identity
     plan['entry_policy']=decision.get('entry_policy')
     plan['candidate_id']=decision.get('candidate_id')
+    plan['selection_research']=decision.get('selection_research')
     plan['strategy_mode']=decision.get('strategy_mode')
     plan['setup']=frozen.get('setup') if decision.get('candidate_id') else decision.get('setup')
     if minute_engine:
