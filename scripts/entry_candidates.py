@@ -186,8 +186,9 @@ def _swing_catalog(package, policy=None):
                 horizon=classify_horizon(package, setup)
                 if not (0<stop<entry<target if side=='long' else 0<target<entry<stop):
                     rejected(setup,side,'invalid_geometry');continue
-                # Realistic cost: limit entry pays maker fee, OCO stop pays taker fee once, slippage on stop.
-                cost=entry*policy['maker_fee']+max(stop,target)*policy['taker_fee']+entry*policy['slippage']
+                # Preserve the reference admission scenario, without promising maker execution.
+                from scripts.execution_costs import from_policy
+                cost=from_policy(entry,max(stop,target),policy)['maker_taker_total']
                 rr=(abs(target-entry)-cost)/(abs(entry-stop)+cost)
                 geometry={'entry_price':entry,'stop_loss_price':stop,'take_profit_price':target}
                 if rr<policy['minimum_net_rr']:

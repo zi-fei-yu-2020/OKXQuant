@@ -28,7 +28,7 @@ def enabled(env):
     return cfg.get('enabled') is True and cfg.get('version') == 'demo-scalp-v2'
 
 
-def chosen_entries(packages, policy):
+def chosen_entries(packages, policy, *, include_rank=False):
     candidates=[]; diagnostics=[]
     for p in packages:
         p['strategy_engine']='demo_scalp_v2'
@@ -38,13 +38,14 @@ def chosen_entries(packages, policy):
         for plan in result['plans']:
             candidates.append((p, plan))
     # A deterministic rank, not an empirical win probability. Rank BEFORE submission.
-    candidates.sort(key=lambda item:(-item[1]['net_rr'],item[0]['instId'],item[1]['id']))
-    return candidates,diagnostics
+    from scripts.scalp_ranking import rank
+    candidates,ranking=rank(candidates,vars(policy))
+    return (candidates,diagnostics,ranking) if include_rank else (candidates,diagnostics)
 
 
 def materialize(package, plan, now, policy=None):
     proposal={'action':plan['action'],'candidate_id':plan['id'],'confidence':0,
-              'summary_reason':'程序短线：5M结构确认后，1M收盘触发，按费用后盈亏比择优',
+              'summary_reason':'程序短线：5M结构确认后，1M收盘触发，按净成本、目标距离与收盘结构择优',
               'counter_evidence_status':'none_observed','counter_evidence':[],
               'uncertainty':'模拟盘实验：目标为波动率投影，存在假突破、滑点和信号失效风险'}
     checked=trading_prompt.candidate(package,proposal,trading_prompt.facts_for(package),risk_contract=vars(policy) if policy else None)
@@ -88,9 +89,10 @@ def run(*, observe_only=False):
         news=load_strategy_snapshot(ROOT/'data'/'news_sentiment.json',[p['instId'].split('-')[0] for p in packages])
         for p in packages:
             p['environment_support']=support['items'][p['instId']];p['news_snapshot']=news
-        policy=load_policy(); candidates,diagnostics=chosen_entries(packages,policy)
+        policy=load_policy(); candidates,diagnostics,ranking=chosen_entries(packages,policy,include_rank=True)
+        from scripts.scalp_ranking import legacy_key
         result={'status':'observed' if observe_only else 'evaluated','engine':'demo_scalp_v2',
-                'at':now,'candidate_count':len(candidates),'checks':diagnostics,'selected':None,
+                'at':now,'ranking_observed_at':time.time(),'candidate_count':len(candidates),'checks':diagnostics,'selected':None,'ranking':ranking,
                 'entry_policy':__import__('scripts.demo_scalp_policy',fromlist=['descriptor']).descriptor()}
         if observe_only: return result
         with writer(timeout=5):
@@ -124,7 +126,13 @@ def run(*, observe_only=False):
                         result.update(status='position_limit')
                     elif eligible:
                         p,plan=eligible[0]; result['selected']={'instrument':p['instId'],'candidate_id':plan['id'],'net_rr':plan['net_rr']}
+                        old_p,old_plan=min(eligible,key=legacy_key)
+                        result['selection_compare']={'new_candidate_id':plan['id'],'legacy_candidate_id':old_plan['id'],
+                            'same_eligible_pool':True,'eligible_count':len(eligible),'changed':plan['id']!=old_plan['id'],
+                            'counterfactual_not_submitted':True}
                         row=materialize(p,plan,time.time(),policy)
+                        row['decision']['selection_research']={'ranking':ranking['metrics'].get(plan['id']),
+                            'comparison':result['selection_compare'],'version':ranking['version']}
                         cache={p['instId']:row}
                         evidence.record_decisions(env.identity,cache,[p],'program:demo-scalp-v2',
                             hashlib.sha256(b'demo-scalp-v2').hexdigest(),time.time(),news_snapshot=news)
@@ -132,7 +140,8 @@ def run(*, observe_only=False):
                         item=next(i for i in items if i['instId']==p['instId'])
                         budget=min(float(item.get('risk_per_trade_usd',15)),15.)
                         ct=float(item['ctVal'])
-                        unit=ct*(abs(plan['entry_price']-plan['stop_loss_price'])+plan['entry_price']*(policy.maker_fee+policy.taker_fee+policy.slippage))
+                        from scripts.execution_costs import reference_at_entry
+                        unit=ct*(abs(plan['entry_price']-plan['stop_loss_price'])+reference_at_entry(plan['entry_price'],policy))
                         requested=budget/unit
                         side='long' if plan['action']=='BUY_LONG' else 'short'
                         accepted,detail=trader.submit_protected_limit_order(p['instId'],'buy' if side=='long' else 'sell',
@@ -143,6 +152,15 @@ def run(*, observe_only=False):
             evidence.best_effort(env.identity,'demo_scalp_cycle',result)
             from scripts.ledger_monitor import atomic
             atomic('demo_scalp_status.json',result)
+        # Research runs AFTER releasing the position writer gate and after the
+        # real submission result is durable. A research failure never repeats an order.
+        try:
+            from scripts.scalp_research import observe
+            result['research']=observe(env.identity,packages,candidates,result)
+        except Exception as exc:
+            result['research']={'status':'unavailable','error_type':type(exc).__name__,'order_authorized':False}
+        try:atomic('demo_scalp_status.json',result)
+        except Exception:pass
         return result
     finally:
         trader.unfreeze_okx_environment()

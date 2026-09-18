@@ -110,8 +110,10 @@ def order_plan(*, metadata, side, entry, stop, take_profit, requested_size, budg
     if leverage>policy.max_leverage: raise RiskRejected('Actual exchange leverage exceeds policy')
     distance=abs(entry-stop)
     if distance >= entry/leverage*.8: raise RiskRejected('Stop exceeds conservative leverage buffer')
-    # Realistic cost: limit entry pays maker fee, OCO stop pays taker fee once, slippage on stop only.
-    cost_per_contract=ct*(entry*policy.maker_fee+max(stop,take_profit)*policy.taker_fee+entry*policy.slippage)
+    # Keep the existing admission scenario explicitly labelled; a limit order may take liquidity.
+    from scripts.execution_costs import from_policy
+    costs=from_policy(entry,max(stop,take_profit),policy)
+    cost_per_contract=ct*costs['maker_taker_total']
     unit_risk=ct*distance+cost_per_contract
     unit_reward=ct*abs(take_profit-entry)-cost_per_contract
     if unit_reward/unit_risk < policy.minimum_net_rr: raise RiskRejected('Net-of-cost R:R below policy')
@@ -123,10 +125,12 @@ def order_plan(*, metadata, side, entry, stop, take_profit, requested_size, budg
     if size<minimum or size<=0: raise RiskRejected('Risk budget cannot fund minimum lot; skip, never round up')
     return {'size':size,'risk_usdt':size*unit_risk,'risk_budget_usdt':budget,'margin_usdt':size*ct*entry/leverage,
             'notional_usdt':size*ct*entry,'net_rr':unit_reward/unit_risk,'entry':entry,'stop':stop,'take_profit':take_profit,
-            'side':side,'instId':metadata['instId'],'leverage':leverage}
+            'side':side,'instId':metadata['instId'],'leverage':leverage,
+            'cost_model':{**costs,'contract_base_units':ct,'planned_contracts':size}}
 
 def exposure(positions, pending, algos, metadata, policy=None):
     """Worst stop giveback from marked equity. Unknown coverage blocks new exposure."""
+    from scripts.execution_costs import reference_at_entry
     policy=policy or Policy(); result={'total':0.,'long':0.,'short':0.,'group':0.,'correlated':0.}
     for p in positions:
         size=abs(number(p.get('pos',0)))
@@ -148,7 +152,7 @@ def exposure(positions, pending, algos, metadata, policy=None):
         loss=max(0,mark-stop if side=='long' else stop-mark)
         liq=number(p.get('liqPx') or 0)
         if liq and ((side=='long' and stop<=liq) or (side=='short' and stop>=liq)): raise RiskRejected('Existing stop beyond liquidation boundary')
-        risk=size*ct*(loss+mark*(policy.maker_fee+policy.taker_fee+policy.slippage))
+        risk=size*ct*(loss+reference_at_entry(mark,policy))
         result[side]+=risk; result['total']+=risk
         if inst.split('-')[0].upper() in {'BTC','ETH','SOL','DOGE'}: result['correlated']+=risk
     for p in pending:
@@ -160,7 +164,7 @@ def exposure(positions, pending, algos, metadata, policy=None):
         stops=[number(a.get('slTriggerPx') or 0) for a in attachments if number(a.get('slTriggerPx') or 0)>0]
         if not stops: raise RiskRejected('Pending order stop unavailable; reserve unknown risk by blocking')
         stop=min(stops) if side=='long' else max(stops)
-        risk=size*ct*(abs(entry-stop)+entry*(policy.maker_fee+policy.taker_fee+policy.slippage))
+        risk=size*ct*(abs(entry-stop)+reference_at_entry(entry,policy))
         result[side]+=risk; result['total']+=risk
         if inst.split('-')[0].upper() in {'BTC','ETH','SOL','DOGE'}: result['correlated']+=risk
     # Until measured groups are approved, treat all configured crypto swaps as one group.

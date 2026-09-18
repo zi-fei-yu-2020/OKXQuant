@@ -132,8 +132,17 @@ class MinuteScalpTests(unittest.TestCase):
                 for row in cache.values():row['decision_id']='archived-before-send'
             arch=stack.enter_context(patch.object(strategy_evidence,'record_decisions',side_effect=archive))
             submit=stack.enter_context(patch.object(trader,'submit_protected_limit_order',return_value=(True,'exchange-order')))
+            observed=[]
+            def research_failure(*args,**kwargs):
+                observed.append({'writer_depth':getattr(trade_lock._local,'depth',0),'submissions':submit.call_count})
+                raise OSError('research store unavailable')
+            shadow=stack.enter_context(patch('scripts.scalp_research.observe',side_effect=research_failure))
             result=demo_scalp.run();self.assertEqual(result['status'],'submitted',result)
+            self.assertEqual(result['research']['status'],'unavailable')
+            self.assertEqual(observed,[{'writer_depth':0,'submissions':1}])
+            self.assertEqual(result['ranking']['candidates_removed'],0)
+            self.assertIn('selection_research',arch.call_args.args[1][p['instId']]['decision'])
             submit.assert_called_once();self.assertEqual(submit.call_args.kwargs['horizon'],'scalp')
             self.assertEqual(submit.call_args.kwargs['decision_id'],'archived-before-send')
             self.assertEqual(demo_scalp.run()['status'],'already_evaluated')
-            submit.assert_called_once();arch.assert_called_once()
+            submit.assert_called_once();arch.assert_called_once();shadow.assert_called_once()

@@ -5,6 +5,7 @@ coverage verification remain independent. All dynamic exits use the same ATR.
 """
 import math
 from scripts import exit_policy
+from scripts.execution_costs import reference_at_entry
 
 
 def finite(value, default=0.):
@@ -18,7 +19,7 @@ def finite(value, default=0.):
 
 
 def activation_distance(entry, atr, thresholds, *, maker_fee=.0002, taker_fee=.0005, slippage=.001):
-    costs = entry * (maker_fee + taker_fee + slippage)
+    costs = reference_at_entry(entry,{'maker_fee':maker_fee,'taker_fee':taker_fee,'slippage':slippage})
     # No min(initial_risk * .8, ...) shortcut: it bypassed both preset gates.
     return max(costs * 1.5, atr * thresholds['tier1_breakeven_atr'])
 
@@ -32,7 +33,7 @@ def floor_plan(side, entry, current, peak, initial_stop, atr, *, maker_fee=.0002
     sign = 1 if side == 'long' else -1
     gain = sign * (peak - entry)
     risk = sign * (entry - initial_stop) if initial_stop > 0 else 0
-    costs = entry * (maker_fee + taker_fee + slippage)
+    costs = reference_at_entry(entry,{'maker_fee':maker_fee,'taker_fee':taker_fee,'slippage':slippage})
     activation = activation_distance(entry, atr, ex, maker_fee=maker_fee, taker_fee=taker_fee, slippage=slippage)
     if gain < activation:
         return {'active': False, 'reason': 'profit_below_preset_activation',
@@ -67,7 +68,7 @@ def allow_ai_tightening(side, entry, current, new_stop, atr, *, maker_fee=.0002,
     if side not in ('long', 'short') or min(entry, current, new_stop, atr) <= 0:
         return False
     sign = 1 if side == 'long' else -1
-    costs = entry * (maker_fee + taker_fee + slippage)
+    costs = reference_at_entry(entry,{'maker_fee':maker_fee,'taker_fee':taker_fee,'slippage':slippage})
     buffer = max(entry * .001, min(atr * .25, entry * .003))
     activation = activation_distance(entry, atr, ex, maker_fee=maker_fee, taker_fee=taker_fee, slippage=slippage)
     return (sign * (current - entry) >= activation

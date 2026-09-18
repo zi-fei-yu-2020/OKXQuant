@@ -253,6 +253,8 @@ def build_lifecycle_ledger(*, notify=True):
             "decision_horizon": origin.get("decision_horizon"),
             "execution_horizon": origin.get("execution_horizon"),
             "strategy_engine": origin.get("strategy_engine"),
+            "execution_cost_model": origin.get("execution_cost_model"),
+            "selection_research": origin.get("selection_research"),
             "strategy_type": origin.get("strategy_type") or origin.get("setup") or "unknown",
             "horizon": origin.get("horizon", "unknown"),
             "margin": margin_usdt,

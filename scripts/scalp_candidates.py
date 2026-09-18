@@ -61,7 +61,8 @@ def catalog(package, policy):
             distance = max(a1*4.0, a5*3.0)
             target = entry+sign*distance
             if min(entry,stop,target)<=0: reject(side,'invalid_geometry'); continue
-            cost=entry*policy['maker_fee']+max(stop,target)*policy['taker_fee']+entry*policy['slippage']+(ask-bid)
+            from scripts.execution_costs import from_policy
+            cost=from_policy(entry,max(stop,target),policy,ask-bid)['maker_taker_total']
             rr=(distance-cost)/(abs(entry-stop)+cost)
             if rr<policy['minimum_net_rr']:
                 reject(side,'net_rr_below_policy',net_rr=rr,target_distance=distance,stop_distance=abs(entry-stop),cost=cost); continue
