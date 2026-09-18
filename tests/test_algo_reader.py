@@ -326,6 +326,20 @@ class AlgoReaderTests(unittest.TestCase):
             for child in [risk,monitor]:
                 if child.is_alive():child.terminate();child.join(2)
 
+    def test_slow_reservation_write_cannot_compress_actual_request_spacing(self):
+        clock=self.fake_clock();original=reader._atomic;first=[True];sent=[]
+        def delayed_atomic(path,value):
+            if path.name=='admission.json' and first[0]:
+                first[0]=False;clock.sleep(.25)
+            return original(path,value)
+        def wire(*args):sent.append(clock.monotonic());return [order()]
+        with patch.object(reader,'_atomic',side_effect=delayed_atomic),patch.object(reader,'_signed_page',side_effect=wire):
+            reader.read_algo_orders(self.env,priority='risk',force=True,timeout=3)
+            other=OKXEnvironment('demo','other','fake-secret','fake-pass')
+            reader.read_algo_orders(other,priority='risk',force=True,timeout=3)
+        self.assertEqual(len(sent),2)
+        self.assertGreaterEqual(sent[1]-sent[0],reader.GAP_SECONDS-1e-6)
+
     @unittest.skipUnless(sys.platform.startswith('linux'),'OS flock process verification')
     def test_different_processes_and_keys_share_one_network_pace(self):
         ctx=multiprocessing.get_context('fork')
