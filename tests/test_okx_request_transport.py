@@ -11,6 +11,18 @@ class OKXRequestTransportTests(unittest.TestCase):
     def setUp(self):
         self.env=OKXEnvironment('demo','PRIVATE-KEY','PRIVATE-SECRET','PRIVATE-PASS')
         self.patch=patch.object(tr,'emit');self.emit=self.patch.start();self.addCleanup(self.patch.stop)
+    def test_missing_order_is_a_structured_business_error_not_transport_failure(self):
+        with patch('urllib.request.urlopen',return_value=self.response({'code':'51603','msg':'Order does not exist','data':[]})) as wire:
+            with self.assertRaises(service.OKXAPIError) as caught:
+                service._request('GET','/api/v5/trade/order',{'instId':'SUI-USDT-SWAP','clOrdId':'test'},self.env)
+            self.assertEqual(caught.exception.code,'51603')
+            self.assertIsInstance(caught.exception,RuntimeError)
+            wire.assert_called_once()
+    def test_other_business_error_keeps_its_code(self):
+        with patch('urllib.request.urlopen',return_value=self.response({'code':'50113','msg':'signature','data':[]})):
+            with self.assertRaises(service.OKXAPIError) as caught:
+                service._request('GET','/api/v5/trade/order',{},self.env)
+            self.assertEqual(caught.exception.code,'50113')
     def response(self,payload=None):
         return io.BytesIO(json.dumps(payload if payload is not None else {'code':'0','data':[]}).encode())
     def error(self,status=503,headers=None):
