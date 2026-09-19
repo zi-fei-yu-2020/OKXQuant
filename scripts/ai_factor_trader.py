@@ -186,7 +186,7 @@ def run_cmd_result(cmd, timeout=15):
             "data": parsed,
         }
     except Exception as e:
-        return {"ok": False, "returncode": -1, "stdout": "", "stderr": str(e), "data": None}
+        return {"ok": False, "returncode": -1, "stdout": "", "stderr": str(e), "data": None, "error_type": type(e).__name__}
 
 
 def run_cmd(cmd, timeout=15):
@@ -642,10 +642,13 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
         f"--tpTriggerPx {effective_tp} --tpOrdPx=-1 --slTriggerPx {effective_sl} --slOrdPx=-1 --json"
     )
     result = run_cmd_result(command, timeout=20)
+    from scripts.entry_diagnostics import submission_diagnostics
+    failure_details = submission_diagnostics(result, env) if not result['ok'] else None
     strategy_evidence.best_effort(market._selected().identity, 'entry_submission',
-        {'client_id': client_id, 'plan': plan, 'transport_ok': result['ok'], 'response': result.get('data')})
+        {'client_id': client_id, 'plan': plan, 'transport_ok': result['ok'],
+         'response': result.get('data') if result['ok'] else None, 'failure': failure_details})
     if not result["ok"]:
-        strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': plan.get('candidate_id'), 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'submission_unknown', 'client_id': client_id, 'details': {'transport_ok': False, 'error_type': result.get('error_type'), 'status': result.get('status_code')}, 'at': time.time()})
+        strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': plan.get('candidate_id'), 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'submission_unknown', 'client_id': client_id, 'details': failure_details, 'at': time.time()})
         return False, "Entry outcome unknown; durable reservation retained for read-only reconciliation"
     payload = result.get("data")
     order_id = None

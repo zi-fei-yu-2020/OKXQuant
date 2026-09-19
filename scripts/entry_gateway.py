@@ -10,49 +10,32 @@ from okxquant_backend.okx_trade_service import _request
 
 
 def reconcile_intents(env):
+    from scripts.entry_reconciliation import locate
     pending=evidence.unresolved(env.identity)
     if len(pending)>20: raise risk.RiskRejected('Too many unresolved order intents')
     for client_id,plan in pending:
-        # IDs longer than OKX's 32-character limit could never have been accepted.
-        # Reconcile those legacy reservations by scanning history without sending the
-        # invalid clOrdId query, then retire only an exact-match absence.
-        legacy_reconciled = len(client_id) > 32
-        if legacy_reconciled:
-            try:
-                history=_request('GET','/api/v5/trade/orders-history',
-                                 {'instType':'SWAP','instId':plan['instId'],'limit':'100'},env)
-            except Exception:
-                raise risk.RiskRejected('Prior entry outcome unknown; read reconciliation required') from None
-            rows=[row for row in history if str(row.get('clOrdId') or '') == client_id]
-            if not rows:
-                age=time.time()-float(plan.get('intent_created_at') or 0)
-                if age >= 120:
-                    evidence.finish_intent(client_id,'not_found',{'reconciliation':'invalid_clordid_exact_history_miss','reconciled_at':time.time()})
-                    continue
-                raise risk.RiskRejected('Prior entry not located yet; bounded reconciliation required')
-        else:
-            try:
-                rows=_request('GET','/api/v5/trade/order',{'instType':'SWAP','instId':plan['instId'],'clOrdId':client_id},env)
-            except Exception:
-                raise risk.RiskRejected('Prior entry outcome unknown; read reconciliation required') from None
-        if not rows and not legacy_reconciled:
-            try:
-                rows=_request('GET','/api/v5/trade/orders-history',
-                              {'instType':'SWAP','instId':plan['instId'],'clOrdId':client_id,'limit':'100'},env)
-            except Exception:
-                raise risk.RiskRejected('Prior entry outcome unknown; read reconciliation required') from None
-        if not rows:
-            age=time.time()-float(plan.get('intent_created_at') or 0)
-            if age >= 120:
-                evidence.finish_intent(client_id,'not_found',{'reconciliation':'live_and_history_empty','reconciled_at':time.time()})
-                continue
-            raise risk.RiskRejected('Prior entry not located yet; bounded reconciliation required')
-        if len(rows)!=1: raise risk.RiskRejected('Prior entry reconciliation returned multiple matches')
-        order=rows[0]; status=str(order.get('state'))
-        evidence.best_effort(env.identity,'exchange_order',order,event_id='order:'+env.identity+':'+client_id+':'+str(order.get('uTime',time.time_ns())))
-        if status in {'filled','canceled','mmp_canceled'}: evidence.finish_intent(client_id,status,order)
-        elif status in {'live','partially_filled'}: evidence.finish_intent(client_id,'pending',order)
-        else: raise risk.RiskRejected('Unknown prior order state')
+        try:
+            order, proof = locate(env, client_id, plan, _request)
+            if order is None:
+                evidence.finish_intent(client_id, 'not_found', proof)
+                outcome = 'resolved_absent'
+            else:
+                status = str(order.get('state'))
+                if status not in {'filled','canceled','mmp_canceled','live','partially_filled'}:
+                    raise risk.RiskRejected('Unknown prior order state')
+                evidence.append(env.identity,'exchange_order',order,
+                    event_id='order:'+env.identity+':'+client_id+':'+str(order.get('uTime',time.time_ns())))
+                evidence.finish_intent(client_id, 'pending' if status in {'live','partially_filled'} else status, order)
+                outcome = 'resolved_' + status
+            evidence.best_effort(env.identity,'entry_reconciliation',
+                {'client_id':client_id,'instrument':plan['instId'],'outcome':outcome,'proof':proof})
+        except Exception as exc:
+            evidence.best_effort(env.identity,'entry_reconciliation',
+                {'client_id':client_id,'instrument':plan.get('instId'),'outcome':'unresolved',
+                 'error_type':type(exc).__name__,'exchange_code':getattr(exc,'code',None),
+                 'reason':str(exc) if isinstance(exc,risk.RiskRejected) else 'read_failed',
+                 'reservation_retained':True})
+            raise risk.RiskRejected('Prior entry outcome unknown; read reconciliation required') from exc
 
 
 def equity_guard(env, balance, policy):

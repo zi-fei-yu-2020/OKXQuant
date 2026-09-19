@@ -106,11 +106,12 @@ def finish_intent(identity, state, result=None):
 
 def unresolved(scope):
     with connection() as db:
-        rows = db.execute("SELECT id,payload,at FROM intents WHERE scope=? AND state IN ('unknown','acknowledged') ORDER BY at",(scope,)).fetchall()
+        rows = db.execute("SELECT id,payload,at,state FROM intents WHERE scope=? AND state IN ('unknown','acknowledged') ORDER BY at",(scope,)).fetchall()
     result=[]
-    for key,payload,created_at in rows:
+    for key,payload,created_at,state in rows:
         item=json.loads(payload)
-        item.setdefault('intent_created_at', created_at)
+        item['intent_created_at'] = created_at
+        item['intent_state'] = state
         result.append((key,item))
     return result
 

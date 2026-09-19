@@ -19,6 +19,13 @@ _INTENT_LOCK = threading.Lock()
 INTENT_TTL_SECONDS = 90
 
 
+class OKXAPIError(RuntimeError):
+    """A structured exchange business error, distinct from transport failures."""
+    def __init__(self, code, message):
+        self.code = str(code)
+        super().__init__(f"OKX {self.code}: {message or '请求失败'}")
+
+
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
@@ -95,11 +102,17 @@ def _request_untracked(method: str, path: str, params: dict[str, Any] | list[dic
         return request
     from .okx_request_transport import request_json
     payload=request_json(make_request,method=method,path=path,timeout=timeout,scope=selected.identity)
-    if str(payload.get("code", "0")) != "0": raise RuntimeError(f"OKX {payload.get('code')}: {payload.get('msg') or '请求失败'}")
+    if str(payload.get("code", "0")) != "0": raise OKXAPIError(payload.get("code"), payload.get("msg"))
+    reconciliation_reads = {'/api/v5/trade/order', '/api/v5/trade/orders-pending',
+                            '/api/v5/trade/orders-history', '/api/v5/trade/fills-history',
+                            '/api/v5/account/positions'}
+    if method == 'GET' and path in reconciliation_reads:
+        if not isinstance(payload.get('data'), list) or any(not isinstance(r, dict) for r in payload['data']):
+            raise RuntimeError('Invalid OKX order/account response; absence not verified')
     data = payload.get("data") or []
     if not isinstance(data, list): data = [data]
     failures = [row for row in data if isinstance(row, dict) and str(row.get("sCode", "0")) != "0"]
-    if failures: raise RuntimeError(f"OKX {failures[0].get('sCode')}: {failures[0].get('sMsg') or '业务请求失败'}")
+    if failures: raise OKXAPIError(failures[0].get("sCode"), failures[0].get("sMsg"))
     return [row for row in data if isinstance(row, dict)]
 
 
