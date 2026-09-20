@@ -48,6 +48,8 @@ COPY scripts/ ./scripts/
 COPY plugins/ ./plugins/
 COPY dashboard/ ./dashboard/
 COPY tests/ ./tests/
+# Keep source contracts for the isolated image-level offline release gate.
+COPY okxquant_frontend/ ./okxquant_frontend/
 COPY .github/ ./.github/
 COPY docker/ ./docker/
 COPY deploy/ ./deploy/
