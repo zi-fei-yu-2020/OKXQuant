@@ -4,7 +4,7 @@ Targets from volatility are explicitly projections, never represented as observe
 import hashlib
 import json
 
-VERSION = 'scalp-minute-v3'
+VERSION = 'scalp-minute-v4'
 
 
 def catalog(package, policy):
@@ -57,8 +57,9 @@ def catalog(package, policy):
                 reject(side,'quote_moved_beyond_closed_trigger'); continue
             stop = (min(last['low'],prev['low'])-a1*.2 if sign==1 else max(last['high'],prev['high'])+a1*.2)
             stop = min(stop,entry-a1*1.1) if sign==1 else max(stop,entry+a1*1.1)
-            # Projection is fixed from PRE-ENTRY volatility, never inflated to pass RR.
-            distance = max(a1*4.0, a5*3.0)
+            # v4 widens payoff projection to absorb observed round-trip fees.
+            # This does not remove any candidate or add an entry gate.
+            distance = max(a1*5.0, a5*3.5)
             target = entry+sign*distance
             if min(entry,stop,target)<=0: reject(side,'invalid_geometry'); continue
             from scripts.execution_costs import from_policy
