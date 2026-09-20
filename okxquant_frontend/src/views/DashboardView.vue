@@ -2,7 +2,7 @@
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useDashboardStore } from '../stores/dashboard'
-import { observedNumber } from '../utils/observationDisplay'
+import { monitorConnectionLabel } from '../utils/dashboardHealth'
 import HeaderBar from '../components/HeaderBar.vue'
 import TopHudRibbon from '../components/TopHudRibbon.vue'
 import TacticalDesk from '../components/TacticalDesk.vue'
@@ -29,7 +29,8 @@ const descriptions = {
   history: ['交易记录', '查阅订单生命周期、历史成交与执行日志。'],
 } as const
 const heading = computed(() => descriptions[store.activeTab])
-const hasAccount = computed(() => observedNumber(store.data?.account?.total_eq) !== null)
+const monitorLabel = computed(() => monitorConnectionLabel(store.data, store.error, store.isStale))
+const monitorTone = computed(() => monitorLabel.value === '数据已更新' ? 'success' : 'warning')
 function syncTabFromRoute() {
   const tab = route.meta.tab
   if (typeof tab === 'string' && tab in descriptions)
@@ -76,9 +77,9 @@ function setLayout(mode: 'dual' | 'stacked') {
           <AppBadge
             data-monitor-connection
             class="min-w-[7.5rem] justify-center"
-            :tone="store.error || !hasAccount || store.isStale ? 'warning' : 'success'"
+            :tone="monitorTone"
             dot
-            >{{ store.error || !hasAccount || store.isStale ? '数据更新延迟' : '数据已更新' }}</AppBadge
+            >{{ monitorLabel }}</AppBadge
           ><button
             v-if="store.error || (store.data && store.isStale)"
             class="ui-icon-button"

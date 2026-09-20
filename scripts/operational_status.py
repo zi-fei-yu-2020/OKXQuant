@@ -56,7 +56,10 @@ def risk_snapshot(data_dir=None, *, env=None, now=None):
                 o['at']=state.get('checked_at',state.get('at',o.get('at')));observations.append(o)
         observations=[o for o in observations if o.get('day')==day and isinstance(o.get('at'),(float,int)) and 0<=now-o['at']<=180]
         values=[float(o['daily_drawdown']) for o in observations if isinstance(o.get('daily_drawdown'),(float,int)) and math.isfinite(float(o['daily_drawdown']))]
-        if not values:return result
+        if not values:
+            # Preserve an authoritative breaker state even when its numeric
+            # equity observation is older than the 180-second display window.
+            return result
         # Same optional ledger gate as the entry gateway; no network or writes.
         ledger=ledger_daily_drawdown(policy,scope=env.identity)
         if ledger.get('day')==day and ledger.get('reason')=='lifecycle_ledger_daily_loss':values.append(ledger['drawdown'])

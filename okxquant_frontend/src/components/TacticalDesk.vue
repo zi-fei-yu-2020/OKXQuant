@@ -192,8 +192,8 @@ const allProtected = computed(
     <div v-if="activeTab === 'positions'">
       <EmptyState
         v-if="filteredPositions.length === 0"
-        :title="!store.data || store.error || store.isStale ? '持仓状态待更新' : store.positions.length ? '没有匹配的记录' : '暂无持仓'"
-        description="账户连接就绪后，持仓与风险保护信息会显示在这里。"
+        :title="store.data?.risk_status?.daily_blocked ? '日内熔断已触发；当前无持仓' : !store.data || store.error || store.isStale ? '持仓状态待更新' : store.positions.length ? '没有匹配的记录' : '暂无持仓'"
+         :description="store.data?.risk_status?.daily_blocked ? (store.data.risk_status.reason || '日内亏损熔断已触发；系统暂停新增风险，已有持仓仍由保护任务管理。') : '账户连接就绪后，持仓与风险保护信息会显示在这里。'"
       />
 
       <div v-else class="overflow-x-auto">
