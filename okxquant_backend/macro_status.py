@@ -58,7 +58,12 @@ def fields(data_dir,decisions=None,history=None,now=None,state=None):
         actions=state.get('executed_actions',[]) if isinstance(state,dict) else []
         failed=next((a for a in actions if isinstance(a,str) and ('AI' in a) and any(word in a for word in ('\u672a\u5c31\u7eea','\u63a8\u7406\u5931\u8d25'))),None)
         if failed:status={'status':'rejected','reason':failed};status_at=epoch(state.get('timestamp'))
+    state_data=state if isinstance(state,dict) else read('trading_state.json',{})
     result=project(read('ai_brain_decisions.json',{}) if decisions is None else decisions,
         read('ai_brain_history.json',[]) if history is None else history,validation=status,
         validation_at=status_at,now=now)
+    breaker=state_data.get('circuit_breaker') if isinstance(state_data,dict) else {}
+    if isinstance(breaker,dict) and breaker.get('active') is True:
+        result['status']='blocked'
+        result['message']='日内亏损熔断已触发；AI新一轮推演暂停，当前保留最近一次分析'
     return {'macro_assessment':result['text'],'macro_analysis':result}

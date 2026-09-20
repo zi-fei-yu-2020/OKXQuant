@@ -8,6 +8,7 @@ import ts from 'typescript'
 import * as evolution from '../src/utils/evolutionDisplay.ts'
 import * as observations from '../src/utils/observationDisplay.ts'
 import * as support from '../src/utils/instrumentSupport.ts'
+import { monitorConnectionLabel } from '../src/utils/dashboardHealth.ts'
 
 const read = path => readFileSync(new URL('../src/' + path, import.meta.url), 'utf8')
 const icon = { setup: () => () => Vue.h('svg', { 'aria-hidden': 'true' }) }
@@ -104,7 +105,7 @@ test('telemetry zero remains zero while failed snapshots remain visibly historic
   const data = { horizon_stats: { scalp: { closed: 0, wins: 0, net_pnl: 0 } }, execution_profile: { error: 'unreadable' } }
   const html = await render('StrategyTelemetryPanel.vue', {}, { data, error: 'offline' })
   assert.match(html, /0 笔 · 0 胜/); assert.match(html, /0.00 U/)
-  assert.match(html, /历史快照 · 更新延迟/); assert.match(html, /配置不可用/)
+  assert.match(html, /账本更新延迟/); assert.match(html, /配置不可用/)
 })
 test('displayed daily ratio never substitutes for an execution circuit signal', async () => {
   const data = { today_stats: { total_pnl: -90 }, account: { initial_capital: 100 }, execution_profile: { execution: { daily_drawdown_pct: 0.08 } } }
@@ -188,4 +189,12 @@ test('horizon limits are read from effective backend policy and unknown orders a
   assert.match(html,/短线 0.4% · 波段 0.5%/)
   assert.match(html,/待核对/);assert.match(html,/未触发/);assert.match(html,/-0.20%/)
   assert.match(html,/按账户可用资金/)
+})
+
+test('monitor badge prioritizes circuit breaker and distinguishes ledger-only delay', () => {
+  const base = { account: { total_eq: 4200 }, data_health: { status: 'PARTIAL', partial: true, errors: ['bills: HTTP 503'] }, risk_status: { daily_blocked: false } }
+  assert.equal(monitorConnectionLabel(base, null, true), '账本更新延迟')
+  assert.equal(monitorConnectionLabel({ ...base, risk_status: { daily_blocked: true } }, null, true), '日内熔断已触发')
+  assert.equal(monitorConnectionLabel({ ...base, data_health: { status: 'PARTIAL', partial: true, errors: ['positions: HTTP 503'] } }, null, true), '账户数据更新延迟')
+  assert.equal(monitorConnectionLabel({ account: { total_eq: 4200 }, data_health: { status: 'LIVE', partial: false, errors: [] }, risk_status: { daily_blocked: false } }, null, false), '数据已更新')
 })

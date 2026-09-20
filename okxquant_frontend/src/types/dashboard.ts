@@ -186,7 +186,7 @@ export interface HorizonStat {
 }
 
 export interface DashboardResponse {
-  risk_status?: { status?: string; unresolved_entries?: number | null; daily_drawdown?: number | null; daily_threshold?: number; daily_blocked?: boolean | null; observed_at?: number }
+  risk_status?: { status?: string; reason?: string; unresolved_entries?: number | null; daily_drawdown?: number | null; daily_threshold?: number; daily_blocked?: boolean | null; observed_at?: number }
 
   account_source_id?: string
   initializing?: boolean

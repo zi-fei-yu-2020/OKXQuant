@@ -1,4 +1,4 @@
-import test from 'node:test'
+﻿import test from 'node:test'
 import assert from 'node:assert/strict'
 import {readFileSync} from 'node:fs'
 import {adminPages,pageTitle,publicPages} from '../src/config/navigation.ts'
@@ -23,7 +23,8 @@ test('all research disclosures are styled as explicit actions',()=>{
 test('initial, transient and prolonged refresh delays use only the status badge',()=>{
  const view=read('views/DashboardView.vue')
  assert.ok(view.includes('data-monitor-connection'))
- assert.ok(view.includes("'数据更新延迟' : '数据已更新'"))
+ assert.ok(view.includes('monitorConnectionLabel'))
+ assert.ok(read('utils/dashboardHealth.ts').includes("'数据已更新'"))
  for(const text of ['账户数据尚未就绪','connection-notice','后台重连中','showConnectionNotice'])assert.ok(!view.includes(text))
  assert.ok(!read('stores/dashboard.ts').includes('useToast'))
  assert.ok(read('stores/dashboard.ts').includes('void fetchDashboard(true)'))
@@ -34,3 +35,4 @@ test('refresh request is bounded and cannot permanently stall single-flight poll
  assert.ok(source.includes('controller.abort(), 8000'))
  assert.ok(source.includes('clearTimeout(timeout)'))
 })
+
