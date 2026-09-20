@@ -58,6 +58,8 @@ COPY docs/ ./docs/
 COPY README.md STANDALONE.md env.example ./
 COPY --from=okxquant_frontend-builder /app/okxquant_frontend/dist ./okxquant_frontend/dist
 COPY docker/entrypoint.sh /usr/local/bin/okxquant-entrypoint
+# Host git checkout may use umask 077; copied source must be readable by UID 10001.
+RUN chmod -R a+rX /app
 RUN sed -i 's/\r$//' /usr/local/bin/okxquant-entrypoint \
     && chmod +x /usr/local/bin/okxquant-entrypoint \
     && mkdir -p /app/config /app/data /app/logs /app/backups \
