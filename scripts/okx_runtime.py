@@ -1,5 +1,6 @@
 """Single source of truth for OKX live/demo selection across CLI and REST paths."""
 from __future__ import annotations
+from contextvars import ContextVar
 import hashlib
 import os
 from dataclasses import dataclass
@@ -19,11 +20,10 @@ def _load_dotenv() -> dict[str, str]:
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line: continue
             key, value = line.split("=", 1); values[key.strip()] = value.strip().strip('"').strip("'")
-    try:
-        from okxquant_gateway.secrets import load_secrets
-        values.update(load_secrets())
-    except Exception:
-        pass
+    from okxquant_gateway.secrets import load_secrets
+    # An unreadable vault is not an empty vault. Never silently substitute old
+    # inherited/.env credentials after decryption or storage failure.
+    values.update(load_secrets(strict=True))
     # Dynamic project configuration and encrypted secrets override stale inherited process values.
     return {**os.environ, **values}
 
@@ -56,7 +56,11 @@ class OKXEnvironment:
 
     def cli_env(self, base: Mapping[str, str] | None = None) -> dict[str, str]:
         if self.source == "account-center-unbound": raise RuntimeError("Trading connection is unbound; no credential fallback")
-        env = dict(base or os.environ)
+        env = dict(os.environ if base is None else base)
+        # Never allow a partial/unconfigured selection to inherit stale generic
+        # keys from the parent process (the CLI may otherwise ignore OAuth).
+        for name in ("OKX_API_KEY", "OKX_SECRET_KEY", "OKX_PASSPHRASE"):
+            env.pop(name, None)
         if self.configured:
             env.update({"OKX_API_KEY": self.api_key, "OKX_SECRET_KEY": self.secret_key, "OKX_PASSPHRASE": self.passphrase})
         env["OKX_DEMO"] = "1" if self.simulated else "0"
@@ -69,17 +73,21 @@ class OKXEnvironment:
 
 
 def legacy_environment(values: Mapping[str, str] | None = None, *, mode=None) -> OKXEnvironment:
-    env = dict(values or _load_dotenv())
+    env = dict(_load_dotenv() if values is None else values)
     legacy_simulated = str(env.get("OKX_IS_SIMULATED", "1")).lower() in {"1", "true", "yes"}
     mode = mode or str(env.get("OKXQUANT_OKX_ENV") or ("demo" if legacy_simulated else "live")).lower()
     if mode not in ALLOWED_ENVIRONMENTS: mode = "demo"
     prefix = "OKX_DEMO" if mode == "demo" else "OKX_LIVE"
-    api_key = str(env.get(f"{prefix}_API_KEY") or env.get("OKX_API_KEY") or "")
-    secret_key = str(env.get(f"{prefix}_SECRET_KEY") or env.get("OKX_SECRET_KEY") or "")
-    passphrase = str(env.get(f"{prefix}_PASSPHRASE") or env.get("OKX_PASSPHRASE") or "")
+    # A credential group is indivisible: a partial mode-specific group must not
+    # borrow another account's secret/passphrase from generic legacy variables.
+    separate = any(env.get(f"{prefix}_{name}") for name in ("API_KEY", "SECRET_KEY", "PASSPHRASE"))
+    credential_prefix = prefix if separate else "OKX"
+    api_key = str(env.get(f"{credential_prefix}_API_KEY") or "")
+    secret_key = str(env.get(f"{credential_prefix}_SECRET_KEY") or "")
+    passphrase = str(env.get(f"{credential_prefix}_PASSPHRASE") or "")
     base_url = str(env.get("OKX_BASE_URL") or "https://www.okx.com").rstrip("/")
     if base_url != "https://www.okx.com": raise ValueError("OKX REST Base URL 只允许 https://www.okx.com")
-    return OKXEnvironment(mode, api_key, secret_key, passphrase, base_url, "separate-credentials" if env.get(f"{prefix}_API_KEY") else "legacy-or-oauth")
+    return OKXEnvironment(mode, api_key, secret_key, passphrase, base_url, "separate-credentials" if separate else "legacy-or-oauth")
 
 
 def selected_environment(values: Mapping[str, str] | None = None) -> OKXEnvironment:
@@ -94,24 +102,28 @@ def cli_command(arguments: str, values: Mapping[str, str] | None = None) -> str:
     return f"{selected_environment(values).cli_prefix()} {arguments.strip()}"
 
 
-_FROZEN_ENVIRONMENT: OKXEnvironment | None = None
+_FROZEN_ENVIRONMENT = ContextVar("okx_frozen_environment", default=None)
 
 
 def freeze_environment(values: Mapping[str, str] | None = None) -> OKXEnvironment:
     """Freeze LIVE/DEMO and credentials for one trading cycle."""
-    global _FROZEN_ENVIRONMENT
-    _FROZEN_ENVIRONMENT = selected_environment(values)
-    return _FROZEN_ENVIRONMENT
+    selected = selected_environment(values)
+    _FROZEN_ENVIRONMENT.set(selected)
+    return selected
 
 
 def unfreeze_environment() -> None:
-    global _FROZEN_ENVIRONMENT
-    _FROZEN_ENVIRONMENT = None
+    _FROZEN_ENVIRONMENT.set(None)
+
+
+def current_environment(values: Mapping[str, str] | None = None) -> OKXEnvironment:
+    """Frozen context for this cycle; pool workers inherit via bind_signal_frame."""
+    return _FROZEN_ENVIRONMENT.get() or selected_environment(values)
 
 
 def replace_cli_prefix(command: str, values: Mapping[str, str] | None = None) -> str:
     """Bind the process to the frozen/current credential group and replace a legacy CLI prefix."""
-    selected = _FROZEN_ENVIRONMENT or selected_environment(values)
+    selected = current_environment(values)
     if selected.configured:
         os.environ.update({"OKX_API_KEY": selected.api_key, "OKX_SECRET_KEY": selected.secret_key, "OKX_PASSPHRASE": selected.passphrase})
     os.environ["OKX_DEMO"] = "1" if selected.simulated else "0"

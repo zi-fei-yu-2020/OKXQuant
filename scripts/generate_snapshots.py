@@ -1,89 +1,72 @@
-import os
-from okx_runtime import replace_cli_prefix as okx_private_command
-import json
+"""Persist observed account equity only; never manufacture an equity curve from bills."""
 import datetime
-import subprocess
+import json
+import math
+import os
+import tempfile
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.okx_runtime import selected_environment
+from scripts.sync_web_data import account_command, run_json_cmd
+from scripts.dashboard_stats import scoped_rows
+from okxquant_backend.account_baseline import load_account_baseline
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+DATA_DIR = str(Path(__file__).resolve().parents[1] / "data")
 SNAPSHOTS_FILE = os.path.join(DATA_DIR, "snapshots.json")
-ACCOUNT_INIT_FILE = os.path.join(DATA_DIR, "account_initial_state.json")
+
 
 def generate_live_snapshots():
-    tz_bj = datetime.timezone(datetime.timedelta(hours=8))
-    now_bj = datetime.datetime.now(tz_bj)
-    
-    reset_time = "2026-08-29 01:11:20"
-    initial_cap = float(os.getenv("INITIAL_CAPITAL", "10000.0"))
-    if os.path.exists(ACCOUNT_INIT_FILE):
-        try:
-            with open(ACCOUNT_INIT_FILE, "r", encoding="utf-8") as f:
-                acc = json.load(f)
-                reset_time = acc.get("reset_time", reset_time)
-                initial_cap = float(acc.get("initial_capital", initial_cap))
-        except Exception:
-            pass
-
-    # Fetch live OKX balance
-    res_bal = subprocess.run(okx_private_command("okx account balance --json"), shell=True, capture_output=True, text=True)
-    current_eq = initial_cap
-    if res_bal.stdout:
-        try:
-            bal_data = json.loads(res_bal.stdout)[0]
-            for d in bal_data.get("details", []):
-                if d.get("ccy") == "USDT":
-                    current_eq = float(d.get("eq", initial_cap) or initial_cap)
-                    break
-        except Exception:
-            pass
-
-    # Read OKX bills to construct intermediate equity points
-    res_bills = subprocess.run(okx_private_command("okx account bills --limit 100 --json"), shell=True, capture_output=True, text=True)
-    bills = json.loads(res_bills.stdout) if res_bills.stdout else []
-
-    snapshots = [
-        {
-            "time": reset_time,
-            "total_eq": initial_cap,
-            "pnl": 0.0,
-            "roi": 0.0
-        }
-    ]
-
-    running_bal = initial_cap
-    bills_after_reset = []
-    for b in reversed(bills):
-        ts = int(b.get("ts", 0) or 0) / 1000.0
-        dt_bj = datetime.datetime.fromtimestamp(ts, tz=tz_bj).strftime("%Y-%m-%d %H:%M:%S")
-        if dt_bj < reset_time:
-            continue
-        bal_chg = float(b.get("balChg", 0) or 0)
-        running_bal += bal_chg
-        pnl_val = round(running_bal - initial_cap, 2)
-        roi_val = round((pnl_val / initial_cap * 100), 2)
-        
-        # Add snapshot point
-        snapshots.append({
-            "time": dt_bj,
-            "total_eq": round(running_bal, 2),
-            "pnl": pnl_val,
-            "roi": roi_val
-        })
-
-    # Add current latest point
-    now_str = now_bj.strftime("%Y-%m-%d %H:%M:%S")
-    cur_pnl = round(current_eq - initial_cap, 2)
-    cur_roi = round((cur_pnl / initial_cap * 100), 2)
+    environment = selected_environment()
+    balance = run_json_cmd(account_command(environment, "balance"), environment=environment)
+    if not isinstance(balance, list) or not balance or not isinstance(balance[0], dict):
+        raise ValueError("Balance unavailable; previous snapshots preserved")
+    detail = next((row for row in balance[0].get("details", [])
+                   if isinstance(row, dict) and row.get("ccy") == "USDT"), {})
+    if "eq" not in detail:
+        raise ValueError("USDT equity unavailable; previous snapshots preserved")
+    equity = float(detail["eq"])
+    if not math.isfinite(equity):
+        raise ValueError("Equity is not finite")
+    snapshots = []
+    try:
+        snapshots = scoped_rows(json.loads(Path(SNAPSHOTS_FILE).read_text(encoding="utf-8")), environment.identity)
+    except (OSError, ValueError):
+        pass
+    # A07 owns baseline migration/account selection; do not duplicate its file schema.
+    baseline = load_account_baseline(scope=environment.identity)
+    try:
+        capital = float(baseline.get("initial_capital", 0))
+    except (TypeError, ValueError):
+        capital = 0
+    configured = (baseline.get("baseline_configured") is True
+                  and baseline.get("account_scope") == environment.identity
+                  and math.isfinite(capital) and capital > 0)
+    now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
     snapshots.append({
-        "time": now_str,
-        "total_eq": round(current_eq, 2),
-        "pnl": cur_pnl,
-        "roi": cur_roi
+        "time": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "total_eq": round(equity, 2), "equity": round(equity, 2),
+        "pnl": round(equity - capital, 2) if configured else None,
+        "roi": round((equity - capital) / capital * 100, 2) if configured else None,
+        "baseline_configured": configured,
+        "environment_id": environment.identity, "environment": environment.mode,
+        "source": "observed_balance",
     })
+    if selected_environment().identity != environment.identity:
+        raise ValueError("Account changed while collecting snapshots")
+    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".equity-", suffix=".json", dir=DATA_DIR)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(snapshots, handle, ensure_ascii=False, indent=2, allow_nan=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, SNAPSHOTS_FILE)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    return snapshots
 
-    with open(SNAPSHOTS_FILE, "w", encoding="utf-8") as f:
-        json.dump(snapshots, f, ensure_ascii=False, indent=2)
-
-    print(f"✅ Generated {len(snapshots)} clean snapshots for Chart.js")
 
 if __name__ == "__main__":
     generate_live_snapshots()

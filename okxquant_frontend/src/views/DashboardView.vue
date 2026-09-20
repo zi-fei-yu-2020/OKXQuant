@@ -13,7 +13,6 @@ import NewsIntelligence from '../components/NewsIntelligence.vue'
 import SelfEvolutionLab from '../components/SelfEvolutionLab.vue'
 import TradesLedger from '../components/TradesLedger.vue'
 import AiBrainHistory from '../components/AiBrainHistory.vue'
-import FloatingActions from '../components/FloatingActions.vue'
 import AboutModal from '../components/AboutModal.vue'
 import PageHeader from '../components/ui/PageHeader.vue'
 import AppBadge from '../components/ui/AppBadge.vue'
@@ -50,7 +49,7 @@ onMounted(() => {
   syncTabFromRoute()
   store.startPolling(3000)
   try {
-    if (localStorage.getItem('okxquant_dashboard_layout_v2') !== 'stacked') layoutMode.value = 'dual'
+    layoutMode.value = localStorage.getItem('okxquant_dashboard_layout_v2') === 'stacked' ? 'stacked' : 'dual'
   } catch {
     /* optional preference */
   }
@@ -81,9 +80,11 @@ function setLayout(mode: 'dual' | 'stacked') {
             dot
             >{{ store.error || !hasAccount || store.isStale ? '数据更新延迟' : '数据已更新' }}</AppBadge
           ><button
+            v-if="store.error || (store.data && store.isStale)"
             class="ui-icon-button"
             :disabled="store.isRefreshing"
-            aria-label="刷新监控数据"
+            aria-label="重试获取监控数据"
+            title="重试获取监控数据"
             @click="store.fetchDashboard()"
           >
             <RefreshCw class="size-4" :class="{ 'animate-spin': store.isRefreshing }" />
@@ -129,7 +130,7 @@ function setLayout(mode: 'dual' | 'stacked') {
       <button @click="store.showAboutModal = true">OKXQuant · v0.1.0</button
       ><span class="ml-4 hidden sm:inline">只读监控 · 交易有风险，决策需审慎</span>
     </footer>
-    <FloatingActions /><AboutModal
+    <AboutModal
       :visible="store.showAboutModal"
       @close="store.showAboutModal = false"
     />

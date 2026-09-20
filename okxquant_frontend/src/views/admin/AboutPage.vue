@@ -12,15 +12,18 @@ import { Info, GitBranch, Download } from 'lucide-vue-next'
 const { api } = useApi()
 const about = ref<any>(null)
 const loading = ref(true)
+const loadFailed = ref(false)
 const updateChecking = ref(false)
 const updateResult = ref<any>(null)
 
 async function loadAbout() {
+  loadFailed.value = false
   loading.value = true
   try {
     about.value = await api('/api/v1/admin/about')
   } catch (e: any) {
     if (e?.silent) return
+    loadFailed.value = true
     toast.error(e.message)
   } finally {
     loading.value = false
@@ -57,6 +60,7 @@ onMounted(() => {
 
 <template>
   <div class="space-y-4">
+    <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading" @click="loadAbout()">重试</button></div>
     <LoadingState v-if="loading" />
 
     <template v-else-if="about">

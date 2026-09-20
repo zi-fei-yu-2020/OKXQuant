@@ -2,12 +2,17 @@
 """Generate local OKXQuant dashboard cache without an external console dependency."""
 
 import os
-from okx_runtime import replace_cli_prefix as okx_private_command
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.okx_runtime import selected_environment
+from scripts.dashboard_stats import scoped_rows, today_lifecycle_stats
 import json
-import public_market as market
-import time
+from scripts import public_market as market
 import subprocess
 import datetime
+import math
+import tempfile
 
 WORKSPACE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(WORKSPACE_DIR, "data")
@@ -17,14 +22,25 @@ SNAPSHOTS_JSON_FILE = os.path.join(DATA_DIR, "snapshots.json")
 LOG_FILE = os.path.join(LOGS_DIR, "trading.log")
 DATA_JSON_PATH = os.path.join(DATA_DIR, "trading_data.json")
 
-from instrument_pool import load_instruments
+from scripts.instrument_pool import load_instruments
 
-TARGET_INSTRUMENTS = load_instruments()
+def account_command(environment, arguments):
+    return f"{environment.cli_prefix()} account {arguments} --json"
 
-def run_json_cmd(cmd: str, timeout: int = 15):
+
+def observed_number(value):
+    if value is None or value == "" or isinstance(value, bool):
+        raise ValueError("Account observation is missing")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("Account observation is not finite")
+    return number
+
+
+def run_json_cmd(cmd: str, timeout: int = 15, *, environment=None):
     try:
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
-        if res.stdout.strip():
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, env=environment.cli_env() if environment is not None else None)
+        if res.returncode == 0 and res.stdout.strip():
             return json.loads(res.stdout.strip())
     except Exception:
         pass
@@ -48,11 +64,16 @@ def generate_trading_data():
     now_bj = datetime.datetime.now(tz_bj)
     today_str = now_bj.strftime("%Y-%m-%d")
 
+    environment = selected_environment()
     auth_data = run_json_cmd("okx auth status --json") or {}
+    if not isinstance(auth_data, dict):
+        auth_data = {}
     is_authenticated = auth_data.get("status") == "logged_in"
 
     # 1. Balance
-    bal_data = run_json_cmd(okx_private_command("okx account balance --json")) or []
+    bal_data = run_json_cmd(account_command(environment, "balance"), environment=environment)
+    if not isinstance(bal_data, list) or not bal_data or not isinstance(bal_data[0], dict):
+        raise ValueError("Balance unavailable; previous scoped cache preserved")
     usdt_bal = {}
     if bal_data and isinstance(bal_data, list) and "details" in bal_data[0]:
         for d in bal_data[0]["details"]:
@@ -60,13 +81,17 @@ def generate_trading_data():
                 usdt_bal = d
                 break
 
-    total_eq = float(usdt_bal.get("eq", 0) or 0)
+    if "eq" not in usdt_bal:
+        raise ValueError("USDT equity unavailable; previous scoped cache preserved")
+    total_eq = observed_number(usdt_bal["eq"])
     avail_eq = float(usdt_bal.get("availEq", 0) or 0)
     cash_bal = float(usdt_bal.get("cashBal", 0) or 0)
     upl_acc = float(usdt_bal.get("upl", 0) or 0)
 
     # 2. Positions
-    pos_data = run_json_cmd(okx_private_command("okx account positions --json")) or []
+    pos_data = run_json_cmd(account_command(environment, "positions"), environment=environment)
+    if not isinstance(pos_data, list) or any(not isinstance(row, dict) for row in pos_data):
+        raise ValueError("Positions unavailable; previous scoped cache preserved")
     positions = []
     long_count = 0
     short_count = 0
@@ -78,9 +103,10 @@ def generate_trading_data():
             if pos_sz == 0:
                 continue
             pos_side = p.get("posSide", "net")
-            if pos_side == "long":
+            direction = pos_side if pos_side in {"long", "short"} else ("long" if pos_sz > 0 else "short")
+            if direction == "long":
                 long_count += 1
-            elif pos_side == "short":
+            elif direction == "short":
                 short_count += 1
             upl = float(p.get("upl", 0) or 0)
             total_pos_upl += upl
@@ -97,82 +123,20 @@ def generate_trading_data():
                 "bePx": p.get("bePx", "--")
             })
 
-    # Fallback to last valid snapshot if balance is 0
-    if total_eq == 0 and os.path.exists(SNAPSHOTS_JSON_FILE):
-        try:
-            with open(SNAPSHOTS_JSON_FILE, "r", encoding="utf-8") as f:
-                snaps = json.load(f)
-                valid_snaps = [s for s in snaps if s.get("equity", 0.0) > 0]
-                if valid_snaps:
-                    last_s = valid_snaps[-1]
-                    total_eq = float(last_s.get("equity", 0.0))
-                    avail_eq = float(last_s.get("avail", 0.0))
-                    total_pos_upl = float(last_s.get("upl", 0.0))
-        except Exception:
-            pass
-
-    # 3. Bills & Today PnL
-    bills_data = run_json_cmd(okx_private_command("okx account bills --limit 100 --json")) or []
-    today_realized_gross = 0.0
-    today_fees = 0.0
-    today_funding = 0.0
-    today_win_trades = 0
-    today_loss_trades = 0
-
-    if isinstance(bills_data, list) and bills_data:
-        for b in bills_data:
-            ts = int(b.get("ts", 0) or 0) / 1000.0
-            dt = datetime.datetime.fromtimestamp(ts, tz=tz_bj)
-            if dt.strftime("%Y-%m-%d") == today_str:
-                pnl = float(b.get("pnl", 0) or 0)
-                fee = float(b.get("fee", 0) or 0)
-                sub_type = str(b.get("subType", ""))
-                
-                today_fees += fee
-                if sub_type in ["5", "6"]:  # Close
-                    today_realized_gross += pnl
-                    if pnl > 0:
-                        today_win_trades += 1
-                    elif pnl < 0:
-                        today_loss_trades += 1
-                elif sub_type in ["173", "174"]:  # Funding
-                    today_funding += pnl
-    else:
-        # Load from JSON ledger
-        if os.path.exists(LEDGER_JSON_FILE):
-            try:
-                with open(LEDGER_JSON_FILE, "r", encoding="utf-8") as f:
-                    t_list = json.load(f)
-                    for t in t_list:
-                        if today_str in str(t.get("time", "")):
-                            p = float(t.get("pnl", 0.0) or 0)
-                            if p > 0:
-                                today_win_trades += 1
-                                today_realized_gross += p
-                            elif p < 0:
-                                today_loss_trades += 1
-                                today_realized_gross += p
-            except Exception:
-                pass
-
-    net_realized_pnl = today_realized_gross + today_fees + today_funding
-    total_closed = today_win_trades + today_loss_trades
-    win_rate = round((today_win_trades / total_closed) * 100, 1) if total_closed > 0 else 0.0
-
     # 4. Snapshots & Trades from JSON
     snapshots = []
     trades = []
     if os.path.exists(SNAPSHOTS_JSON_FILE):
         try:
             with open(SNAPSHOTS_JSON_FILE, "r", encoding="utf-8") as f:
-                snapshots = json.load(f)[-40:]
+                snapshots = scoped_rows(json.load(f), environment.identity)[-40:]
         except Exception:
             pass
 
     if os.path.exists(LEDGER_JSON_FILE):
         try:
             with open(LEDGER_JSON_FILE, "r", encoding="utf-8") as f:
-                trades = list(reversed(json.load(f)))[:60]
+                trades = list(reversed(scoped_rows(json.load(f), environment.identity)))
         except Exception:
             pass
 
@@ -187,7 +151,7 @@ def generate_trading_data():
             pass
 
     factors = []
-    for item in TARGET_INSTRUMENTS:
+    for item in load_instruments():
         inst_id = item["instId"]
         name = item["name"]
         try:
@@ -239,6 +203,9 @@ def generate_trading_data():
     disk = get_disk_info()
 
     data = {
+        "account_source_id": environment.identity,
+        "environment": environment.mode,
+        "account_data_status": "ready",
         "timestamp": now_bj.strftime("%Y-%m-%d %H:%M:%S (北京时间)"),
         "date": today_str,
         "auth": {
@@ -246,7 +213,7 @@ def generate_trading_data():
             "status": auth_data.get("status", "not_logged_in"),
             "site": auth_data.get("site", "global"),
             "verificationUri": auth_data.get("verificationUri", "https://www.okx.com/account/oauth?flow=device"),
-            "userCode": auth_data.get("userCode", "FSVD-HJVL")
+            "userCode": auth_data.get("userCode", "")
         },
         "account": {
             "total_eq": round(total_eq, 2),
@@ -255,16 +222,6 @@ def generate_trading_data():
             "upl": round(upl_acc, 2),
             "pos_upl_total": round(total_pos_upl, 2),
             "margin_usage_pct": round(((total_eq - avail_eq) / total_eq * 100) if total_eq > 0 else 0, 1)
-        },
-        "today_stats": {
-            "realized_gross": round(today_realized_gross, 2),
-            "fees_paid": round(today_fees, 2),
-            "funding_paid": round(today_funding, 2),
-            "net_realized": round(net_realized_pnl, 2),
-            "total_pnl": round(net_realized_pnl + total_pos_upl, 2),
-            "win_trades": today_win_trades,
-            "loss_trades": today_loss_trades,
-            "win_rate": win_rate
         },
         "positions_summary": {
             "total": len(positions),
@@ -275,20 +232,31 @@ def generate_trading_data():
         },
         "factors": factors,
         "snapshots": snapshots,
-        "trades": trades,
+        "trades": trades[:60],
         "logs": logs,
         "system": {
             "disk": disk
         }
     }
 
-    # Write atomic JSON to local project data cache
+    # Wins/losses are lifecycle settlements, not individual fee/bill rows.
+    settled = today_lifecycle_stats(trades, today_str)
+    settled.pop("settled_rows", None)
+    data["today_stats"] = {**settled, "total_pnl": round(settled["net_realized"] + total_pos_upl, 2)}
+    # An account switch during collection must not publish a mixed observation.
+    if selected_environment().identity != environment.identity:
+        raise ValueError("Account changed while collecting dashboard data")
     os.makedirs(DATA_DIR, exist_ok=True)
-    temp_path = DATA_JSON_PATH + ".tmp"
-    with open(temp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(temp_path, DATA_JSON_PATH)
+    fd, temp_path = tempfile.mkstemp(prefix=".trading-data-", suffix=".json", dir=DATA_DIR)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2, allow_nan=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, DATA_JSON_PATH)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 if __name__ == "__main__":
     generate_trading_data()
-    print("✅ Web data and JSON ledger synced successfully.")

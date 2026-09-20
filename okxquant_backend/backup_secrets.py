@@ -1,5 +1,7 @@
 """Encrypted per-target credentials for open-source backup adapters."""
 from __future__ import annotations
+from functools import wraps
+from scripts.config_lock import configuration_write
 import json
 import os
 import tempfile
@@ -15,6 +17,14 @@ ALLOWED_FIELDS = {
     "refresh_token", "access_token", "username", "password", "client_id", "client_secret", "sign_key",
 }
 
+
+
+def _serialized(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with configuration_write(STORE_FILE):
+            return function(*args, **kwargs)
+    return wrapped
 
 def _atomic(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -36,13 +46,16 @@ def _fernet(create: bool = False) -> Fernet | None:
 
 def _load_all() -> dict[str, dict[str, str]]:
     f = _fernet(False)
-    if not f or not STORE_FILE.exists(): return {}
+    if not STORE_FILE.exists(): return {}
+    if not f: raise ValueError("Backup credential store or key is damaged; refusing overwrite")
     try:
         raw = json.loads(f.decrypt(STORE_FILE.read_bytes()).decode("utf-8"))
         return {str(ref): {str(k): str(v) for k,v in values.items() if k in ALLOWED_FIELDS and v} for ref,values in raw.items() if isinstance(values,dict)}
-    except (InvalidToken, OSError, json.JSONDecodeError): return {}
+    except (InvalidToken, OSError, json.JSONDecodeError, AttributeError, UnicodeError):
+        raise ValueError("Backup credential store or key is damaged; refusing overwrite") from None
 
 
+@_serialized
 def save_credentials(ref: str, values: Mapping[str, Any]) -> dict[str, Any]:
     ref = str(ref).strip()
     if not ref or len(ref) > 100: raise ValueError("无效凭证引用")
@@ -61,6 +74,7 @@ def load_credentials(ref: str) -> dict[str, str]:
     return dict(_load_all().get(str(ref), {}))
 
 
+@_serialized
 def delete_credentials(ref: str) -> None:
     current = _load_all(); current.pop(str(ref), None)
     f = _fernet(True); assert f

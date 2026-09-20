@@ -6,7 +6,7 @@ import InstrumentSupportNotice from './InstrumentSupportNotice.vue'
 import { canOpen } from '../utils/instrumentSupport'
 
 import { ref } from 'vue'
-import { X, Cpu, FileText, CheckCircle2, ShieldAlert, Zap, TrendingUp } from 'lucide-vue-next'
+import { Cpu, FileText, CheckCircle2, ShieldAlert, Zap, TrendingUp } from 'lucide-vue-next'
 
 const props = defineProps<{
   visible: boolean
@@ -76,22 +76,10 @@ async function copyPrompt() {
               </span>
             </div>
             <div class="text-[10px] font-mono mt-0.5" style="color: var(--text-faint)">
-              100% 审计溯源 · 微积分物理定积分证明 · 链上聪明钱博弈
+              模型判断与数据快照 · 缺失项不作推断
             </div>
           </div>
         </div>
-
-        <button
-          @click="emit('close')"
-          class="p-1.5 rounded-lg border transition-colors cursor-pointer"
-          style="
-            background-color: var(--bg-card);
-            border-color: var(--border-subtle);
-            color: var(--text-faint);
-          "
-        >
-          <X class="w-4 h-4" />
-        </button>
       </div>
 
       <InstrumentSupportNotice class="m-4 mb-0" :support="instrument?.environment_support" />
@@ -122,7 +110,7 @@ async function copyPrompt() {
           "
         >
           <FileText class="w-3.5 h-3.5" />
-          <span>当轮实发 Prompt 原文对照</span>
+          <span>最近保存的 Prompt</span>
         </button>
       </div>
 
@@ -284,20 +272,21 @@ async function copyPrompt() {
             >
               {{
                 instrument?.thought_process?.risk_reward_evaluation ||
-                '目标 R:R ≥ 2.5；执行底线 2.0。未达 2R 执行层一律安全降级拒绝开仓。'
+                '该记录未提供盈亏比评估；实际限制以执行配置和风控结果为准。'
               }}
             </p>
           </div>
         </div>
 
-        <!-- TAB 2: 当轮实发 Prompt 原文对照 -->
+        <!-- TAB 2: 最近保存的 Prompt -->
         <div v-else class="space-y-3">
           <div class="flex items-center justify-between">
             <span class="text-xs font-mono" style="color: var(--text-muted)"
-              >发送至大模型网关的完整提示词</span
+              >最近保存的提示词，未核验与本条信号的轮次关联</span
             >
             <button
               @click="copyPrompt"
+              :disabled="!fullPromptText"
               class="px-2.5 py-1 rounded border text-xs font-mono cursor-pointer transition-colors"
               style="
                 background-color: var(--bg-card);
@@ -315,7 +304,7 @@ async function copyPrompt() {
               border-color: var(--border-subtle);
               color: var(--text-main);
             "
-            >{{ fullPromptText || '等待下一次 15 分钟交易周期写入实发提示词...' }}</pre
+            >{{ fullPromptText || '暂无可关联的提示词记录。' }}</pre
           >
         </div>
       </div>

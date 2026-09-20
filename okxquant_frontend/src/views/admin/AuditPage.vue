@@ -12,16 +12,19 @@ import { Scroll, RefreshCw, Search } from 'lucide-vue-next'
 const { api } = useApi()
 const records = ref<any[]>([])
 const loading = ref(true)
+const loadFailed = ref(false)
 const search = ref('')
 const detailRec = ref<any | null>(null)
 
 async function load() {
+  loadFailed.value = false
   loading.value = true
   try {
     const res = await api('/api/v1/admin/audit?limit=200')
     records.value = res.records || []
   } catch (error: any) {
     if (error?.silent) return
+    loadFailed.value = true
     toast.error(error.message)
   } finally {
     loading.value = false
@@ -47,6 +50,7 @@ onMounted(load)
 
 <template>
   <div class="space-y-4 max-w-[2160px] mx-auto">
+    <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading" @click="load()">重试</button></div>
     <!-- Toolbar -->
     <AppCard
       class="rounded-xl border p-3 flex items-center gap-3 shadow-xs transition-colors"
@@ -178,19 +182,7 @@ onMounted(load)
           "
           >{{ JSON.stringify(detailRec, null, 2) }}</pre
         >
-        <div class="flex justify-end mt-4">
-          <button
-            @click="detailRec = null"
-            class="px-4 py-2 rounded-lg border text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
-            style="
-              background-color: var(--bg-card-subtle);
-              border-color: var(--border-medium);
-              color: var(--text-main);
-            "
-          >
-            关闭
-          </button>
-        </div>
+
       </div></AppDialog
     >
   </div>

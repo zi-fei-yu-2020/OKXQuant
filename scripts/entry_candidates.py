@@ -28,11 +28,13 @@ def number(value):
 
 
 def seal_candles(raw, timeframe, as_of_ms):
+    from scripts.signal_data import _timestamp
+    as_of_ms = _timestamp(as_of_ms)
     width = WIDTHS[timeframe]
     rows = []
     for r in raw:
-        if len(r) < 9 or str(r[8]) != '1': raise ValueError('unconfirmed_entry_candle')
-        start = int(r[0]); o,h,l,c,v = [number(r[i]) for i in range(1,6)]
+        if not isinstance(r,(list,tuple)) or len(r) < 9 or str(r[8]) != '1': raise ValueError('unconfirmed_entry_candle')
+        start = _timestamp(r[0]); o,h,l,c,v = [number(r[i]) for i in range(1,6)]
         if start % width or start + width > as_of_ms or not 0 < l <= min(o,c) <= max(o,c) <= h or v < 0:
             raise ValueError('invalid_entry_candle')
         rows.append({'close_ms':start+width,'open':o,'high':h,'low':l,'close':c,'volume':v})
@@ -49,8 +51,10 @@ def verified_bars(package, timeframe):
     if not isinstance(frames,dict): raise ValueError('entry_candle_provenance_missing')
     frame=frames.get(timeframe)
     if not isinstance(frame,dict): raise ValueError('entry_candle_provenance_missing')
+    from scripts.signal_data import _timestamp
     as_of=int(number(package.get('data_as_of'))*1000)
-    if frame.get('contract')!='closed-v1' or abs(frame.get('as_of_ms',0)-as_of)>1:
+    frame_as_of=_timestamp(frame.get('as_of_ms'))
+    if frame.get('contract')!='closed-v1' or abs(frame_as_of-as_of)>1:
         raise ValueError('entry_candle_provenance_missing')
     width=WIDTHS[timeframe];rows=frame.get('rows') or []
     raw=[[r['close_ms']-width,r['open'],r['high'],r['low'],r['close'],r['volume'],0,0,'1'] for r in rows]

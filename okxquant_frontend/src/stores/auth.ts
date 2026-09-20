@@ -7,6 +7,7 @@ const SESSION_TOKEN_KEY = 'okxquant.admin.session.id'
 const SESSION_USER_KEY = 'okxquant.admin.session.user'
 
 export interface AdminUser {
+  id?: number
   username: string
   role: string
 }
@@ -46,7 +47,7 @@ export const useAuthStore = defineStore('auth', () => {
       }
       expiryNotified = false
       token.value = data.session_token
-      user.value = { username: data.user?.username || username, role: data.user?.role || 'admin' }
+      user.value = { id: data.user?.id, username: data.user?.username || username, role: data.user?.role || 'admin' }
       localStorage.setItem(SESSION_TOKEN_KEY, token.value)
       localStorage.setItem(SESSION_USER_KEY, JSON.stringify(user.value))
       return true
@@ -68,8 +69,9 @@ export const useAuthStore = defineStore('auth', () => {
       if (!resp.ok) return false
       const data = await resp.json()
       if (token.value !== checkedToken) return false
+      if (!data.user?.id || !data.user?.username || !data.user?.role) return false
       if (data.user) {
-        user.value = { username: data.user.username, role: data.user.role }
+        user.value = { id: data.user.id, username: data.user.username, role: data.user.role }
         localStorage.setItem(SESSION_USER_KEY, JSON.stringify(user.value))
       }
       return true

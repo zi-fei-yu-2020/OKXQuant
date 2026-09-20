@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useApiAction } from '../../composables/useApiAction'
+const { action, actionBusy, canManage } = useApiAction(() => loading.value || loadFailed.value)
+
 import AppField from '../../components/ui/AppField.vue'
 import AppCard from '../../components/ui/AppCard.vue'
 
@@ -9,6 +12,8 @@ import { useFeedback } from '../../composables/useFeedback'
 import { useDialogs } from '../../composables/useDialogs'
 
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+const router = useRouter()
 import { useApi } from '../../composables/useApi'
 import { useAuthStore } from '../../stores/auth'
 import { UserCog, KeyRound, Plus, Lock, Unlock, ShieldCheck } from 'lucide-vue-next'
@@ -19,6 +24,7 @@ const auth = useAuthStore()
 const users = ref<any[]>([])
 const currentUserId = ref<number>(0)
 const loading = ref(true)
+const loadFailed = ref(false)
 const bannerMsg = useFeedback()
 
 // Password form
@@ -34,6 +40,9 @@ const newRole = ref('admin')
 const newPasswordForCreate = ref('')
 
 async function load() {
+  loadFailed.value = false
+  currentUserId.value = auth.user?.id || 0
+  pwdUserId.value = currentUserId.value
   if (!auth.isSuperadmin) {
     loading.value = false
     return
@@ -46,13 +55,15 @@ async function load() {
     pwdUserId.value = res.current_user_id
   } catch (e: any) {
     if (e?.silent) return
+    loadFailed.value = true
     bannerMsg.value = { text: e.message, type: 'err' }
   } finally {
     loading.value = false
   }
 }
 
-async function changePassword() {
+const changePassword = action(async () => {
+  if (!pwdUserId.value) { bannerMsg.value = { text: '未获取到账号信息，请重新登录。', type: 'err' }; return }
   if (newPassword.value.length < 12) {
     bannerMsg.value = { text: '新密码至少需要 12 位字符', type: 'err' }
     return
@@ -66,18 +77,22 @@ async function changePassword() {
         new_password: newPassword.value,
       }),
     })
-    bannerMsg.value = { text: '✅ 密码已修改，其他设备的会话已全部失效', type: 'ok' }
+    bannerMsg.value = { text: '密码已修改，该账号需重新登录。', type: 'ok' }
     currentPassword.value = ''
     newPassword.value = ''
+    if (pwdUserId.value === currentUserId.value) {
+      auth.logout(false)
+      await router.replace('/admin/login')
+    }
   } catch (e: any) {
     if (e?.silent) return
     bannerMsg.value = { text: `修改失败：${e.message}`, type: 'err' }
   } finally {
     changingPwd.value = false
   }
-}
+}, false)
 
-async function createUser() {
+const createUser = action(async () => {
   if (newUsername.value.length < 3 || newPasswordForCreate.value.length < 12) {
     bannerMsg.value = { text: '账号至少 3 位，密码至少 12 位', type: 'err' }
     return
@@ -100,9 +115,9 @@ async function createUser() {
     if (e?.silent) return
     bannerMsg.value = { text: `创建失败：${e.message}`, type: 'err' }
   }
-}
+})
 
-async function toggleEnabled(u: any) {
+const toggleEnabled = action(async (u: any) => {
   try {
     await api(`/api/v1/admin/users/${u.id}/enabled`, {
       method: 'PUT',
@@ -113,9 +128,9 @@ async function toggleEnabled(u: any) {
     if (e?.silent) return
     bannerMsg.value = { text: e.message, type: 'err' }
   }
-}
+})
 
-async function unlockUser(u: any) {
+const unlockUser = action(async (u: any) => {
   const phrase = await prompt(`解锁 ${u.username} 需输入确认短语：UNLOCK ADMIN ${u.id}`)
   if (!phrase) return
   try {
@@ -129,7 +144,7 @@ async function unlockUser(u: any) {
     if (e?.silent) return
     bannerMsg.value = { text: e.message, type: 'err' }
   }
-}
+})
 
 onMounted(load)
 
@@ -138,6 +153,7 @@ const { prompt } = useDialogs()
 
 <template>
   <div class="space-y-4">
+    <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading || actionBusy" @click="load()">重试</button></div>
     <!-- Change Password -->
     <AppCard
       class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
@@ -161,7 +177,7 @@ const { prompt } = useDialogs()
                 >当前密码</span
               ></template
             ><template #default="{ id: fieldId }"
-              ><input
+              ><input :disabled="actionBusy"
                 :id="fieldId"
                 v-model="currentPassword"
                 type="password"
@@ -180,7 +196,7 @@ const { prompt } = useDialogs()
                 >新密码 (≥12 位)</span
               ></template
             ><template #default="{ id: fieldId }"
-              ><input
+              ><input :disabled="actionBusy"
                 :id="fieldId"
                 v-model="newPassword"
                 type="password"
@@ -195,7 +211,7 @@ const { prompt } = useDialogs()
         <div class="flex items-end">
           <button
             @click="changePassword"
-            :disabled="changingPwd"
+            :disabled="(changingPwd) || actionBusy"
             class="w-full flex items-center justify-center space-x-1.5 px-4 py-2 rounded-lg text-sm font-sans font-bold cursor-pointer disabled:opacity-50 transition-all shadow-xs"
             style="background-color: var(--text-main); color: var(--bg-card)"
           >
@@ -211,7 +227,7 @@ const { prompt } = useDialogs()
     </AppCard>
 
     <!-- Users List -->
-    <AppCard
+    <AppCard v-if="auth.isSuperadmin"
       class="rounded-xl border overflow-hidden shadow-xs"
       style="background-color: var(--bg-card); border-color: var(--border-subtle)"
     >
@@ -228,7 +244,7 @@ const { prompt } = useDialogs()
             管理员账号与权限
           </h2>
         </div>
-        <button
+        <button :disabled="actionBusy"
           v-if="auth.isSuperadmin"
           @click="createVisible = true"
           class="flex items-center space-x-1 px-3 py-1.5 rounded-lg text-sm font-sans font-bold transition-all cursor-pointer shadow-xs"
@@ -329,7 +345,7 @@ const { prompt } = useDialogs()
                 {{ u.last_login_at || '从未登录' }}
               </td>
               <td class="py-2.5 px-4 text-right whitespace-nowrap space-x-1.5">
-                <button
+                <button :disabled="actionBusy || !canManage"
                   v-if="u.id !== currentUserId"
                   @click="toggleEnabled(u)"
                   class="px-2.5 py-1 rounded-md border text-xs font-sans transition-all cursor-pointer shadow-xs"
@@ -342,7 +358,7 @@ const { prompt } = useDialogs()
                   <component :is="u.enabled ? Lock : Unlock" class="w-3 h-3 inline" />
                   {{ u.enabled ? '停用' : '启用' }}
                 </button>
-                <button
+                <button :disabled="actionBusy || !canManage"
                   v-if="u.locked_until"
                   @click="unlockUser(u)"
                   class="px-2.5 py-1 rounded-md border text-xs font-sans cursor-pointer transition-colors"
@@ -362,7 +378,7 @@ const { prompt } = useDialogs()
     </AppCard>
 
     <!-- Create Modal -->
-    <AppDialog
+    <AppDialog :busy="actionBusy"
       v-if="createVisible"
       :open="!!createVisible"
       title="新增管理员"
@@ -385,7 +401,7 @@ const { prompt } = useDialogs()
               >账号 (3-32 位)</span
             ></template
           ><template #default="{ id: fieldId }"
-            ><input
+            ><input :disabled="actionBusy"
               :id="fieldId"
               v-model="newUsername"
               class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border mb-3"
@@ -401,7 +417,7 @@ const { prompt } = useDialogs()
               >角色</span
             ></template
           ><template #default="{ id: fieldId }"
-            ><select
+            ><select :disabled="actionBusy"
               :id="fieldId"
               v-model="newRole"
               class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border mb-3 cursor-pointer"
@@ -422,7 +438,7 @@ const { prompt } = useDialogs()
               >初始密码 (≥12 位)</span
             ></template
           ><template #default="{ id: fieldId }"
-            ><input
+            ><input :disabled="actionBusy"
               :id="fieldId"
               v-model="newPasswordForCreate"
               type="password"
@@ -434,7 +450,7 @@ const { prompt } = useDialogs()
               " /></template
         ></AppField>
         <div class="flex justify-end space-x-2">
-          <button
+          <button :disabled="actionBusy"
             @click="createVisible = false"
             class="px-3 py-2 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
             style="
@@ -445,7 +461,7 @@ const { prompt } = useDialogs()
           >
             取消
           </button>
-          <button
+          <button :disabled="actionBusy || !canManage"
             @click="createUser"
             class="px-3 py-2 rounded-lg text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
             style="background-color: var(--text-main); color: var(--bg-card)"

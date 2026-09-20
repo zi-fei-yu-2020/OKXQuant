@@ -18,7 +18,7 @@ function fmt4(v: any): string {
 }
 const allProtected = computed(
   () =>
-    store.positions.length > 0 &&
+    !store.error && !store.isStale && store.positions.length > 0 &&
     store.positions.every(
       (p: any) =>
         p.protectionStatus === 'fully_protected' || Number(p.protectionCoveragePct || 0) >= 100,
@@ -37,7 +37,7 @@ const allProtected = computed(
       style="border-color: var(--border-subtle)"
     >
       <div class="flex items-center space-x-2.5">
-        <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+        <span class="w-2 h-2 rounded-full" :style="{ background: store.error || store.isStale ? 'var(--color-warn)' : 'var(--text-muted)' }"></span>
         <h2
           class="text-xs sm:text-sm font-black font-mono uppercase tracking-wider"
           style="color: var(--text-main)"
@@ -52,7 +52,7 @@ const allProtected = computed(
             border-color: var(--border-subtle);
           "
         >
-          {{ store.positions.length }} / 6 在途
+          {{ store.positions.length }} / {{ store.data?.execution_profile?.execution?.max_active_instruments ?? '--' }} 在途
         </span>
       </div>
 
@@ -67,7 +67,7 @@ const allProtected = computed(
       >
         <ShieldCheck v-if="allProtected" class="w-3.5 h-3.5" />
         <ShieldAlert v-else class="w-3.5 h-3.5" />
-        <span>{{ allProtected ? '100% 交易所云端 OCO 止损覆盖' : '部分仓位未设止损' }}</span>
+        <span>{{ allProtected ? '快照显示止损覆盖完整' : '止损覆盖待核验' }}</span>
       </div>
     </div>
 

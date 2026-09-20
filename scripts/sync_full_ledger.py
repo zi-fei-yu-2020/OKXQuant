@@ -20,6 +20,7 @@ import os
 import datetime
 import tempfile
 from scripts import ledger_monitor
+from scripts.ledger_accounting import lifecycle_id, matches_lifecycle, retain_verified_evidence
 from scripts.ledger_duration import duration_seconds, format_duration, duration_bucket
 from scripts.close_attribution import reason as close_reason
 from scripts.close_evidence import load_inputs as close_inputs
@@ -41,8 +42,9 @@ def get_ct_val(inst_name):
             return item["ctVal"]
     return 1.0
 
-def read_cli_list(command):
-    result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=20)
+def read_cli_list(command, *, environment=None):
+    env = environment or selected_environment()
+    result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=20, env=env.cli_env())
     if result.returncode != 0 or not result.stdout.strip():
         raise RuntimeError('Ledger source unavailable; existing ledger is preserved')
     rows = json.loads(result.stdout)
@@ -58,32 +60,27 @@ def read_snapshot(env, path, command, params):
         if not isinstance(rows,list) or any(not isinstance(x,dict) for x in rows):
             raise RuntimeError('Invalid ledger source; previous ledger preserved')
         return rows
-    return read_cli_list(okx_private_command(command))
+    return read_cli_list(okx_private_command(command), environment=env)
 
 
 @ledger_monitor.serialized
 def build_lifecycle_ledger(*, notify=True):
     env=selected_environment()
-    reset_time = "1970-01-01 00:00:00"
-    if os.path.exists(INITIAL_STATE_FILE):
-        try:
-            with open(INITIAL_STATE_FILE, "r", encoding="utf-8") as f:
-                acc = json.load(f)
-                reset_time = acc.get("reset_time", "1970-01-01 00:00:00")
-        except Exception:
-            pass
+    from okxquant_backend.account_baseline import load_account_baseline
+    reset_time=load_account_baseline(scope=env.identity, path=INITIAL_STATE_FILE)['reset_time']
 
     existing_closed_ids = set()
     existing_closed_rows = []
     old_trades = []
     if os.path.exists(LEDGER_JSON_FILE):
-        try:
-            with open(LEDGER_JSON_FILE, "r", encoding="utf-8") as f:
-                old_trades = json.load(f)
-                existing_closed_rows = [t for t in old_trades if t.get("status") == "closed" and t.get("id") and str(t.get("close_time", "")) >= reset_time]
-                existing_closed_ids = {t["id"] for t in existing_closed_rows}
-        except Exception:
-            pass
+        # An unreadable ledger may contain unresolved evidence. Never overwrite
+        # it with a successful-looking partial reconstruction.
+        with open(LEDGER_JSON_FILE, "r", encoding="utf-8") as f:
+            old_trades = json.load(f)
+        if not isinstance(old_trades, list) or any(not isinstance(t, dict) for t in old_trades):
+            raise ValueError('Invalid existing ledger; preserved for reconciliation')
+        existing_closed_rows = [t for t in old_trades if t.get("status") == "closed" and t.get("id") and str(t.get("close_time", "")) >= reset_time]
+        existing_closed_ids = {t["id"] for t in existing_closed_rows}
 
     trackers = {}
     if os.path.exists(POSITION_TRACKER_FILE):
@@ -106,17 +103,33 @@ def build_lifecycle_ledger(*, notify=True):
     for receipt in pos_history:
         strategy_evidence.best_effort(env.identity, "position_receipt", receipt)
 
+    # API overlap or updated settlement receipts are snapshots, not new trades.
+    latest = {}
+    for receipt in pos_history:
+        key = lifecycle_id(receipt, env.identity)
+        prior = latest.get(key)
+        if prior is None or int(receipt.get('uTime') or 0) > int(prior.get('uTime') or 0):
+            latest[key] = receipt
+        elif receipt.get('uTime') == prior.get('uTime') and receipt != prior:
+            raise ValueError('Conflicting lifecycle receipts; existing ledger preserved')
+    pos_history = list(latest.values())
+
     try:
         attribution_inputs=close_inputs(env,orders_history)
     except Exception:
         attribution_inputs={'orders':orders_history,'algos':[],'executions':[]}
     fill_archive = read_fill_archive(env.identity)
     trades_lifecycle = []
+    replaced_rows = set()
 
     from scripts.strategy_origin import index as strategy_index, resolve as strategy_origin
     origins=strategy_index(env.identity)
     from scripts.trade_quality import observation_index, annotate
     observations=observation_index(env.identity)
+
+    live_lifecycles = {lifecycle_id(p, env.identity) for p in pos_data if abs(float(p.get('pos') or 0)) > 0}
+    partial_receipts = {lifecycle_id(h, env.identity): h for h in pos_history
+                        if lifecycle_id(h, env.identity) in live_lifecycles}
 
     # Process Active Holding Positions FIRST
     for p in pos_data:
@@ -151,8 +164,12 @@ def build_lifecycle_ledger(*, notify=True):
         held_seconds = duration_seconds(c_ts, datetime.datetime.now(tz_bj).timestamp())
         duration_str = format_duration(held_seconds)
 
+        replaced_rows.update(id(row) for row in old_trades
+                            if row.get('status') in {'holding', 'closed_pending'}
+                            and matches_lifecycle(row, p, env.identity))
         trades_lifecycle.append({
-            "id": f"holding_{inst}_{side}",
+            "id": "holding_" + lifecycle_id(p, env.identity),
+            "position_created_at": str(p.get("cTime") or ""),
             "instId":inst_id,"pos_id":str(p.get("posId") or ""),"environment_id":env.identity,"environment":env.mode,
             "inst": inst,
             "side": side,
@@ -177,8 +194,19 @@ def build_lifecycle_ledger(*, notify=True):
             "exit_reason": "⏳ 运行监控中"
         })
 
+        partial = partial_receipts.get(lifecycle_id(p, env.identity))
+        if partial is None:
+            partial = next((row['partial_close_receipt'] for row in old_trades
+                            if matches_lifecycle(row, p, env.identity) and row.get('partial_close_receipt')), None)
+        if partial is not None:
+            trades_lifecycle[-1]['partial_close_receipt'] = partial
+
     # Process Official Closed Positions
     for h in pos_history:
+        # Realized partial exits can have a history receipt while inventory remains.
+        # Keep that receipt on the holding row, not in completed-trade statistics.
+        if lifecycle_id(h, env.identity) in live_lifecycles:
+            continue
         c_ts = int(h.get("cTime", 0) or 0) / 1000.0
         u_ts = int(h.get("uTime", 0) or 0) / 1000.0
         open_time = datetime.datetime.fromtimestamp(c_ts, tz=tz_bj).strftime("%Y-%m-%d %H:%M:%S") if c_ts > 0 else "--"
@@ -215,9 +243,17 @@ def build_lifecycle_ledger(*, notify=True):
         # Strategy source is resolved after complete lifecycle fill reconciliation.
         
         attribution=close_reason(h,attribution_inputs['orders'],algos=attribution_inputs['algos'],executions=attribution_inputs['executions'],scope=env.identity)
-        previous=next((row for row in old_trades if row.get('id')==f'pos_hist_{u_ts}_{inst}'),{})
+        matching_previous = [row for row in old_trades if matches_lifecycle(row, h, env.identity)]
+        replaced_rows.update(id(row) for row in matching_previous)
+        previous = max((row for row in matching_previous if row.get('status') == 'closed'),
+                       key=lambda row: int((row.get('exit_snapshot') or {}).get('uTime') or 0), default={})
+        if int((previous.get('exit_snapshot') or {}).get('uTime') or 0) > int(h.get('uTime') or 0):
+            # A delayed/overlapping API page must not roll settlement backward.
+            trades_lifecycle.append(previous)
+            continue
+        exit_snapshot = {k: h.get(k) for k in ("instId", "direction", "posId", "openAvgPx", "closeAvgPx", "closeTotalPos", "lever", "cTime", "uTime", "pnl", "fee", "fundingFee", "realizedPnl") if h.get(k) is not None}
         tier={'unknown':0,'partial':1,'corroborated':2,'mixed':3,'verified':3}
-        if tier.get(previous.get('attribution_status'),0)>tier.get(attribution['attribution_status'],0):
+        if previous.get('exit_snapshot') == exit_snapshot and tier.get(previous.get('attribution_status'),0)>tier.get(attribution['attribution_status'],0):
             for field in ('exit_reason','exit_source','exit_evidence','attribution_status','close_order_ids','close_order_sources','attribution_note'):
                 if field in previous:attribution[field]=previous[field]
 
@@ -230,9 +266,9 @@ def build_lifecycle_ledger(*, notify=True):
                              and str(f.get("ordId") or "") in set(opening_order_ids) and f.get("tradeId")]
         linked_decisions = [origin.get("decision_id")] if origin.get("decision_id") else []
         evidence_status = "complete" if origin.get("strategy_evidence") == "opening_fill_order_decision_link" and opening_order_ids and linked_decisions else "partial"
-        exit_snapshot = {k: h.get(k) for k in ("instId", "direction", "openAvgPx", "closeAvgPx", "closeTotalPos", "lever", "cTime", "uTime", "pnl", "fee", "fundingFee") if h.get(k) is not None}
         trades_lifecycle.append({
-            "id": f"pos_hist_{u_ts}_{inst}",
+            "id": "pos_hist_" + lifecycle_id(h, env.identity),
+            "position_created_at": str(h.get("cTime") or ""),
             "instId":inst_id,"pos_id":str(h.get("posId") or ""),"closed_size":close_pos_sz,"environment_id":env.identity,"environment":env.mode,
             "inst": inst,
             "side": side,
@@ -282,20 +318,25 @@ def build_lifecycle_ledger(*, notify=True):
             **attribution,
             **allocation
         })
+        aliases = {row['id'] for row in matching_previous if isinstance(row.get('id'), str)}
+        aliases.update(alias for row in matching_previous for alias in row.get('superseded_ledger_ids', []) if isinstance(alias, str))
+        aliases.discard(trades_lifecycle[-1]['id'])
+        if aliases:
+            # Proven lifecycle aliases only; SQLite removes these projections in
+            # the same transaction as insertion. Raw receipts remain archived.
+            trades_lifecycle[-1]['superseded_ledger_ids'] = sorted(aliases)
+        retain_verified_evidence(trades_lifecycle[-1], previous, fill_archive.status)
         annotate(trades_lifecycle[-1],h,observations,attribution_inputs['executions'])
 
     # Preserve old finalized history; replace stale holding rows only with verified data.
     fresh_ids={row['id'] for row in trades_lifecycle}
-    final_keys={(row.get('instId'),row.get('side'),row.get('open_time')) for row in trades_lifecycle if row.get('status')=='closed'}
-    current_keys={(row.get('instId'),row.get('side')) for row in trades_lifecycle if row.get('status')=='holding'}
     for row in old_trades:
-        if row.get('id') in fresh_ids:continue
+        if row.get('id') in fresh_ids or id(row) in replaced_rows:continue
         if row.get('status')=='closed' and str(row.get('close_time',''))>=reset_time:
             trades_lifecycle.append(row)
         elif row.get('status') in {'holding','closed_pending'}:
-            inst=row.get('instId',str(row.get('inst',''))+'-USDT-SWAP')
-            if (inst,row.get('side'),row.get('open_time')) not in final_keys and (inst,row.get('side')) not in current_keys:
-                trades_lifecycle.append(row)
+            # A new position on the same side does not settle the previous one.
+            trades_lifecycle.append(row)
     trades_lifecycle=ledger_monitor.project_rows(trades_lifecycle,env.identity,positions=pos_data)
     trades_lifecycle.sort(key=lambda row:(row.get('status')=='holding',row.get('confirmed_close_at') or row.get('close_time') or row.get('open_time') or ''),reverse=True)
 
@@ -312,7 +353,7 @@ def build_lifecycle_ledger(*, notify=True):
 
     try:
         from scripts.horizon_stats import write as write_horizon_stats
-        write_horizon_stats(trades_lifecycle)
+        write_horizon_stats(trades_lifecycle, scope=env.identity)
     except Exception:
         pass
 

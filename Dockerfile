@@ -23,8 +23,10 @@ ENV PYTHONUNBUFFERED=1 \
     HOME=/home/okxquant
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl procps git libstdc++6 tzdata \
+    ca-certificates curl procps git libstdc++6 tzdata gosu \
     && rm -rf /var/lib/apt/lists/*
+RUN groupadd --gid 10001 okxquant \
+    && useradd --uid 10001 --gid okxquant --create-home --home-dir /home/okxquant okxquant
 
 COPY --from=okxquant_frontend-builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=okxquant_frontend-builder /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
@@ -46,13 +48,18 @@ COPY scripts/ ./scripts/
 COPY plugins/ ./plugins/
 COPY dashboard/ ./dashboard/
 COPY tests/ ./tests/
+COPY .github/ ./.github/
+COPY docker/ ./docker/
+COPY deploy/ ./deploy/
+COPY Dockerfile compose.yaml ./
 COPY docs/ ./docs/
 COPY README.md STANDALONE.md env.example ./
 COPY --from=okxquant_frontend-builder /app/okxquant_frontend/dist ./okxquant_frontend/dist
 COPY docker/entrypoint.sh /usr/local/bin/okxquant-entrypoint
 RUN sed -i 's/\r$//' /usr/local/bin/okxquant-entrypoint \
     && chmod +x /usr/local/bin/okxquant-entrypoint \
-    && mkdir -p /app/config /app/data /app/logs /app/backups
+    && mkdir -p /app/config /app/data /app/logs /app/backups \
+    && chown -R okxquant:okxquant /app/config /app/data /app/logs /app/backups /home/okxquant
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

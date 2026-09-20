@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useApiAction } from '../../composables/useApiAction'
+const { action, actionBusy, canManage } = useApiAction(() => loading.value || loadFailed.value)
+
 import AppField from '../../components/ui/AppField.vue'
 import LoadingState from '../../components/ui/LoadingState.vue'
 
@@ -34,6 +37,7 @@ const auth = useAuthStore()
 
 const plugins = ref<any[]>([])
 const loading = ref(true)
+const loadFailed = ref(false)
 const bannerMsg = useFeedback()
 
 // Code Editor Modal State
@@ -56,19 +60,21 @@ const newCode = ref('')
 const createError = ref('')
 
 async function loadPlugins() {
+  loadFailed.value = false
   loading.value = true
   try {
     const res = await api('/api/v1/admin/interceptors')
     plugins.value = res.plugins || []
   } catch (e: any) {
     if (e?.silent) return
+    loadFailed.value = true
     bannerMsg.value = { text: `加载插件失败：${e.message}`, type: 'err' }
   } finally {
     loading.value = false
   }
 }
 
-async function togglePlugin(p: any) {
+const togglePlugin = action(async (p: any) => {
   try {
     const nextState = !p.enabled
     await api(`/api/v1/admin/interceptors/${encodeURIComponent(p.filename)}/toggle`, {
@@ -84,9 +90,9 @@ async function togglePlugin(p: any) {
     if (e?.silent) return
     bannerMsg.value = { text: `操作失败：${e.message}`, type: 'err' }
   }
-}
+})
 
-async function movePlugin(idx: number, dir: -1 | 1) {
+const movePlugin = action(async (idx: number, dir: -1 | 1) => {
   const target = idx + dir
   if (target < 0 || target >= plugins.value.length) return
   const arr = [...plugins.value]
@@ -106,7 +112,7 @@ async function movePlugin(idx: number, dir: -1 | 1) {
     bannerMsg.value = { text: `排序更新失败：${e.message}`, type: 'err' }
     await loadPlugins()
   }
-}
+})
 
 async function openEditor(p: any) {
   try {
@@ -122,7 +128,7 @@ async function openEditor(p: any) {
   }
 }
 
-async function saveCode() {
+const saveCode = action(async () => {
   savingCode.value = true
   codeError.value = ''
   try {
@@ -142,7 +148,7 @@ async function saveCode() {
   } finally {
     savingCode.value = false
   }
-}
+})
 
 function exportPluginCode(filename: string, code: string) {
   const blob = new Blob([code], { type: 'text/x-python' })
@@ -154,7 +160,7 @@ function exportPluginCode(filename: string, code: string) {
   URL.revokeObjectURL(url)
 }
 
-async function deletePlugin(p: any) {
+const deletePlugin = action(async (p: any) => {
   if (!(await confirm(`确定删除拦截插件「${p.name || p.filename}」？\n文件将被从磁盘彻底移除。`)))
     return
   try {
@@ -165,9 +171,9 @@ async function deletePlugin(p: any) {
     if (e?.silent) return
     bannerMsg.value = { text: `删除失败：${e.message}`, type: 'err' }
   }
-}
+})
 
-async function runSandbox() {
+const runSandbox = action(async () => {
   testing.value = true
   try {
     testResults.value = await api('/api/v1/admin/interceptors/test', {
@@ -177,11 +183,11 @@ async function runSandbox() {
     testModalVisible.value = true
   } catch (e: any) {
     if (e?.silent) return
-    bannerMsg.value = { text: `沙箱回归测试执行失败：${e.message}`, type: 'err' }
+    bannerMsg.value = { text: `规则回归测试执行失败：${e.message}`, type: 'err' }
   } finally {
     testing.value = false
   }
-}
+}, false)
 
 function openCreateModal() {
   newFilename.value = `custom_interceptor_${Date.now().toString(36)}.py`
@@ -217,7 +223,7 @@ def check_risk(package: dict, decision: dict, context: dict) -> tuple[bool, str]
   createModalVisible.value = true
 }
 
-async function submitCreate() {
+const submitCreate = action(async () => {
   createError.value = ''
   if (!newFilename.value.trim()) {
     createError.value = '请输入插件文件名'
@@ -238,7 +244,7 @@ async function submitCreate() {
     if (e?.silent) return
     createError.value = e.message
   }
-}
+})
 
 onMounted(loadPlugins)
 
@@ -247,6 +253,7 @@ const { confirm } = useDialogs()
 
 <template>
   <div class="space-y-4 font-sans text-sm max-w-[2160px] mx-auto">
+    <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading || actionBusy" @click="loadPlugins()">重试</button></div>
     <!-- Header & Action Bar -->
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div class="flex items-center space-x-2.5">
@@ -273,7 +280,7 @@ const { confirm } = useDialogs()
       <div class="flex items-center space-x-2">
         <button
           @click="runSandbox"
-          :disabled="testing"
+          :disabled="(testing) || actionBusy || !canManage"
           class="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg border font-bold transition-all cursor-pointer shadow-xs disabled:opacity-50"
           style="
             background-color: var(--bg-card-subtle);
@@ -282,9 +289,9 @@ const { confirm } = useDialogs()
           "
         >
           <Play class="w-3.5 h-3.5" />
-          <span>{{ testing ? '正在回归测试...' : '⚡ 现场沙箱回归测试' }}</span>
+          <span>{{ testing ? '正在回归测试...' : '规则回归测试' }}</span>
         </button>
-        <button
+        <button :disabled="actionBusy"
           v-if="auth.isSuperadmin"
           @click="openCreateModal"
           class="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg font-bold transition-all cursor-pointer shadow-xs"
@@ -328,7 +335,7 @@ const { confirm } = useDialogs()
           <div class="flex flex-col space-y-1 shrink-0 pt-0.5">
             <button
               @click="movePlugin(idx, -1)"
-              :disabled="idx === 0"
+              :disabled="(idx === 0) || actionBusy || !canManage"
               class="p-1 rounded disabled:opacity-20 cursor-pointer transition-colors"
               style="color: var(--text-muted)"
               title="提高执行优先级"
@@ -337,7 +344,7 @@ const { confirm } = useDialogs()
             </button>
             <button
               @click="movePlugin(idx, 1)"
-              :disabled="idx === plugins.length - 1"
+              :disabled="(idx === plugins.length - 1) || actionBusy || !canManage"
               class="p-1 rounded disabled:opacity-20 cursor-pointer transition-colors"
               style="color: var(--text-muted)"
               title="降低执行优先级"
@@ -420,7 +427,7 @@ const { confirm } = useDialogs()
           class="flex items-center justify-end space-x-2 shrink-0 border-t md:border-t-0 pt-3 md:pt-0"
           style="border-color: var(--border-subtle)"
         >
-          <button
+          <button :disabled="actionBusy"
             @click="openEditor(p)"
             class="flex items-center space-x-1 px-3 py-1.5 rounded-lg border font-bold cursor-pointer transition-all shadow-xs"
             style="
@@ -434,7 +441,7 @@ const { confirm } = useDialogs()
             <span>源码与规则</span>
           </button>
 
-          <button
+          <button :disabled="actionBusy || !canManage"
             v-if="auth.isSuperadmin && !p.filename.startsWith('0')"
             @click="deletePlugin(p)"
             class="p-2 rounded-lg hover:bg-rose-500/10 text-rose-500 cursor-pointer transition-colors"
@@ -443,7 +450,7 @@ const { confirm } = useDialogs()
             <Trash2 class="w-4 h-4" />
           </button>
 
-          <button
+          <button :disabled="actionBusy || !canManage"
             @click="togglePlugin(p)"
             class="cursor-pointer transition-colors p-1"
             :class="p.enabled ? 'text-emerald-500' : 'text-[var(--text-muted)]'"
@@ -457,7 +464,7 @@ const { confirm } = useDialogs()
     </div>
 
     <!-- Code Editor Modal -->
-    <AppDialog
+    <AppDialog :busy="actionBusy"
       v-if="editorVisible"
       :open="!!editorVisible"
       title="编辑风控插件"
@@ -507,7 +514,7 @@ const { confirm } = useDialogs()
             </div>
           </div>
           <div class="flex items-center space-x-1.5 shrink-0">
-            <button
+            <button :disabled="actionBusy"
               @click="exportPluginCode(editingFilename, editingCode)"
               class="flex items-center space-x-1 px-2 sm:px-2.5 py-1 rounded-lg border text-xs sm:text-sm cursor-pointer shadow-xs transition-colors"
               style="
@@ -520,7 +527,7 @@ const { confirm } = useDialogs()
               <Download class="w-3.5 h-3.5" />
               <span class="hidden sm:inline">导出 .py</span>
             </button>
-            <button
+            <button :disabled="actionBusy"
               @click="editorVisible = false"
               class="p-1 rounded-lg hover:bg-zinc-500/10 cursor-pointer transition-colors"
               style="color: var(--text-muted)"
@@ -544,7 +551,7 @@ const { confirm } = useDialogs()
 
         <!-- Code Textarea -->
         <div class="flex-1 min-h-[220px] sm:min-h-[380px] h-[50dvh] flex flex-col">
-          <textarea
+          <textarea :disabled="actionBusy"
             v-model="editingCode"
             aria-label="风控插件 Python 源码"
             class="flex-1 w-full border rounded-xl p-3 sm:p-4 font-sans text-xs sm:text-sm leading-relaxed outline-none resize-none select-text transition-colors"
@@ -571,7 +578,7 @@ const { confirm } = useDialogs()
             <code>check_risk(package, decision, ctx)</code>
           </div>
           <div class="flex items-center justify-end space-x-2 shrink-0">
-            <button
+            <button :disabled="actionBusy"
               @click="editorVisible = false"
               class="px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-xl border text-sm cursor-pointer shadow-xs transition-colors"
               style="
@@ -584,7 +591,7 @@ const { confirm } = useDialogs()
             </button>
             <button
               @click="saveCode"
-              :disabled="savingCode"
+              :disabled="(savingCode) || actionBusy || !canManage"
               class="flex items-center space-x-1.5 px-4 sm:px-5 py-1.5 sm:py-2 rounded-xl font-bold text-sm cursor-pointer transition-all shadow-xs disabled:opacity-50"
               style="background-color: var(--text-main); color: var(--bg-card)"
             >
@@ -597,7 +604,7 @@ const { confirm } = useDialogs()
     >
 
     <!-- Create Modal -->
-    <AppDialog
+    <AppDialog :busy="actionBusy"
       v-if="createModalVisible"
       :open="!!createModalVisible"
       title="新增风控插件"
@@ -637,7 +644,7 @@ const { confirm } = useDialogs()
               </p>
             </div>
           </div>
-          <button
+          <button :disabled="actionBusy"
             @click="createModalVisible = false"
             class="cursor-pointer p-1"
             style="color: var(--text-muted)"
@@ -665,7 +672,7 @@ const { confirm } = useDialogs()
                 >插件文件名 (.py)</span
               ></template
             ><template #default="{ id: fieldId }"
-              ><input
+              ><input :disabled="actionBusy"
                 :id="fieldId"
                 v-model="newFilename"
                 type="text"
@@ -686,7 +693,7 @@ const { confirm } = useDialogs()
                 >插件 Python 源码</span
               ></template
             ><template #default="{ id: fieldId }">
-              <textarea
+              <textarea :disabled="actionBusy"
                 :id="fieldId"
                 v-model="newCode"
                 class="flex-1 w-full border rounded-xl p-3 sm:p-3.5 font-sans text-xs sm:text-sm leading-relaxed outline-none resize-y transition-colors min-h-[160px]"
@@ -704,7 +711,7 @@ const { confirm } = useDialogs()
           class="flex items-center justify-end space-x-2 pt-3 border-t"
           style="border-color: var(--border-subtle)"
         >
-          <button
+          <button :disabled="actionBusy"
             @click="createModalVisible = false"
             class="px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-xl border text-sm cursor-pointer shadow-xs"
             style="
@@ -715,7 +722,7 @@ const { confirm } = useDialogs()
           >
             取消
           </button>
-          <button
+          <button :disabled="actionBusy || !canManage"
             @click="submitCreate"
             class="px-4 sm:px-5 py-1.5 sm:py-2 rounded-xl font-bold text-sm cursor-pointer transition-all shadow-xs"
             style="background-color: var(--text-main); color: var(--bg-card)"
@@ -727,10 +734,10 @@ const { confirm } = useDialogs()
     >
 
     <!-- Sandbox Test Results Modal -->
-    <AppDialog
+    <AppDialog :busy="actionBusy"
       v-if="testModalVisible && testResults"
       :open="!!(testModalVisible && testResults)"
-      title="沙盒测试结果"
+      title="规则测试结果"
       size="xl"
       @update:open="
         (open) => {
@@ -760,7 +767,7 @@ const { confirm } = useDialogs()
             </div>
             <div>
               <h3 class="text-sm sm:text-sm font-bold" style="color: var(--text-main)">
-                沙箱拦截回归测试报告
+                规则拦截回归报告
               </h3>
               <p class="text-xs" style="color: var(--text-muted)">
                 已激活 {{ testResults.enabled_plugins_count }}/{{
@@ -770,13 +777,7 @@ const { confirm } = useDialogs()
               </p>
             </div>
           </div>
-          <button
-            @click="testModalVisible = false"
-            class="cursor-pointer p-1"
-            style="color: var(--text-muted)"
-          >
-            <X class="w-4 h-4" />
-          </button>
+
         </div>
 
         <div class="space-y-3">
@@ -849,15 +850,7 @@ const { confirm } = useDialogs()
           </div>
         </div>
 
-        <div class="flex justify-end pt-3 border-t" style="border-color: var(--border-subtle)">
-          <button
-            @click="testModalVisible = false"
-            class="px-4 sm:px-5 py-1.5 sm:py-2 rounded-xl text-sm font-bold cursor-pointer transition-all shadow-xs"
-            style="background-color: var(--text-main); color: var(--bg-card)"
-          >
-            关闭测试报告
-          </button>
-        </div>
+
       </div></AppDialog
     >
   </div>

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useApiAction } from '../../composables/useApiAction'
+const { action, actionBusy, canManage } = useApiAction(() => loading.value || loadFailed.value)
+
 import AppSwitch from '../../components/ui/AppSwitch.vue'
 import AppField from '../../components/ui/AppField.vue'
 import AppDialog from '../../components/ui/AppDialog.vue'
@@ -32,6 +35,7 @@ const { api } = useApi()
 // State
 const cfg = ref<any>(null)
 const loading = ref(true)
+const loadFailed = ref(false)
 const searchQuery = ref('')
 
 // Navigation: 'list' (一级：供应商列表) | 'detail' (二级：供应商配置与模型详情)
@@ -85,6 +89,7 @@ const modelForm = ref<any>({
 
 // ----------------- Data Loading -----------------
 async function loadConfig() {
+  loadFailed.value = false
   loading.value = true
   try {
     cfg.value = await api('/api/v1/admin/llm/models')
@@ -96,6 +101,7 @@ async function loadConfig() {
     }
   } catch (e: any) {
     if (e?.silent) return
+    loadFailed.value = true
     toast.error(e.message)
   } finally {
     loading.value = false
@@ -233,7 +239,7 @@ function goBackToList() {
   testResult.value = null
 }
 
-async function toggleProviderQuick(p: any, e: Event) {
+const toggleProviderQuick = action(async (p: any, e: Event) => {
   e.stopPropagation()
   try {
     const res = await api(`/api/v1/admin/llm/providers/${encodeURIComponent(p.id)}/toggle`, {
@@ -246,11 +252,12 @@ async function toggleProviderQuick(p: any, e: Event) {
     if (err?.silent) return
     toast.error(err.message)
   }
-}
+})
 
-async function saveProviderConfig() {
+const saveProviderConfig = action(async () => {
   try {
     const payload = { ...providerForm.value }
+    if (!String(payload.name || '').trim()) { toast.error('请输入供应商名称'); return }
     if (!payload.id) {
       payload.id = payload.name
         .trim()
@@ -262,7 +269,8 @@ async function saveProviderConfig() {
       method: 'POST',
       body: JSON.stringify(payload),
     })
-    toast.success('供应商配置已成功保存！')
+    providerForm.value.api_key = ''
+    toast.success('供应商配置已保存')
     await loadConfig()
     if (selectedProvider.value?.is_new) {
       const created = cfg.value.providers?.find((p: any) => p.id === payload.id)
@@ -274,9 +282,9 @@ async function saveProviderConfig() {
     if (err?.silent) return
     toast.error(err.message)
   }
-}
+})
 
-async function clearCurrentProviderModels() {
+const clearCurrentProviderModels = action(async () => {
   if (!selectedProvider.value) return
   if (!(await confirm(`确定要清空 ${selectedProvider.value.name} 旗下的全部模型吗？`))) return
   try {
@@ -292,7 +300,7 @@ async function clearCurrentProviderModels() {
     if (err?.silent) return
     toast.error(err.message)
   }
-}
+})
 
 // ----------------- Remote Fetch -----------------
 function openFetchDialog() {
@@ -306,7 +314,7 @@ function openFetchDialog() {
   executeRemoteFetch()
 }
 
-async function executeRemoteFetch() {
+const executeRemoteFetch = action(async () => {
   if (!selectedProvider.value) return
   fetchingRemote.value = true
   remoteFetchResult.value = null
@@ -329,7 +337,7 @@ async function executeRemoteFetch() {
   } finally {
     fetchingRemote.value = false
   }
-}
+}, false)
 
 const filteredRemoteModels = computed(() => {
   if (!remoteFetchResult.value?.models) return []
@@ -340,7 +348,7 @@ const filteredRemoteModels = computed(() => {
   )
 })
 
-async function importRemoteModel(m: any, autoActivate = false) {
+const importRemoteModel = action(async (m: any, autoActivate = false) => {
   if (!selectedProvider.value) return
   try {
     const payload = {
@@ -363,7 +371,7 @@ async function importRemoteModel(m: any, autoActivate = false) {
     if (autoActivate) {
       await api('/api/v1/admin/llm/activate', {
         method: 'POST',
-        body: JSON.stringify({ model_id: m.id, reasoning_effort: payload.reasoning_effort }),
+        body: JSON.stringify({ model_id: m.id, provider_id: selectedProvider.value.id, reasoning_effort: payload.reasoning_effort }),
       })
     }
     await loadConfig()
@@ -372,11 +380,11 @@ async function importRemoteModel(m: any, autoActivate = false) {
     if (err?.silent) return
     toast.error(err.message)
   }
-}
+})
 
-async function importAllFilteredRemoteModels() {
+const importAllFilteredRemoteModels = action(async () => {
   if (!selectedProvider.value || !filteredRemoteModels.value.length) return
-  const list = filteredRemoteModels.value
+  const list = [...filteredRemoteModels.value]
   let successCount = 0
   for (const m of list) {
     try {
@@ -404,8 +412,10 @@ async function importAllFilteredRemoteModels() {
     }
   }
   await loadConfig()
-  toast.success(`成功批量收录 ${successCount} 个模型到 ${selectedProvider.value.name}！`)
-}
+  const failed = list.length - successCount
+  if (failed) toast.warning(`已收录 ${successCount} 个模型，${failed} 个失败，请重试失败项。`)
+  else toast.success(`已收录 ${successCount} 个模型`)
+})
 
 // ----------------- Model Management -----------------
 function openAddModelModal() {
@@ -437,7 +447,7 @@ function openEditModelModal(m: any) {
   modelModalVisible.value = true
 }
 
-async function saveModelForm() {
+const saveModelForm = action(async () => {
   if (!selectedProvider.value) return
   try {
     const payload = {
@@ -457,9 +467,9 @@ async function saveModelForm() {
     if (err?.silent) return
     toast.error(err.message)
   }
-}
+})
 
-async function activateModel(m: any) {
+const activateModel = action(async (m: any) => {
   try {
     await api('/api/v1/admin/llm/activate', {
       method: 'POST',
@@ -474,9 +484,9 @@ async function activateModel(m: any) {
     if (err?.silent) return
     toast.error(err.message)
   }
-}
+})
 
-async function deleteSingleModel(modelId: string) {
+const deleteSingleModel = action(async (modelId: string) => {
   if (!(await confirm(`确定删除模型 ${modelId} 吗？`))) return
   try {
     const providerId = selectedProvider.value?.id
@@ -491,10 +501,10 @@ async function deleteSingleModel(modelId: string) {
     if (err?.silent) return
     toast.error(err.message)
   }
-}
+})
 
 // ----------------- Test Connection -----------------
-async function runTestModel(m: any) {
+const runTestModel = action(async (m: any) => {
   testLoading.value = true
   testingModelId.value = m.id
   testResult.value = null
@@ -518,7 +528,7 @@ async function runTestModel(m: any) {
     testLoading.value = false
     testingModelId.value = null
   }
-}
+}, false)
 
 function toggleCapability(cap: string) {
   const caps = modelForm.value.capabilities
@@ -541,6 +551,7 @@ const toast = useToast()
 
 <template>
   <div class="space-y-4 max-w-4xl mx-auto font-sans text-sm">
+    <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading || actionBusy" @click="loadConfig()">重试</button></div>
     <!-- VIEW 1: 供应商列表页 (对应截图 1) -->
     <template v-if="currentView === 'list'">
       <!-- Top Title & Navigation Bar -->
@@ -574,7 +585,7 @@ const toast = useToast()
 
         <!-- Right Quick Actions -->
         <div class="flex items-center space-x-2">
-          <button
+          <button :disabled="actionBusy"
             @click="openAddProviderModal"
             class="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-sm font-bold cursor-pointer transition-all hover:opacity-90 btn-primary-text"
             style="background-color: #2563eb; color: #ffffff"
@@ -584,24 +595,13 @@ const toast = useToast()
             <span>添加供应商</span>
           </button>
 
-          <button
-            @click="loadConfig"
-            class="p-2 rounded-xl border text-sm cursor-pointer transition-all hover:opacity-80"
-            style="
-              background-color: var(--bg-card-subtle);
-              border-color: var(--border-subtle);
-              color: var(--text-muted);
-            "
-            title="刷新状态"
-          >
-            <RefreshCw class="w-4 h-4" :class="loading ? 'animate-spin' : ''" />
-          </button>
+
         </div>
       </div>
 
       <!-- Search Box (对应截图 1 顶部的搜索栏) -->
       <div class="relative">
-        <input
+        <input :disabled="actionBusy"
           aria-label="搜索供应商或分组"
           v-model="searchQuery"
           placeholder="搜索供应商或分组"
@@ -676,7 +676,7 @@ const toast = useToast()
           <!-- Right: Enable / Disable Badge & Chevron Arrow (对齐截图 1) -->
           <div class="flex items-center space-x-2.5">
             <!-- Capsule Status Button -->
-            <button
+            <button :disabled="actionBusy || !canManage"
               @click="toggleProviderQuick(prov, $event)"
               class="px-3 py-1 rounded-full text-sm font-semibold border transition-all cursor-pointer shadow-2xs"
               :style="
@@ -710,7 +710,7 @@ const toast = useToast()
         class="rounded-2xl border p-4 flex items-center justify-between shadow-xs transition-colors"
         style="background-color: var(--bg-card); border-color: var(--border-subtle)"
       >
-        <button
+        <button :disabled="actionBusy"
           @click="goBackToList"
           class="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-sm font-bold cursor-pointer transition-all hover:bg-[var(--bg-card-subtle)]"
           style="
@@ -774,7 +774,7 @@ const toast = useToast()
                   选择该端点底层支持的通信协议标准
                 </div>
               </div>
-              <select
+              <select :disabled="actionBusy"
                 aria-label="API 交互协议"
                 v-model="providerForm.api_format"
                 @change="onApiFormatChange"
@@ -824,7 +824,7 @@ const toast = useToast()
                   >供应商唯一标识 (ID)</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input
+                ><input :disabled="actionBusy"
                   :id="fieldId"
                   v-model="providerForm.id"
                   placeholder="例如: openrouter 或 my-proxy"
@@ -845,7 +845,7 @@ const toast = useToast()
                   >名称</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input
+                ><input :disabled="actionBusy"
                   :id="fieldId"
                   v-model="providerForm.name"
                   placeholder="OpenAI"
@@ -872,7 +872,7 @@ const toast = useToast()
               </span>
             </div>
             <div class="relative">
-              <input
+              <input :disabled="actionBusy"
                 aria-label="供应商 API Key"
                 id="provider-api-key"
                 v-model="providerForm.api_key"
@@ -885,7 +885,7 @@ const toast = useToast()
                   color: var(--text-main);
                 "
               />
-              <button
+              <button :disabled="actionBusy"
                 type="button"
                 @click="showApiKey = !showApiKey"
                 :aria-label="showApiKey ? '隐藏 API Key' : '显示 API Key'"
@@ -905,7 +905,7 @@ const toast = useToast()
                   >API Base URL</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input
+                ><input :disabled="actionBusy"
                   :id="fieldId"
                   v-model="providerForm.base_url"
                   placeholder="https://api.openai.com/v1"
@@ -926,7 +926,7 @@ const toast = useToast()
                   >API 路径</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input
+                ><input :disabled="actionBusy"
                   :id="fieldId"
                   v-model="providerForm.api_path"
                   placeholder="/chat/completions"
@@ -942,7 +942,7 @@ const toast = useToast()
 
         <!-- Save Button -->
         <div class="pt-3 pb-16 flex justify-end">
-          <button
+          <button :disabled="actionBusy || !canManage"
             @click="saveProviderConfig"
             class="px-6 py-2 rounded-xl text-sm font-bold transition-all cursor-pointer shadow-xs btn-primary-text"
             style="background-color: #2563eb; color: #ffffff"
@@ -1057,7 +1057,7 @@ const toast = useToast()
 
             <!-- Right: Minimalist Action Controls -->
             <div class="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
-              <button
+              <button :disabled="actionBusy || !canManage"
                 v-if="m.id !== cfg?.active_model_id || selectedProvider?.id !== cfg?.active_provider_id"
                 @click="activateModel(m)"
                 class="px-3 py-1 rounded-xl text-sm font-bold border transition-all cursor-pointer shadow-xs btn-primary-text"
@@ -1069,7 +1069,7 @@ const toast = useToast()
 
               <button
                 @click="runTestModel(m)"
-                :disabled="testLoading && testingModelId === m.id"
+                :disabled="(testLoading && testingModelId === m.id) || actionBusy"
                 class="p-2 rounded-xl border text-sm cursor-pointer hover:bg-[var(--bg-card)] transition-colors"
                 style="
                   background-color: var(--bg-card-subtle);
@@ -1084,7 +1084,7 @@ const toast = useToast()
                 />
               </button>
 
-              <button
+              <button :disabled="actionBusy"
                 @click="openEditModelModal(m)"
                 class="p-2 rounded-xl border text-sm cursor-pointer hover:bg-[var(--bg-card)] transition-colors"
                 style="
@@ -1097,7 +1097,7 @@ const toast = useToast()
                 <Settings class="w-3.5 h-3.5" />
               </button>
 
-              <button
+              <button :disabled="actionBusy || !canManage"
                 @click="deleteSingleModel(m.id)"
                 class="p-2 rounded-xl border text-sm cursor-pointer hover:bg-red-500/10 transition-colors text-red-400"
                 style="border-color: var(--border-subtle)"
@@ -1162,7 +1162,7 @@ const toast = useToast()
             style="background-color: var(--bg-card); border-color: var(--border-subtle)"
           >
             <!-- 获取 (带方块立方体图标的大圆角按钮) -->
-            <button
+            <button :disabled="actionBusy"
               @click="openFetchDialog"
               class="flex items-center space-x-2 px-5 py-2.5 rounded-full font-bold text-sm cursor-pointer border transition-all hover:opacity-90 shadow-2xs"
               style="
@@ -1176,7 +1176,7 @@ const toast = useToast()
             </button>
 
             <!-- + 添加新模型 -->
-            <button
+            <button :disabled="actionBusy"
               @click="openAddModelModal"
               class="flex items-center space-x-2 px-5 py-2.5 rounded-full font-bold text-sm cursor-pointer border transition-all hover:opacity-90 shadow-2xs"
               style="
@@ -1190,7 +1190,7 @@ const toast = useToast()
             </button>
 
             <!-- 清空删除图标 (带红晕气泡) -->
-            <button
+            <button :disabled="actionBusy || !canManage"
               @click="clearCurrentProviderModels"
               class="p-2.5 rounded-full border cursor-pointer hover:bg-red-500/10 transition-colors text-red-400"
               style="border-color: var(--color-down-border); background-color: var(--color-down-bg)"
@@ -1207,7 +1207,7 @@ const toast = useToast()
         class="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center rounded-2xl border p-1 shadow-2xl backdrop-blur-md"
         style="background-color: var(--bg-card); border-color: var(--border-subtle)"
       >
-        <button
+        <button :disabled="actionBusy"
           @click="detailTab = 'config'"
           class="flex items-center space-x-2 px-6 py-2.5 rounded-xl font-bold text-sm cursor-pointer transition-all border"
           :style="
@@ -1229,7 +1229,7 @@ const toast = useToast()
           <span>配置</span>
         </button>
 
-        <button
+        <button :disabled="actionBusy"
           @click="detailTab = 'models'"
           class="flex items-center space-x-2 px-6 py-2.5 rounded-xl font-bold text-sm cursor-pointer transition-all border"
           :style="
@@ -1254,7 +1254,7 @@ const toast = useToast()
     </template>
 
     <!-- MODAL A: 远端一键获取模型抽屉/弹窗 -->
-    <AppDialog
+    <AppDialog :busy="actionBusy"
       v-if="fetchModalVisible"
       :open="!!fetchModalVisible"
       title="发现远程模型"
@@ -1305,7 +1305,7 @@ const toast = useToast()
               </span>
               <button
                 @click="executeRemoteFetch"
-                :disabled="fetchingRemote"
+                :disabled="(fetchingRemote) || actionBusy"
                 class="flex items-center space-x-1.5 px-3 py-1 rounded-lg text-sm font-bold transition-all cursor-pointer shadow-xs btn-primary-text"
                 style="background-color: #2563eb; color: #ffffff"
               >
@@ -1345,7 +1345,7 @@ const toast = useToast()
 
         <!-- Remote Search Box -->
         <div v-if="remoteFetchResult?.ok" class="relative shrink-0">
-          <input
+          <input :disabled="actionBusy"
             aria-label="搜索远程模型"
             v-model="remoteSearch"
             placeholder="过滤搜索模型 ID..."
@@ -1378,7 +1378,7 @@ const toast = useToast()
             </div>
 
             <div class="flex items-center space-x-2 shrink-0">
-              <button
+              <button :disabled="actionBusy || !canManage"
                 @click="importRemoteModel(rm, false)"
                 class="px-2.5 py-1 rounded-lg text-sm font-medium border cursor-pointer hover:bg-[var(--bg-card)] transition-colors"
                 style="
@@ -1389,7 +1389,7 @@ const toast = useToast()
               >
                 + 添加
               </button>
-              <button
+              <button :disabled="actionBusy || !canManage"
                 @click="importRemoteModel(rm, true)"
                 class="px-3 py-1 rounded-lg text-sm font-bold transition-all cursor-pointer shadow-xs btn-primary-text"
                 style="background-color: #2563eb; color: #ffffff"
@@ -1410,7 +1410,7 @@ const toast = useToast()
             >
           </div>
           <div class="flex items-center space-x-2">
-            <button
+            <button :disabled="actionBusy || !canManage"
               v-if="filteredRemoteModels.length"
               @click="importAllFilteredRemoteModels"
               class="px-3 py-1.5 rounded-xl border text-sm font-bold cursor-pointer transition-all hover:opacity-90"
@@ -1422,7 +1422,7 @@ const toast = useToast()
             >
               一键添加当前全部 ({{ filteredRemoteModels.length }})
             </button>
-            <button
+            <button :disabled="actionBusy"
               @click="fetchModalVisible = false"
               class="px-4 py-1.5 rounded-xl border text-sm cursor-pointer"
               style="
@@ -1439,7 +1439,7 @@ const toast = useToast()
     >
 
     <!-- MODAL B: 手动添加 / 编辑单模型弹窗 -->
-    <AppDialog
+    <AppDialog :busy="actionBusy"
       v-if="modelModalVisible"
       :open="!!modelModalVisible"
       title="模型配置"
@@ -1479,7 +1479,7 @@ const toast = useToast()
                   >模型 ID</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input
+                ><input :disabled="actionBusy"
                   :id="fieldId"
                   v-model="modelForm.id"
                   :readonly="!!editingModel"
@@ -1500,7 +1500,7 @@ const toast = useToast()
                   >展示名称</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input
+                ><input :disabled="actionBusy"
                   :id="fieldId"
                   v-model="modelForm.name"
                   placeholder="Gemini 3.8 Flash (高推演)"
@@ -1519,7 +1519,7 @@ const toast = useToast()
               >能力标签徽标</label
             >
             <div class="flex flex-wrap gap-2 pt-1">
-              <button
+              <button :disabled="actionBusy"
                 type="button"
                 @click="toggleCapability('chat')"
                 :aria-pressed="modelForm.capabilities.includes('chat')"
@@ -1540,7 +1540,7 @@ const toast = useToast()
               >
                 聊天 (chat)
               </button>
-              <button
+              <button :disabled="actionBusy"
                 type="button"
                 @click="toggleCapability('vision')"
                 :aria-pressed="modelForm.capabilities.includes('vision')"
@@ -1561,7 +1561,7 @@ const toast = useToast()
               >
                 图像理解 (vision)
               </button>
-              <button
+              <button :disabled="actionBusy"
                 type="button"
                 @click="toggleCapability('tools')"
                 :aria-pressed="modelForm.capabilities.includes('tools')"
@@ -1582,7 +1582,7 @@ const toast = useToast()
               >
                 工具调用 (tools)
               </button>
-              <button
+              <button :disabled="actionBusy"
                 type="button"
                 @click="toggleCapability('reasoning')"
                 :aria-pressed="modelForm.capabilities.includes('reasoning')"
@@ -1614,7 +1614,7 @@ const toast = useToast()
                   >思考推演强度</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><select
+                ><select :disabled="actionBusy"
                   :id="fieldId"
                   v-model="modelForm.reasoning_effort"
                   class="w-full rounded-xl px-3.5 py-2 text-sm outline-none border cursor-pointer font-sans"
@@ -1639,7 +1639,7 @@ const toast = useToast()
                   >上下文上限长度 (Tokens)</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input
+                ><input :disabled="actionBusy"
                   :id="fieldId"
                   v-model.number="modelForm.context_length"
                   type="number"
@@ -1658,7 +1658,7 @@ const toast = useToast()
           class="flex justify-end space-x-2 pt-3 border-t"
           style="border-color: var(--border-subtle)"
         >
-          <button
+          <button :disabled="actionBusy"
             @click="modelModalVisible = false"
             class="px-4 py-1.5 rounded-xl border text-sm cursor-pointer"
             style="
@@ -1669,7 +1669,7 @@ const toast = useToast()
           >
             取消
           </button>
-          <button
+          <button :disabled="actionBusy || !canManage"
             @click="saveModelForm"
             class="px-5 py-1.5 rounded-xl text-sm font-bold transition-all cursor-pointer shadow-xs btn-primary-text"
             style="background-color: #2563eb; color: #ffffff"

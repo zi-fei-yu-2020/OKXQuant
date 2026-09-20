@@ -222,7 +222,7 @@ onUnmounted(() => {
           <AppButton v-for="item in CHART_PERIODS" :key="item.id" size="sm" class="market-chart__period" :variant="period === item.id ? 'primary' : 'ghost'" :aria-pressed="period === item.id" @click="period = item.id as ChartPeriod">{{ item.label }}</AppButton>
         </div>
         <AppButton size="sm" class="market-chart__control" @click="indicatorDialog = true"><SlidersHorizontal class="size-4" aria-hidden="true" />指标</AppButton>
-        <AppButton variant="ghost" size="sm" class="market-chart__control" :loading="manualBusy" aria-label="刷新K线" @click="manualRefresh"><RefreshCw v-if="!manualBusy" class="size-4" /></AppButton>
+        <AppButton v-if="delayed" variant="ghost" size="sm" class="market-chart__control" :loading="manualBusy" aria-label="重试获取K线" @click="manualRefresh"><RefreshCw v-if="!manualBusy" class="size-4" aria-hidden="true" />重试</AppButton>
       </div>
     </div>
     <div class="flex flex-wrap items-center justify-between gap-2 px-4 pb-2 text-[11px]" style="color:var(--text-muted)">

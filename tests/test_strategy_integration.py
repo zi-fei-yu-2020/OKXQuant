@@ -25,7 +25,7 @@ class StrategyIntegrationTests(unittest.TestCase):
         def private(method,path,params,env):
             self.assertEqual(method,'GET');self.assertEqual(env.mode,'demo')
             if path.endswith('/positions') or path.endswith('/orders-pending'):return []
-            if path.endswith('/balance'):return [{'totalEq':'10000','uTime':str(int(time.time()*1000)),'details':[{'ccy':'USDT','availEq':'5000'}]}]
+            if path.endswith('/balance'):return [{'totalEq':'10000','uTime':str(int(time.time()*1000)),'details':[{'ccy':'USDT','eq':'10000','availEq':'5000'}]}]
             if path.endswith('/leverage-info'):return [{'posSide':'long','lever':'3'}]
             self.fail('Unexpected private endpoint '+path)
         def public(url,**kwargs):
@@ -46,7 +46,7 @@ class StrategyIntegrationTests(unittest.TestCase):
         def private(method,path,params,env):
             self.assertEqual(method,'GET')
             if path.endswith('/positions') or path.endswith('/orders-pending'):return []
-            if path.endswith('/balance'):return [{'totalEq':'10000','uTime':str(int(time.time()*1000)),'details':[{'ccy':'USDT','availEq':'5000'}]}]
+            if path.endswith('/balance'):return [{'totalEq':'10000','uTime':str(int(time.time()*1000)),'details':[{'ccy':'USDT','eq':'10000','availEq':'5000'}]}]
             if path.endswith('/leverage-info'):return [{'posSide':'long','lever':'3'}]
             self.fail(path)
         def public(url,**kwargs):
@@ -66,12 +66,12 @@ class StrategyIntegrationTests(unittest.TestCase):
 
     def test_final_entry_accepts_profitable_stop_using_mark_and_preserves_budget(self):
         position = {'instId': META['instId'], 'posSide': 'long', 'pos': '2',
-                    'markPx': '120', 'avgPx': '100', 'imr': '10'}
+                    'markPx': '120', 'avgPx': '100', 'imr': '10', 'posId':'existing-fixture','cTime':'1000'}
         oco = {'algoId': 'existing-oco', 'instId': META['instId'], 'ordType': 'oco',
                'state': 'live', 'reduceOnly': 'true', 'posSide': 'long', 'side': 'sell',
                'sz': '2', 'slTriggerPx': '110', 'tpTriggerPx': '150'}
         identity = evidence.append(self.env.identity, 'decision', {
-            'instrument': META['instId'], 'position_basis': {'size': 2},
+            'instrument': META['instId'], 'position_basis': {'size': 2,'posId':'existing-fixture','cTime':'1000'},
             'features':{'structure_1h':'1H_SWING_BULL'},'decision': {'action': 'BUY_LONG', 'contract_version': 'trading-evidence-v1',
                          'contract_valid': True, 'valid_until': time.time() + 300}})
 
@@ -81,7 +81,7 @@ class StrategyIntegrationTests(unittest.TestCase):
             if path.endswith('/orders-pending'): return []
             if path.endswith('/balance'):
                 return [{'totalEq': '10000', 'uTime': str(int(time.time() * 1000)),
-                         'details': [{'ccy': 'USDT', 'availEq': '5000'}]}]
+                         'details': [{'ccy': 'USDT', 'eq': '10000', 'availEq': '5000'}]}]
             if path.endswith('/leverage-info'): return [{'posSide': 'long', 'lever': '3'}]
             self.fail('Unexpected private endpoint ' + path)
 
@@ -106,7 +106,7 @@ class StrategyIntegrationTests(unittest.TestCase):
 
     def test_invalid_existing_oco_blocks_final_entry_before_reservation(self):
         position = {'instId': META['instId'], 'posSide': 'long', 'pos': '2',
-                    'markPx': '120', 'avgPx': '100', 'imr': '10'}
+                    'markPx': '120', 'avgPx': '100', 'imr': '10', 'posId':'existing-fixture','cTime':'1000'}
         oco = {'algoId': 'existing-oco', 'instId': META['instId'], 'ordType': 'oco',
                'state': 'live', 'reduceOnly': 'true', 'posSide': 'long', 'side': 'sell',
                'sz': '2', 'slTriggerPx': '110', 'tpTriggerPx': '150'}
@@ -118,7 +118,7 @@ class StrategyIntegrationTests(unittest.TestCase):
         cases += [[{**oco, 'sz': '1'}, {**oco, 'sz': '1'}],
                   [oco, {**oco, 'algoId': 'unknown', 'state': 'effective'}]]
         identity = evidence.append(self.env.identity, 'decision', {
-            'instrument': META['instId'], 'position_basis': {'size': 2},
+            'instrument': META['instId'], 'position_basis': {'size': 2,'posId':'existing-fixture','cTime':'1000'},
             'features':{'structure_1h':'1H_SWING_BULL'},'decision': {'action': 'BUY_LONG', 'contract_version': 'trading-evidence-v1',
                          'contract_valid': True, 'valid_until': time.time() + 300}})
 
@@ -131,7 +131,7 @@ class StrategyIntegrationTests(unittest.TestCase):
             if path.endswith('/orders-pending'): return []
             if path.endswith('/balance'):
                 return [{'totalEq': '10000', 'uTime': snapshot_ts,
-                         'details': [{'ccy': 'USDT', 'availEq': '5000'}]}]
+                         'details': [{'ccy': 'USDT', 'eq': '10000', 'availEq': '5000'}]}]
             self.fail('Invalid coverage must reject before later preflight reads: ' + path)
 
         for rows in cases:

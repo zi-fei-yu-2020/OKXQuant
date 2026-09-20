@@ -72,7 +72,7 @@ def catalog(package, policy):
             plan={'version':VERSION,'instrument':package['instId'],'setup':setup,'action':action,
                   'entry_price':entry,'stop_loss_price':stop,'take_profit_price':target,
                   'horizon':'scalp','strategy_mode':mode,'entry_policy':descriptor(),
-                  'created_at':package['data_as_of'],'trigger_close_ms':last['close_ms'],
+                  'created_at':number(package['data_as_of']),'trigger_close_ms':last['close_ms'],
                   'valid_for_seconds':60,'net_rr':rr,'entry_timeframe':'1M',
                   'trigger_level':level,'entry_atr':a1,'chase_atr':.6,
                   'stop_basis':'two_closed_1m_extremes_with_atr_buffer',

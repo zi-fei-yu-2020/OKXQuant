@@ -37,7 +37,7 @@ function cancelAll() {
 }
 function ask(kind: DialogRequest['kind'], message: string, options: PromptOptions) {
   return new Promise<string | boolean | null>((resolve) => {
-    const phrase = message.match(/确认短语[：:]\s*([A-Z][A-Z0-9 _-]+)$/)?.[1]
+    const phrase = message.match(/确认短语[：:]\s*([A-Za-z][A-Za-z0-9 _-]+)$/)?.[1]
     const normalized = {
       danger: kind === 'confirm' || !!phrase || /实盘|LIVE|删除|恢复|备份|强制|重放|解锁|安装/.test(message),
       requiredText: phrase,

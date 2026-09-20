@@ -91,23 +91,23 @@ class FeeReconciliationTests(unittest.TestCase):
             self.assertEqual(accounting.read_archive('scope',path).status,'missing')
             self.assertFalse(path.exists())
             with patch.object(evidence,'DB_PATH',path):
-                for r in fills():evidence.append('mine','fill',r)
+                for r in fills():evidence.append('okx:demo:mine','fill',r)
                 evidence.append('other','fill',fill('evil','buy',500,-5,1200))
             self.assertEqual(self.checked()['fee_reconciliation']['status'],'verified')
-            scoped=accounting.read_archive('mine',path)
+            scoped=accounting.read_archive('okx:demo:mine',path)
             self.assertEqual(len(scoped.by_instrument[INST]),4)
             self.assertEqual(accounting.reconcile(history(),scoped)['fee_reconciliation']['status'],'verified')
             with patch.object(accounting,'MAX_ARCHIVED_FILLS',2):
-                self.assertEqual(accounting.read_archive('mine',path).status,'capacity_exceeded')
+                self.assertEqual(accounting.read_archive('okx:demo:mine',path).status,'capacity_exceeded')
             before=path.read_bytes();accounting.read_archive('none',path);self.assertEqual(path.read_bytes(),before)
 
     def test_tampered_archived_payload_cannot_verify_fees(self):
         with tempfile.TemporaryDirectory() as td:
             path=Path(td)/'e.db'
             with patch.object(evidence,'DB_PATH',path):
-                for row in fills():evidence.append('mine','fill',row)
+                for row in fills():evidence.append('okx:demo:mine','fill',row)
             with sqlite3.connect(path) as db:db.execute("UPDATE events SET digest='bad'")
-            result=accounting.read_archive('mine',path)
+            result=accounting.read_archive('okx:demo:mine',path)
             self.assertEqual(result.status,'invalid_digest')
             self.assertIsNone(accounting.reconcile(history(),result)['open_fee'])
 
@@ -120,12 +120,12 @@ class LedgerFeeIntegrationTests(unittest.TestCase):
     def test_real_ledger_consumes_scoped_archive_without_touching_realized_pnl(self):
         from scripts import sync_full_ledger as ledger
         with tempfile.TemporaryDirectory() as td,ExitStack() as stack:
-            root=Path(td);env=SimpleNamespace(identity='mine',mode='demo')
+            root=Path(td);env=SimpleNamespace(identity='okx:demo:mine',mode='demo')
             for module,name,value in ((evidence,'DB_PATH',root/'e.db'),(ledger_monitor,'DATA',root),
                 (ledger,'DATA_DIR',str(root)),(ledger,'LEDGER_JSON_FILE',str(root/'ledger.json')),
                 (ledger,'INITIAL_STATE_FILE',str(root/'initial.json')),(ledger,'POSITION_TRACKER_FILE',str(root/'trackers.json'))):
                 stack.enter_context(patch.object(module,name,value))
-            for r in fills():evidence.append('mine','fill',r)
+            for r in fills():evidence.append('okx:demo:mine','fill',r)
             h=history(openAvgPx='100',closeAvgPx='101',pnl='2',fundingFee='-.01',realizedPnl='1.95',lever='3')
             stack.enter_context(patch.object(ledger,'selected_environment',return_value=env))
             stack.enter_context(patch.object(ledger,'TARGET_INSTRUMENTS',[{'name':'BTC','instId':INST,'ctVal':1}]))
@@ -140,9 +140,9 @@ class LedgerFeeIntegrationTests(unittest.TestCase):
 
     def test_pending_settlement_clears_prior_fee_allocations(self):
         with tempfile.TemporaryDirectory() as td,patch.object(ledger_monitor,'DATA',Path(td)):
-            row={'status':'holding','instId':INST,'side':'long','environment_id':'mine',
+            row={'status':'holding','instId':INST,'side':'long','environment_id':'okx:demo:mine',
                  'open_fee':-.1,'close_fee':0,'pnl':3,'fee_allocation':'verified'}
-            pending=ledger_monitor.project_rows([row],'mine',positions=[])[0]
+            pending=ledger_monitor.project_rows([row],'okx:demo:mine',positions=[])[0]
             self.assertIsNone(pending['open_fee']);self.assertIsNone(pending['close_fee'])
             self.assertEqual(pending['fee_allocation'],'pending_settlement')
 
@@ -152,7 +152,7 @@ class LedgerFeeIntegrationTests(unittest.TestCase):
             root=Path(td)
             for module,name,value in ((ledger_monitor,'DATA',root),(db_manager,'DATA_DIR',str(root)),(db_manager,'DB_PATH',str(root/'mirror.db'))):
                 stack.enter_context(patch.object(module,name,value))
-            stack.enter_context(patch('scripts.okx_runtime.selected_environment',return_value=SimpleNamespace(identity='mine',mode='demo')))
+            stack.enter_context(patch('scripts.okx_runtime.selected_environment',return_value=SimpleNamespace(identity='okx:demo:mine',mode='demo')))
             row={'id':'closed-1','inst':'BTC','status':'closed','close_time':'test','closed_size':2,
                  'close_px':100,'pnl':None,'gross_pnl':0,'fee':None}
             def build(**kwargs):

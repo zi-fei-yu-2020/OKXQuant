@@ -2,10 +2,10 @@
 Scores are transparent bounded heuristics, NOT an empirical win probability.
 """
 import math
-from scripts.entry_candidates import verified_bars
+from scripts.entry_candidates import verified_bars, number
 from scripts.execution_costs import from_policy
 
-VERSION='scalp-ranking-v1'
+VERSION='scalp-ranking-v2'
 WEIGHTS={'net_rr':.20,'observed_range_coverage':.35,'cost_efficiency':.15,'candle_body':.10,'quote_quality':.10,'direction_alignment':.10}
 
 def clip(x):return min(1.,max(0.,x))
@@ -17,16 +17,19 @@ def legacy_key(item):
 def describe(package,plan,policy):
     try:
         one=verified_bars(package,'1M');five=verified_bars(package,'5M');last=one[-1]
-        entry=float(plan['entry_price']);stop=float(plan['stop_loss_price']);target=float(plan['take_profit_price'])
+        entry=number(plan['entry_price']);stop=number(plan['stop_loss_price']);target=number(plan['take_profit_price'])
+        if plan['action'] not in ('BUY_LONG','SELL_SHORT'):raise ValueError('Invalid candidate direction')
         sign=1 if plan['action']=='BUY_LONG' else -1
-        spread=float(package['askPx'])-float(package['bidPx'])
+        spread=number(package['askPx'])-number(package['bidPx'])
         costs=from_policy(entry,max(stop,target),policy,spread)
-        risk=abs(entry-stop);reward=abs(target-entry);cost=costs['taker_taker_total']
-        if min(risk,reward,float(plan['entry_atr']))<=0:raise ValueError('Invalid candidate geometry')
+        risk=sign*(entry-stop);reward=sign*(target-entry);cost=costs['taker_taker_total']
+        entry_atr=number(plan['entry_atr'])
+        if min(entry,stop,target,risk,reward,entry_atr)<=0:raise ValueError('Invalid candidate geometry')
         conservative_rr=(reward-cost)/(risk+cost)
         observed_range=max(r['high'] for r in five[-12:])-min(r['low'] for r in five[-12:])
-        body=sign*(last['close']-last['open'])/max(last['high']-last['low'],1e-12)
-        chase=max(0.,sign*(entry-last['close'])/float(plan['entry_atr']))
+        candle_range=last['high']-last['low']
+        body=sign*(last['close']-last['open'])/candle_range if candle_range>0 else 0.
+        chase=max(0.,sign*(entry-last['close'])/entry_atr)
         fast=sum(r['close'] for r in five[-5:])/5;slow=sum(r['close'] for r in five[-12:])/len(five[-12:])
         alignment=1. if sign*(fast-slow)>0 and sign*(five[-1]['close']-fast)>=0 else .5
         terms={'net_rr':clip(conservative_rr/3),'observed_range_coverage':clip(observed_range/reward),

@@ -1,12 +1,13 @@
 """Explicit evidence gaps and loss attribution, never inferred profits or exits."""
 import json,math,sqlite3
+from contextlib import closing
 from pathlib import Path
 from scripts import strategy_evidence as evidence
 
 
 def observation_index(scope):
     try:
-        with sqlite3.connect(Path(evidence.DB_PATH).resolve().as_uri()+'?mode=ro',uri=True) as db:
+        with closing(sqlite3.connect(Path(evidence.DB_PATH).resolve().as_uri()+'?mode=ro',uri=True)) as db:
             rows=db.execute("SELECT at,payload FROM events WHERE scope=? AND kind='position_observation' ORDER BY at DESC LIMIT 20000",(scope,)).fetchall()
         result={}
         for at,raw in rows:
@@ -48,7 +49,8 @@ def loss_class(row):
 def annotate(row,history,observations,executions):
     key=(history.get('instId'),str(history.get('posId')),str(history.get('cTime')))
     start=float(history.get('cTime') or 0)/1000;end=float(history.get('uTime') or 0)/1000
-    samples=[p for p in observations.get(key,[]) if start<=p['at']<=end]
+    samples=sorted((p for p in observations.get(key,[]) if start<=p['at']<=end),
+                   key=lambda p:p['at'],reverse=True)
     upl=[n for p in samples if (n:=finite((p.get('position') or {}).get('upl'))) is not None]
     row['holding_observations']={'samples':len(samples),'sampled_max_unrealized_pnl':max(upl) if upl else None,
         'sampled_min_unrealized_pnl':min(upl) if upl else None,'basis':'periodic_snapshots_not_tick_extremes'}

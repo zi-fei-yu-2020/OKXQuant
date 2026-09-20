@@ -20,10 +20,10 @@ const store = useDashboardStore()
           class="text-xs sm:text-sm font-black font-mono uppercase tracking-wide"
           style="color: var(--text-main)"
         >
-          系统巡检日志流 (15分钟周期)
+          系统巡检日志
         </h2>
       </div>
-      <span class="text-xs font-mono" style="color: var(--text-faint)">实时滚动</span>
+      <span class="text-xs font-mono" style="color: var(--text-faint)">{{ store.error || store.isStale ? '历史快照 · 更新延迟' : store.logs.length ? '最近取得的日志' : '暂无记录' }}</span>
     </div>
 
     <div

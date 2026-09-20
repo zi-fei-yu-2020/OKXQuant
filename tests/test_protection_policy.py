@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, mock_open
+from unittest.mock import Mock, mock_open, patch
 
 from scripts.protection_policy import oco_coverage, rounded_stop, trigger_geometry
 from scripts import exit_policy
@@ -202,6 +202,9 @@ class RepairMockTests(unittest.TestCase):
 
 class AmendmentMockTests(unittest.TestCase):
     def setUp(self):
+        # Isolate OCO semantics; authorization has separate integration regressions.
+        authorization = patch("scripts.decision_authorization.validate_management")
+        authorization.start(); self.addCleanup(authorization.stop)
         self.ns = trader_functions()
         self.read = self.ns['algo_reader'].read_algo_orders
         self.write = self.ns['run_cmd_result']

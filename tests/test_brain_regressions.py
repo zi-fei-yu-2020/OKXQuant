@@ -59,7 +59,7 @@ class BrainRegressions(unittest.TestCase):
             side_effect=AssertionError("Network forbidden")))
         self.create_connection = self.stack.enter_context(patch.object(socket, "create_connection",
             side_effect=AssertionError("Network forbidden")))
-        self.market = module("public_market", begin_signal_frame=Mock(),
+        self.market = module("public_market", begin_signal_frame=Mock(), bind_signal_frame=lambda fn: fn,
             _selected=Mock(return_value=SimpleNamespace(mode="demo", identity="offline-test")),
             signal_as_of=Mock(return_value=1_800_000_000.), smart_money_overview=Mock(return_value=[]),
             get_json=Mock(return_value={}), signal_json=Mock(return_value={}),

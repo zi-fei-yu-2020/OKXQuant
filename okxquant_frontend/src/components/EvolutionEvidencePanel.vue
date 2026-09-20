@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { observedNumber } from '../utils/observationDisplay'
 export interface EvolutionFeedback {
+  wins?: number
+  losses?: number
+  breakeven?: number
+  net_pnl?: number
   settled_samples?: number
   entry_snapshot_samples?: number
   partial_snapshot_samples?: number

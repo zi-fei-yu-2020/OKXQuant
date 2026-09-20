@@ -20,7 +20,14 @@ def settings_for(profile):
     # without rewriting prompt text. The exchange leverage remains an observed
     # account setting and order_plan sizes from actual stop distance.
     requested_mode = str(__import__('os').environ.get('OKXQUANT_CAPITAL_MODE','')).strip().lower()
-    name = 'small300' if (profile.get('id')=='small300' or requested_mode in {'300','small300','small'}) else profile.get('execution_profile','standard')
+    # An explicitly saved binding wins over the legacy process-wide default.
+    # Otherwise selecting a custom standard profile could silently remain small300.
+    if profile.get('id')=='small300':
+        name='small300'
+    elif 'execution_profile' in profile:
+        name=profile['execution_profile']
+    else:
+        name='small300' if requested_mode in {'300','small300','small'} else 'standard'
     if name not in ('small300','standard'):
         raise ValueError('Unknown execution preset; new risk blocked')
     return dict(SMALL_300) if name=='small300' else {'id':'standard','label':'标准风控（独立配置）'}
@@ -69,4 +76,43 @@ def cap_allocation(allocation, config, positions, pending, metadata, inst_id, le
     capital_pool._save(state)
     if state['drawdown']['blocked'] or state['risk_equity']<=0:raise RiskRejected('300U allocation drawdown gate; existing protection continues')
     detail={**allocation.detail,'execution_allocation':{'nav':state['pool_nav'],'risk_equity':state['risk_equity'],'virtual_cap':True}}
-    return replace(allocation,equity=min(allocation.equity,state['risk_equity']),available=free,detail=detail)
+    # An enabled optional pool is already denominated in USDT. A disabled
+    # Budget carries account totalEq (USD), which must not cap USDT a second time.
+    equity=min(allocation.equity,state['risk_equity']) if allocation.enabled else state['risk_equity']
+    # This is a real virtual allocation even without the optional capital_pool.
+    # Preserve the gateway's existing reservation recheck and plan evidence path.
+    return replace(allocation,enabled=True,equity=equity,available=free,detail=detail)
+
+
+def observe_existing(env, observation, policy, *, balance):
+    """Observe an already allocated small300 NAV, including while standard is active.
+
+    The guard never initializes a scope or sends a trading operation. Use exactly
+    the existing allocation transition and small300 drawdown parameters. A blocked
+    account guard may have committed its reconciled observation before raising;
+    recover only that exact balance version, never infer missing cash flows.
+    """
+    from dataclasses import replace
+    from scripts import capital_pool, strategy_evidence
+    from scripts.risk_policy import RiskRejected, number
+    scope = env.identity + ':execution:small300'
+    previous = capital_pool._state(scope)
+    if previous is None:
+        return None
+    if observation is None:
+        with strategy_evidence.connection() as db:
+            row = db.execute('SELECT payload FROM equity_state WHERE scope=?', (env.identity,)).fetchone()
+        if not row:
+            raise RiskRejected('Reconciled account observation unavailable for existing small300 allocation')
+        observation = json.loads(row[0])
+        if (number(observation.get('at'), positive=True) != number(balance.get('uTime'), positive=True) / 1000
+                or abs(number(observation.get('equity')) - capital_pool.usdt_equity(balance)) > 1e-8):
+            raise RiskRejected('Existing small300 allocation requires the same reconciled balance version')
+    observation = capital_pool.currency_observation(observation, balance)
+    config = capital_pool.Config(environment=env.mode, allocation_id='execution-small300-v1',
+                                 budget_usdt=SMALL_300['equity_cap_usdt'])
+    policy = replace(policy, daily_drawdown_pct=SMALL_300['daily_drawdown_pct'],
+                     peak_drawdown_pct=SMALL_300['peak_drawdown_pct'])
+    state = capital_pool.advance(previous, config, scope, observation, flat=False, policy=policy)
+    capital_pool._save(state, archive=state is not previous)
+    return state

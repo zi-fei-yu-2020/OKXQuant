@@ -1,6 +1,7 @@
 """Versioned prompt profile library used directly by Python trading processes."""
 from __future__ import annotations
 import copy
+from functools import wraps
 import json
 import os
 import re
@@ -122,6 +123,15 @@ _FORBIDDEN = (
 _VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
 
+def _library_mutation(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        from scripts.config_lock import configuration_write
+        with configuration_write(LIBRARY_FILE):
+            return fn(*args, **kwargs)
+    return wrapped
+
+
 def _now() -> str:
     return datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -158,8 +168,9 @@ def text_to_modules(text: str, source: str = "legacy", locked: bool = False) -> 
     return result
 
 
-def compile_modules(modules: list[dict[str, Any]]) -> str:
-    return "\n\n".join(render_variables(str(item.get("content") or "")) for item in modules if item.get("enabled",True) and str(item.get("content") or "").strip()).strip()
+def compile_modules(modules: list[dict[str, Any]], *, render: bool = True) -> str:
+    values = [str(item.get("content") or "") for item in modules if item.get("enabled", True) and str(item.get("content") or "").strip()]
+    return "\n\n".join(render_variables(value) if render else value for value in values).strip()
 
 
 def base_template_modules(text: str, pipeline: str) -> list[dict[str, Any]]:
@@ -181,12 +192,33 @@ def _clean_pipelines(raw: Any, legacy: dict[str, Any]) -> dict[str, list[dict[st
 
 # Named preset carries an immutable execution binding, not just persuasive text.
 PRESETS['small300'] = {**copy.deepcopy(PRESETS['stable']), 'id':'small300',
-    'name':'300U 小资金 · 风险预算型', 'description':'资金计算基数最多300U，单笔风险0.5%，单标的保证金30U，总保证金90U，最多2个标的，实际杠杆不超过3倍。切换后由执行网关强制生效。',
+    'name':'300U 小资金 · 风险预算型', 'description':'300U小资金执行预设：按当前有效资金、止损距离和费用计算仓位；风险、保证金及短线/波段杠杆以执行设置为准。下一次新决策生效，已有持仓继续按原保护管理。',
     'editor_mode':'advanced', 'execution_profile':'small300', 'pipelines':{},
     'trading_system':'以小资金成本效率为优先：只提交可以核验的结构计划；按执行预算裁剪数量，最小合约不能满足预算时跳过。评分不是胜率，不追求零不确定性。',
     'trading_user':'优先审查本轮已触发的程序草案；已满足的等待条件应重新评估。允许明确残余风险，只要结构失效、成本后盈亏比和执行预算均成立。不要为了增加成交而编造依据。',
     'evolution_system':'仅用真实结算和可追溯成交证据复盘，候选不自动晋级。',
     'evolution_user':'分别统计费用拖累、错失候选、保护回撤与执行拒绝；小样本保持NO_CHANGE。'}
+
+
+def _validate_editor_input(raw):
+    """Reject data loss at the editor boundary, before cleaning can truncate it."""
+    for key in TEMPLATE_KEYS:
+        if len(str(raw.get(key) or '')) > MAX_TEMPLATE_CHARS and not isinstance(raw.get('pipelines'), dict):
+            raise ValueError(f'{key} 超过 {MAX_TEMPLATE_CHARS} 字符，未保存')
+    pipelines = raw.get('pipelines')
+    if pipelines is not None:
+        if not isinstance(pipelines, dict): raise ValueError('模块管线必须是对象')
+        for key, modules in pipelines.items():
+            if key not in TEMPLATE_KEYS or not isinstance(modules, list): raise ValueError('无效的模块管线')
+            if len(modules) > MAX_MODULES_PER_PIPELINE: raise ValueError('模块数超过上限，未保存')
+            for module in modules:
+                if not isinstance(module, dict): raise ValueError('模块必须是对象')
+                if len(str(module.get('content') or '')) > MAX_TEMPLATE_CHARS:
+                    raise ValueError('单模块内容超过上限，未截断保存')
+    policy = raw.get('simple_policy') or {}
+    if not isinstance(policy, dict): raise ValueError('简单策略设置必须是对象')
+    if len(str(policy.get('strategy') or '')) > 8000 or len(str(policy.get('review_focus') or '')) > 4000:
+        raise ValueError('简单策略内容超过上限，未保存')
 
 
 def _clean_profile(raw: dict[str, Any], profile_id: str | None = None) -> dict[str, Any]:
@@ -201,7 +233,7 @@ def _clean_profile(raw: dict[str, Any], profile_id: str | None = None) -> dict[s
     result["editable"] = True
     result["enabled"] = bool(result.get("enabled", True))
     result["editor_mode"] = str(raw.get("editor_mode") or ("advanced" if any(raw.get(k) for k in TEMPLATE_KEYS) else "simple"))
-    if result["editor_mode"] not in {"simple", "advanced"}: result["editor_mode"] = "simple"
+    if result["editor_mode"] not in {"simple", "advanced", "modules"}: result["editor_mode"] = "simple"
     policy = raw.get("simple_policy") if isinstance(raw.get("simple_policy"), dict) else {}
     result["simple_policy"] = {
         "strategy": str(policy.get("strategy") or "").strip()[:8000], "review_focus": str(policy.get("review_focus") or "").strip()[:4000],
@@ -215,7 +247,7 @@ def _clean_profile(raw: dict[str, Any], profile_id: str | None = None) -> dict[s
     else:
         result["pipelines"] = _clean_pipelines(raw.get("pipelines"), result)
         if isinstance(raw.get("pipelines"), dict):
-            for key in TEMPLATE_KEYS: result[key] = compile_modules(result["pipelines"][key])
+            for key in TEMPLATE_KEYS: result[key] = compile_modules(result["pipelines"][key], render=False)
         result["editor_mode"] = "modules"
     return result
 
@@ -247,6 +279,7 @@ def load_library() -> dict[str, Any]:
     return payload
 
 
+@_library_mutation
 def save_library(payload: dict[str, Any]) -> None:
     # Accept the v1 shape used by older admin clients. If a caller changed only
     # active_style/custom while active_profile_id still equals the persisted value,
@@ -306,10 +339,15 @@ def validate_profile(profile: dict[str, Any]) -> dict[str, Any]:
         if len(modules)>MAX_MODULES_PER_PIPELINE: errors.append(f"{pipeline} 模块数不得超过 {MAX_MODULES_PER_PIPELINE}")
         seen=set()
         for module in modules:
+            if not isinstance(module, dict):
+                errors.append(f'{pipeline} 模块必须是对象'); continue
             module_id=str(module.get("id") or "")
             if not module_id or module_id in seen: errors.append(f"{pipeline} 模块 ID 缺失或重复")
             seen.add(module_id)
             value=str(module.get("content") or ""); module_total += len(value)
+            if len(value) > MAX_TEMPLATE_CHARS: errors.append(f'{pipeline} 单模块内容超过上限')
+            unknown = sorted(set(_VAR_RE.findall(value)) - ALLOWED_VARIABLES)
+            if unknown: errors.append(f"{pipeline} 包含未知变量：{', '.join(unknown)}")
             if module.get("source")=="base" and module.get("locked"): continue
             for pattern,message in _FORBIDDEN:
                 for match in pattern.finditer(value):
@@ -357,10 +395,11 @@ def _revision(profile: dict[str, Any], action: str, note: str = "") -> dict[str,
     return {"id": f"rev-{uuid.uuid4().hex[:12]}", "profile_id": profile["id"], "action": action, "note": str(note)[:240], "created_at": _now(), "snapshot": copy.deepcopy(profile)}
 
 
+@_library_mutation
 def create_profile(name: str, description: str = "", source_id: str = "stable", note: str = "创建方案") -> dict[str, Any]:
     library = load_library()
     source = get_profile(source_id)
-    profile = _clean_profile({**source, "id": f"custom-{uuid.uuid4().hex[:10]}", "name": name, "description": description, "editor_mode": "simple", "simple_policy": {"strategy": "", "review_focus": "", "participation": "balanced", "evidence": "strict", "risk_budget": "middle"}, "created_at": _now(), "updated_at": _now()})
+    profile = _clean_profile({**source, "id": f"custom-{uuid.uuid4().hex[:10]}", "name": name, "description": description, "created_at": _now(), "updated_at": _now()})
     check = validate_profile(profile)
     if not check["valid"]: raise ValueError("；".join(check["errors"]))
     library["profiles"][profile["id"]] = profile
@@ -369,6 +408,7 @@ def create_profile(name: str, description: str = "", source_id: str = "stable", 
     return profile
 
 
+@_library_mutation
 def update_profile(profile_id: str, changes: dict[str, Any], note: str = "更新方案") -> dict[str, Any]:
     library = load_library()
     if profile_id in PRESETS and profile_id not in library["profiles"]:
@@ -378,14 +418,18 @@ def update_profile(profile_id: str, changes: dict[str, Any], note: str = "更新
         current = library["profiles"][profile_id]
     else:
         raise ValueError("提示词方案不存在")
-    accepted = {k: v for k, v in changes.items() if k in {"name", "description", "enabled", "editor_mode", "simple_policy", "pipelines", *TEMPLATE_KEYS}}
+    accepted = {k: v for k, v in changes.items() if k in {"name", "description", "enabled", "editor_mode", "simple_policy", "pipelines", "execution_profile", *TEMPLATE_KEYS}}
     flat_updates = [key for key in TEMPLATE_KEYS if key in accepted]
     if "pipelines" not in accepted and flat_updates:
         accepted["pipelines"] = copy.deepcopy(current.get("pipelines") or {})
         for key in flat_updates: accepted["pipelines"][key] = text_to_modules(str(accepted[key] or ""), "legacy")
         accepted["editor_mode"] = "modules"
     elif "editor_mode" not in accepted and any(str(accepted.get(key) or "").strip() for key in TEMPLATE_KEYS): accepted["editor_mode"] = "advanced"
-    updated = _clean_profile({**current, **accepted, "updated_at": _now()}, profile_id)
+    merged = {**current, **accepted, "updated_at": _now()}
+    _validate_editor_input(merged)
+    if profile_id == library['active_profile_id'] and not merged.get('enabled', True):
+        raise ValueError('当前启用方案不能停用，请先切换方案')
+    updated = _clean_profile(merged, profile_id)
     check = validate_profile(updated)
     if not check["valid"]: raise ValueError("；".join(check["errors"]))
     library["profiles"][profile_id] = updated
@@ -395,6 +439,7 @@ def update_profile(profile_id: str, changes: dict[str, Any], note: str = "更新
     return updated
 
 
+@_library_mutation
 def delete_profile(profile_id: str) -> None:
     if profile_id in PRESETS and profile_id not in load_library()["profiles"]: raise ValueError("内置预设不可删除")
     library = load_library()
@@ -406,10 +451,13 @@ def delete_profile(profile_id: str) -> None:
         raise ValueError("提示词方案不存在")
 
 
+@_library_mutation
 def activate_profile(profile_id: str) -> dict[str, Any]:
     library = load_library()
     profile = get_profile(profile_id)
     if not profile.get("enabled", True): raise ValueError("该方案已停用")
+    check = validate_profile(profile)
+    if not check['valid']: raise ValueError('；'.join(check['errors']))
     library["active_profile_id"] = profile_id
     save_library(library)
     return profile
@@ -430,11 +478,16 @@ def profile_history(profile_id: str) -> list[dict[str, Any]]:
     return [copy.deepcopy(x) for x in reversed(load_library()["revisions"]) if x.get("profile_id") == profile_id]
 
 
+@_library_mutation
 def rollback_profile(profile_id: str, revision_id: str) -> dict[str, Any]:
     library = load_library()
     revision = next((x for x in library["revisions"] if x.get("id") == revision_id and x.get("profile_id") == profile_id), None)
     if not revision: raise ValueError("历史版本不存在")
     restored = _clean_profile({**revision["snapshot"], "updated_at": _now()}, profile_id)
+    check = validate_profile(restored)
+    if not check['valid']: raise ValueError('；'.join(check['errors']))
+    if profile_id == library['active_profile_id'] and not restored.get('enabled', True):
+        raise ValueError('不能将当前启用方案回滚为停用状态')
     library["profiles"][profile_id] = restored
     library["revisions"].append(_revision(restored, "rollback", f"回滚到 {revision_id}"))
     save_library(library)
@@ -446,29 +499,30 @@ def export_profile(profile_id: str) -> dict[str, Any]:
     return {"format": "okxquant-prompt-profile", "version": 3, "exported_at": _now(), "profile": {k: profile.get(k) for k in ("name", "description", "editor_mode", "pipelines", "simple_policy", "execution_profile", *TEMPLATE_KEYS)}}
 
 
+@_library_mutation
 def import_profile(payload: dict[str, Any], name_override: str = "") -> dict[str, Any]:
-    if payload.get("format") != "okxquant-prompt-profile" or not isinstance(payload.get("profile"), dict): raise ValueError("无效的 OKXQuant 提示词方案文件")
-    source = payload["profile"]
-    binding=source.get('execution_profile') or 'standard'
-    if binding not in ('standard','small300'):raise ValueError('Unknown imported execution preset')
-    source_id='small300' if binding=='small300' else 'stable'
-    if isinstance(source.get("pipelines"), dict) and any(source.get("pipelines", {}).values()):
-        profile=create_profile(name_override or str(source.get("name") or "导入方案"),str(source.get("description") or ""),source_id,"导入模块方案")
-        return update_profile(profile["id"],{"editor_mode":"modules","pipelines":source["pipelines"]},"导入模板构成")
-    if source.get("editor_mode") == "simple" or (not source.get("editor_mode") and source.get("simple_policy")):
-        profile = create_profile(name_override or str(source.get("name") or "导入方案"), str(source.get("description") or ""), source_id, "导入简单方案")
-        return update_profile(profile["id"], {"editor_mode": "simple", "simple_policy": source.get("simple_policy") or {}}, "导入简单策略")
-    return create_profile(name_override or str(source.get("name") or "导入方案"), str(source.get("description") or ""), source_id, "导入方案") if not any(source.get(k) for k in TEMPLATE_KEYS) else _import_with_templates(source, name_override)
-
-
-def _import_with_templates(source: dict[str, Any], name_override: str) -> dict[str, Any]:
-    source_id="small300" if source.get("execution_profile")=="small300" else "stable"
-    profile = create_profile(name_override or str(source.get("name") or "导入方案"), str(source.get("description") or ""), source_id, "导入方案")
-    return update_profile(profile["id"], {key: source.get(key, "") for key in TEMPLATE_KEYS}, "导入模板内容")
+    if payload.get("format") != "okxquant-prompt-profile" or not isinstance(payload.get("profile"), dict):
+        raise ValueError("无效的 OKXQuant 提示词方案文件")
+    source = copy.deepcopy(payload['profile'])
+    source.update(id=f"custom-{uuid.uuid4().hex[:10]}", name=name_override or source.get('name') or '导入方案',
+                  created_at=_now(), updated_at=_now())
+    _validate_editor_input(source)
+    profile = _clean_profile(source)
+    check = validate_profile(profile)
+    if not check['valid']: raise ValueError('；'.join(check['errors']))
+    library = load_library()
+    library['profiles'][profile['id']] = profile
+    library['revisions'].append(_revision(profile, 'import', '完整校验后导入方案'))
+    save_library(library)
+    return profile
 
 
 def active_profile() -> dict[str, Any]:
-    return resolve_profile(get_profile(load_library()["active_profile_id"]))
+    library = load_library()
+    profile_id = library['active_profile_id']
+    profile = library['profiles'].get(profile_id) or PRESETS.get(profile_id)
+    if not isinstance(profile, dict): raise ValueError('当前策略方案不可用')
+    return resolve_profile(copy.deepcopy(profile))
 
 
 def all_profiles() -> list[dict[str, Any]]:

@@ -13,6 +13,7 @@ for path in (ROOT,ROOT/'scripts'):
 from scripts.trade_lock import writer
 from scripts.risk_policy import monotonic_stop
 from scripts import strategy_evidence as evidence
+from scripts.position_lifecycle import retire as retire_tracker
 
 
 
@@ -32,7 +33,19 @@ def observe_equity(env,positions=None):
     from scripts.risk_policy import load_policy
     rows=_request('GET','/api/v5/account/balance',{},env)
     if len(rows)!=1:raise ValueError('Guard equity read unknown')
-    policy=load_policy();observation=equity_guard(env,rows[0],policy)
+    policy=load_policy();observation=None
+    try:
+        observation=equity_guard(env,rows[0],policy)
+    finally:
+        # Independently refresh an existing small300 scope even if the account
+        # guard persisted a blocked observation and then raised. Never initialize
+        # a new scope here or let telemetry failure disable position protection.
+        try:
+            from scripts.execution_profiles import observe_existing
+            observe_existing(env,observation,policy,balance=rows[0])
+        except Exception as exc:
+            evidence.best_effort(env.identity,'execution_allocation_observation_failed',
+                                 {'error_type':type(exc).__name__})
     from scripts import capital_pool
     if positions is not None and not capital_pool.active_positions(positions) and capital_pool.needs_initialization(env):
         pending=_request('GET','/api/v5/trade/orders-pending',{'instType':'SWAP'},env)
@@ -58,7 +71,7 @@ def run_guard(*, observe_only=False):
                 # A verified flat account retires old peaks/stops even between trader cycles.
                 live_keys={f"{p['instId']}_{p.get('posSide')}" for p in held}
                 for old_key in list(trackers):
-                    if old_key not in live_keys:trackers.pop(old_key,None)
+                    if old_key not in live_keys:retire_tracker(trackers,old_key,env.identity,reason='flat_observed_by_guard')
             # Never assume a configured observation pool contains all held instruments.
             try:
                 catalog=market.get_json('https://www.okx.com/api/v5/public/instruments?instType=SWAP',simulated=env.simulated)['data'] if held else []
@@ -85,7 +98,7 @@ def run_guard(*, observe_only=False):
                     if not observe_only and not protected:
                         closed,detail=trader.close_position_confirmed(inst,side,abs(float(position['pos'])),exit_reason='independent_guard',position=position)
                         if closed:
-                            trackers.pop(key,None)
+                            retire_tracker(trackers,key,env.identity,reason='guard_close_confirmed')
                             trader.add_stop_cooldown(inst,side,'Independent guard safety exit')
                         actions.append({'instrument':inst,'status':'protection_unknown_exit','closed':closed})
                     continue
@@ -109,7 +122,7 @@ def run_guard(*, observe_only=False):
                     closed,detail=trader.close_position_confirmed(inst,side,abs(float(position['pos'])),exit_reason='independent_guard',position=position)
                     actions.append({'instrument':inst,'status':'protection_unknown_exit','closed':closed})
                     if closed:
-                        trackers.pop(key,None)
+                        retire_tracker(trackers,key,env.identity,reason='guard_close_confirmed')
                         trader.add_stop_cooldown(inst,side,'Independent guard safety exit')
                     continue
                 from scripts.position_lifecycle import reconcile as reconcile_lifecycle, identity as position_identity
@@ -118,7 +131,7 @@ def run_guard(*, observe_only=False):
                     if not covered:
                         closed,detail=trader.close_position_confirmed(inst,side,abs(float(position['pos'])),exit_reason='independent_guard',position=position)
                         actions.append({'instrument':inst,'status':'protection_unknown_exit','closed':closed})
-                        if closed:trackers.pop(key,None)
+                        if closed:retire_tracker(trackers,key,env.identity,reason='guard_close_confirmed')
                     actions.append({'instrument':inst,'status':'position_identity_unknown','coverage_confirmed':covered})
                     continue
                 if key not in trackers and covered:

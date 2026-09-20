@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useApiAction } from '../../composables/useApiAction'
+const { action, actionBusy, canManage } = useApiAction(() => loading.value || loadFailed.value)
+
 import AppField from '../../components/ui/AppField.vue'
 import AppCard from '../../components/ui/AppCard.vue'
 import AppButton from '../../components/ui/AppButton.vue'
@@ -21,6 +24,7 @@ const { api } = useApi()
 const auth = useAuthStore()
 const config = ref<any>(null)
 const loading = ref(true)
+const loadFailed = ref(false)
 const bannerMsg = useFeedback()
 
 // ---- capital ----
@@ -62,6 +66,7 @@ const closePhraseInput = ref('')
 const closing = ref(false)
 
 async function loadAll() {
+  loadFailed.value = false
   loading.value = true
   try {
     const [cfg, inst] = await Promise.all([
@@ -78,13 +83,14 @@ async function loadAll() {
     void refreshInstrumentSupport()
   } catch (e: any) {
     if (e?.silent) return
+    loadFailed.value = true
     bannerMsg.value = { text: `加载失败：${e.message}`, type: 'err' }
   } finally {
     loading.value = false
   }
 }
 
-async function saveCapital() {
+const saveCapital = action(async () => {
   if (!auth.isSuperadmin) {
     bannerMsg.value = { text: '仅超级管理员可修改初始本金', type: 'err' }
     return
@@ -93,12 +99,15 @@ async function saveCapital() {
     bannerMsg.value = { text: '确认短语必须精确为：UPDATE CAPITAL', type: 'err' }
     return
   }
+  if (!Number.isFinite(Number(newCapital.value)) || Number(newCapital.value) <= 0) {
+    bannerMsg.value = { text: '初始本金必须为大于 0 的有效数字', type: 'err' }; return
+  }
   savingCapital.value = true
   try {
     const res = await api('/api/v1/admin/account-baseline', {
       method: 'PUT',
       body: JSON.stringify({
-        initial_capital: parseFloat(newCapital.value),
+        initial_capital: Number(newCapital.value),
         confirmation: capitalConfirm.value,
       }),
     })
@@ -114,9 +123,9 @@ async function saveCapital() {
   } finally {
     savingCapital.value = false
   }
-}
+})
 
-async function addInstrument() {
+const addInstrument = action(async () => {
   const instId = newInstId.value.trim().toUpperCase()
   if (!/^[A-Z0-9]{2,15}-USDT-SWAP$/.test(instId)) {
     bannerMsg.value = { text: '格式示例：XRP-USDT-SWAP（仅 USDT 永续）', type: 'err' }
@@ -139,9 +148,9 @@ async function addInstrument() {
     if (e?.silent) return
     bannerMsg.value = { text: `添加失败：${e.message}`, type: 'err' }
   }
-}
+}, false)
 
-async function removeInstrument(item: any) {
+const removeInstrument = action(async (item: any) => {
   if (item.protected) {
     bannerMsg.value = { text: 'BTC 为保底标的，不可删除', type: 'err' }
     return
@@ -168,7 +177,7 @@ async function removeInstrument(item: any) {
     if (e?.silent) return
     bannerMsg.value = { text: `删除失败：${e.message}`, type: 'err' }
   }
-}
+}, false)
 
 async function loadPositions() {
   snapshotState.value = '正在从 OKX 读取当前持仓与挂单…'
@@ -190,10 +199,11 @@ function openClose(pos: any) {
     return
   }
   closePhraseInput.value = ''
+  closePassword.value = ''
   closeModal.value = { show: true, pos }
 }
 
-async function confirmClose() {
+const confirmClose = action(async () => {
   const pos = closeModal.value?.pos
   if (!pos) return
   if (!closePassword.value) {
@@ -228,7 +238,7 @@ async function confirmClose() {
   } finally {
     closing.value = false
   }
-}
+})
 
 onMounted(loadAll)
 
@@ -237,6 +247,7 @@ const { prompt } = useDialogs()
 
 <template>
   <div class="space-y-4 font-sans text-sm">
+    <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading || actionBusy" @click="loadAll()">重试</button></div>
     <AppCard class="p-4 text-sm leading-relaxed"><router-link to="/admin/accounts" class="font-semibold" style="color:var(--color-brand)">前往统一账户中心</router-link><p style="color:var(--text-muted)">新增资讯授权、双环境绑定和安全换号请使用账户中心；此页只保留盈亏基准、标的管理和受保护的平仓操作；账户、凭据及手动平仓权限统一在账户中心配置。</p></AppCard>
     <!-- Header & Action Bar -->
 
@@ -283,7 +294,7 @@ const { prompt } = useDialogs()
                   >新初始本金 (USDT)</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input
+                ><input :disabled="actionBusy"
                   :id="fieldId"
                   v-model="newCapital"
                   type="number"
@@ -303,7 +314,7 @@ const { prompt } = useDialogs()
                   >确认短语 (UPDATE CAPITAL)</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input
+                ><input :disabled="actionBusy"
                   :id="fieldId"
                   v-model="capitalConfirm"
                   placeholder="输入 UPDATE CAPITAL"
@@ -318,7 +329,7 @@ const { prompt } = useDialogs()
           <div class="flex items-end">
             <button
               @click="saveCapital"
-              :disabled="savingCapital"
+              :disabled="(savingCapital) || actionBusy || !canManage"
               class="w-full flex items-center justify-center space-x-1.5 px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-sans font-bold cursor-pointer disabled:opacity-50 transition-all shadow-xs"
             >
               <Save class="w-3.5 h-3.5" /><span>{{
@@ -348,7 +359,7 @@ const { prompt } = useDialogs()
             </h2>
           </div>
           <div class="flex gap-2">
-            <input
+            <input :disabled="actionBusy"
               aria-label="新增交易标的"
               v-model="newInstId"
               placeholder="例如: XRP-USDT-SWAP"
@@ -360,7 +371,7 @@ const { prompt } = useDialogs()
               "
               @keyup.enter="addInstrument"
             />
-            <button
+            <button :disabled="actionBusy"
               @click="addInstrument"
               class="px-3 py-1.5 rounded-lg text-sm font-sans font-bold transition-all cursor-pointer shadow-xs"
               style="background-color: var(--text-main); color: var(--bg-card)"
@@ -376,7 +387,7 @@ const { prompt } = useDialogs()
             <span v-else-if="supportSummary"> · {{ supportSummary.supported_count }} 个已核验支持 · {{ supportSummary.observation_count }} 个仅观察/待确认</span>
             <p class="text-xs mt-1">能看到行情不代表当前环境支持交易。不支持或待确认的标的不参与新开仓/加仓，当前环境已有持仓管理不受此检查阻断。</p>
           </div>
-          <AppButton :loading="supportLoading" title="刷新支持状态；60 秒内的合约目录结果可复用" @click="refreshInstrumentSupport">重新核验</AppButton>
+          <AppButton :disabled="actionBusy" :loading="supportLoading" title="刷新支持状态；60 秒内的合约目录结果可复用" @click="refreshInstrumentSupport">重新核验</AppButton>
         </div>
         <div class="overflow-x-auto">
           <table class="w-full text-left text-sm font-sans whitespace-nowrap">
@@ -438,7 +449,7 @@ const { prompt } = useDialogs()
                 <td class="py-2.5 px-4 text-right">
                   <button
                     @click="removeInstrument(item)"
-                    :disabled="item.protected || item.has_tracker"
+                    :disabled="(item.protected || item.has_tracker) || actionBusy"
                     class="p-1 rounded hover:opacity-80 text-rose-400 disabled:opacity-20 cursor-pointer transition-opacity"
                     title="从标的池移除"
                   >
@@ -475,7 +486,7 @@ const { prompt } = useDialogs()
               3. 当前持仓与应急平仓
             </h2>
           </div>
-          <button
+          <button :disabled="actionBusy"
             @click="loadPositions"
             class="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
             style="
@@ -562,7 +573,7 @@ const { prompt } = useDialogs()
                   {{ Number(p.upl || 0).toFixed(4) }}
                 </td>
                 <td class="py-2.5 px-4 text-right">
-                  <button
+                  <button :disabled="actionBusy"
                     @click="openClose(p)"
                     class="px-2.5 py-1 rounded-md text-xs font-sans font-bold border transition-all cursor-pointer shadow-xs"
                     style="
@@ -595,7 +606,7 @@ const { prompt } = useDialogs()
     </template>
 
     <!-- Close confirm modal -->
-    <AppDialog
+    <AppDialog :busy="actionBusy"
       v-if="closeModal?.show"
       :open="!!closeModal?.show"
       title="确认平仓"
@@ -625,7 +636,7 @@ const { prompt } = useDialogs()
               >当前管理员密码</span
             ></template
           ><template #default="{ id: fieldId }"
-            ><input
+            ><input :disabled="actionBusy"
               :id="fieldId"
               v-model="closePassword"
               type="password"
@@ -642,7 +653,7 @@ const { prompt } = useDialogs()
               >确认短语：{{ closeModal.pos.close_confirmation }}</span
             ></template
           ><template #default="{ id: fieldId }"
-            ><input
+            ><input :disabled="actionBusy"
               :id="fieldId"
               v-model="closePhraseInput"
               :placeholder="closeModal.pos.close_confirmation"
@@ -654,7 +665,7 @@ const { prompt } = useDialogs()
               " /></template
         ></AppField>
         <div class="flex justify-end gap-2">
-          <button
+          <button :disabled="actionBusy"
             @click="closeModal = null"
             class="px-3 py-2 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
             style="
@@ -667,7 +678,7 @@ const { prompt } = useDialogs()
           </button>
           <button
             @click="confirmClose"
-            :disabled="closing"
+            :disabled="(closing) || actionBusy || !canManage"
             class="px-3 py-2 rounded-lg text-sm font-sans font-bold cursor-pointer disabled:opacity-50 transition-all shadow-xs"
             style="
               background-color: var(--color-down-bg);

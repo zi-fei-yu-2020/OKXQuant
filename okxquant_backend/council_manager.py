@@ -308,7 +308,11 @@ def execute_council_debate(
     config = load_council_config()
     roles = config.get("roles", {})
     consensus_mode = config.get("consensus_mode", "weighted")
-    t_start = time.time()
+    import math
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError('Invalid council timeout')
+    t_start = time.monotonic()
+    deadline = t_start + timeout
 
     # Step 1: Identify CIO (Arbitrator) and Active Traders
     cio_key = next(
@@ -326,7 +330,7 @@ def execute_council_debate(
 
     trader_proposals: Dict[str, Dict[str, Any]] = {}
     if trader_keys:
-        member_timeout = max(15.0, timeout * 0.50)
+        member_timeout = timeout * 0.50
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(trader_keys))) as pool:
             futures = {
                 pool.submit(
@@ -390,7 +394,10 @@ def execute_council_debate(
     cio_user_prompt = trading_prompt.canonical({'role_preference': cio_preference,'market_input': market_prompt,
         'peer_proposals_untrusted': compiled_proposals,'task':'逐项审查支持、反证和失效条件，可全部 WAIT；输出基础 trading-evidence-v1 JSON。'})
 
-    rem_time = max(25.0, timeout - (time.time() - t_start))
+    rem_time = deadline - time.monotonic()
+    if rem_time <= 0:
+        from okxquant_backend.llm_transport import LLMRequestError
+        raise LLMRequestError(0, 0, 'deadline_exceeded')
     content, reasoning, usage, latency = execute_llm_request(
         messages=[
             {"role": "system", "content": cio_system_prompt},
@@ -404,8 +411,12 @@ def execute_council_debate(
         temperature=cio_temperature,
         response_format={"type": "json_object"},
         timeout=rem_time,
+        require_complete=True,
     )
 
+    if time.monotonic() > deadline:
+        from okxquant_backend.llm_transport import LLMRequestError
+        raise LLMRequestError(0, 1, 'deadline_exceeded')
     brain_output = trading_prompt.parse_response(content)
 
     council_transcript = {
@@ -413,7 +424,7 @@ def execute_council_debate(
         "contract_version": trading_prompt.VERSION,
         "council_architecture": "Hedge Fund Investment Committee",
         "consensus_mode": consensus_mode,
-        "total_duration_ms": int((time.time() - t_start) * 1000),
+        "total_duration_ms": int((time.monotonic() - t_start) * 1000),
         "arbitrator": {
             "role_name": cio_spec.get("name", "首席投资官 (CIO)"),
             "model_used": override_model or get_active_llm_runtime().get("model", "default"),

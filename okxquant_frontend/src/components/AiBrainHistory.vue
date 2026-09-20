@@ -6,10 +6,13 @@ import { useDashboardStore } from '../stores/dashboard'
 import { Brain, ChevronDown, Users } from 'lucide-vue-next'
 
 const store = useDashboardStore()
-const history = computed(() => (store.data?.ai_brain_history || []).slice(0, 24))
-const expanded = ref<Set<number>>(new Set())
+const visibleCount = ref(24)
+const allHistory = computed(() => store.data?.ai_brain_history || [])
+const history = computed(() => allHistory.value.slice(0, visibleCount.value))
+const expanded = ref<Set<string>>(new Set())
+const historyKey = (item: unknown) => JSON.stringify(item)
 
-function toggle(i: number) {
+function toggle(i: string) {
   const s = new Set(expanded.value)
   s.has(i) ? s.delete(i) : s.add(i)
   expanded.value = s
@@ -44,7 +47,7 @@ function toggle(i: number) {
           AI 宏观多周期推演基调与决策审计
         </h2>
         <p class="text-xs font-mono mt-0.5" style="color: var(--text-muted)">
-          每 15 分钟交易决策周期的宏观研判、多模型辩论实录与在途持仓管理指令
+          按记录时间回溯宏观研判、多模型辩论与持仓管理建议；不代表当前执行状态
         </p>
       </div>
     </div>
@@ -59,19 +62,20 @@ function toggle(i: number) {
         color: var(--text-muted);
       "
     >
-      暂无历史决策记录，等待下一次 15 分钟推演周期
+      暂无历史决策记录；待决策任务写入后显示
     </div>
 
     <!-- History List -->
     <div v-else class="space-y-2.5 max-h-[720px] overflow-y-auto pr-1">
       <div
-        v-for="(item, i) in history"
-        :key="i"
+        v-for="item in history"
+        :key="historyKey(item)"
         class="rounded-xl border p-3.5 transition-all"
         style="background-color: var(--bg-card-subtle); border-color: var(--border-subtle)"
       >
         <button
-          @click="toggle(i)"
+          @click="toggle(historyKey(item))"
+          :aria-expanded="expanded.has(historyKey(item))"
           class="w-full flex items-center justify-between text-left cursor-pointer gap-2"
         >
           <div class="flex items-center space-x-2.5 min-w-0">
@@ -93,18 +97,18 @@ function toggle(i: number) {
               🏛️ 委员会决策
             </span>
             <span class="text-xs font-sans truncate" style="color: var(--text-muted)">
-              {{ item.macro_assessment || '宏观中性震荡' }}
+              {{ item.macro_assessment || '该记录未提供宏观研判' }}
             </span>
           </div>
           <ChevronDown
             class="w-4 h-4 shrink-0 transition-transform"
             style="color: var(--text-faint)"
-            :class="expanded.has(i) ? 'rotate-180' : ''"
+            :class="expanded.has(historyKey(item)) ? 'rotate-180' : ''"
           />
         </button>
 
         <div
-          v-if="expanded.has(i)"
+          v-if="expanded.has(historyKey(item))"
           class="mt-3 space-y-3 border-t pt-3"
           style="border-color: var(--border-subtle)"
         >
@@ -117,7 +121,7 @@ function toggle(i: number) {
               宏观研判总结:
             </div>
             <p class="text-xs font-sans leading-relaxed" style="color: var(--text-main)">
-              {{ item.macro_assessment || '宏观中性震荡' }}
+              {{ item.macro_assessment || '该记录未提供宏观研判' }}
             </p>
           </div>
 
@@ -216,5 +220,6 @@ function toggle(i: number) {
         </div>
       </div>
     </div>
+    <button v-if="history.length < allHistory.length" class="ui-button ui-button--secondary ui-button--sm" @click="visibleCount += 24">加载更多历史记录（剩余 {{ allHistory.length - history.length }} 条）</button>
   </AppCard>
 </template>

@@ -118,6 +118,7 @@ def main():
     parser.add_argument('--fixtures', action='store_true', help='Use browser-only market fixtures to check populated tables/cards')
     parser.add_argument('--interactions-only', action='store_true')
     parser.add_argument('--interactions', action='store_true', help='Check dialogs, focus, confirmation phrases and mocked API errors')
+    parser.add_argument('--channel', default=None, help='Installed browser channel, e.g. msedge; no browser download')
     args = parser.parse_args()
     if urlparse(args.base_url).hostname not in {'localhost', '127.0.0.1', '::1'}:
         parser.error('Use a local isolated preview, not a production host.')
@@ -128,7 +129,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     results, js_errors, blocked = [], [], []
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=True, channel=args.channel)
         context = browser.new_context(viewport={'width': 1440, 'height': 1000}, device_scale_factor=1)
         page = context.new_page()
         page.on('pageerror', lambda error: js_errors.append(str(error)))

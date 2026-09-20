@@ -30,6 +30,7 @@ if _project_root not in _sys.path:
 import os
 from okx_runtime import freeze_environment as freeze_okx_environment, replace_cli_prefix as okx_private_command, unfreeze_environment as unfreeze_okx_environment, selected_environment
 import json
+import logging
 import time
 import datetime
 import math
@@ -40,6 +41,7 @@ import public_market as market
 import instrument_support as support
 import algo_reader
 from scripts import trade_lock, risk_policy, entry_gateway, strategy_evidence, exit_policy
+from scripts.position_lifecycle import retire as retire_tracker
 from scripts.execution_profiles import runtime as execution_runtime
 import fcntl
 from typing import Tuple, Dict, Any, List, Optional
@@ -164,7 +166,7 @@ def run_cmd_result(cmd, timeout=15):
         from okxquant_backend.account_connections import assert_current
         assert_current(market._selected())
         with algo_reader.command_barrier(cmd, market._selected()):
-            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, env=market._selected().cli_env())
         parsed = None
         if res.stdout.strip():
             try:
@@ -196,7 +198,7 @@ def run_cmd(cmd, timeout=15):
 def run_json_cmd(cmd, timeout=15):
     try:
         with algo_reader.command_barrier(cmd, market._selected()):
-            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, env=market._selected().cli_env())
         if res.returncode == 0 and res.stdout.strip():
             return json.loads(res.stdout.strip())
         return None
@@ -240,8 +242,11 @@ def save_horizon_intent(inst_id, side, horizon, decision_id=None, strategy_mode=
     data[f'{inst_id}_{side}']={'horizon': horizon if horizon in {'scalp','swing'} else 'swing','mode_version':mode.get('version','strategy-modes-v2'),'mode_signature':mode.get('signature',''),'entry_timeframe':mode['entry_timeframe'],'confirmation_timeframe':mode['confirmation_timeframe'],'bias_timeframe':mode['bias_timeframe'],'max_holding_seconds':mode['max_holding_seconds'],'mode':mode,'setup':setup,'entry_context':entry_context,'decision_id':decision_id,'ts':int(time.time())}
     _save_horizon_intents(data)
 
-def consume_horizon_intent(inst_id, side):
-    data=load_horizon_intents(); key=f'{inst_id}_{side}'; item=data.pop(key,None)
+def consume_horizon_intent(inst_id, side, *, expected=None):
+    data=load_horizon_intents(); key=f'{inst_id}_{side}'; item=data.get(key)
+    if expected is not None and item != expected:
+        return item.get('horizon','swing') if isinstance(item,dict) else 'swing'
+    data.pop(key,None)
     if item:
         try:
             _save_horizon_intents(data)
@@ -249,24 +254,57 @@ def consume_horizon_intent(inst_id, side):
     return item.get('horizon','swing') if isinstance(item,dict) else 'swing'
 
 def load_trackers():
-    if os.path.exists(POSITION_TRACKER_FILE):
-        try:
-            with open(POSITION_TRACKER_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {}
+    from scripts.position_lifecycle import TrackerSnapshot
+    try:
+        def invalid_constant(value):
+            raise ValueError('nonfinite_tracker_value')
+        with open(POSITION_TRACKER_FILE, 'r', encoding='utf-8') as f:
+            value = json.load(f, parse_constant=invalid_constant)
+        if not isinstance(value, dict) or any(not isinstance(row, dict) for row in value.values()):
+            raise ValueError('invalid_tracker_shape')
+        return TrackerSnapshot(value)
+    except FileNotFoundError:
+        return TrackerSnapshot()
+    except Exception as exc:
+        logging.getLogger(__name__).warning('Tracker state unavailable; original file preserved [%s]', type(exc).__name__)
+        return TrackerSnapshot(readable=False, error_type=type(exc).__name__)
+
 
 def save_trackers(trackers):
+    # The caller must not turn a failed read into a new empty authoritative file.
+    # Recheck the file too, including callers that pass a plain dict.
+    if not getattr(trackers, 'readable', True) or not getattr(load_trackers(), 'readable', True):
+        return False
+    if not isinstance(trackers, dict) or any(not isinstance(row, dict) for row in trackers.values()):
+        raise ValueError('invalid_tracker_shape')
     import tempfile
-    fd, temporary = tempfile.mkstemp(prefix='.position-trackers-',suffix='.tmp',dir=DATA_DIR)
+    parent = os.path.dirname(POSITION_TRACKER_FILE)
+    os.makedirs(parent, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix='.position-trackers-',suffix='.tmp',dir=parent)
     try:
         with os.fdopen(fd,'w',encoding='utf-8') as handle:
             json.dump(trackers,handle,ensure_ascii=False,indent=2,allow_nan=False)
             handle.flush();os.fsync(handle.fileno())
         os.replace(temporary,POSITION_TRACKER_FILE)
+        return True
     finally:
         if os.path.exists(temporary):os.unlink(temporary)
+
+
+def _persist_horizon_adoption(trackers, key, item):
+    """Save the full adopted context before consuming its source; restart-safe."""
+    if not item:
+        return False
+    tracker = trackers[key]
+    tracker['entryIntent'] = dict(item)
+    try:
+        if save_trackers(trackers) is False:
+            return False
+    except Exception as exc:
+        logging.getLogger(__name__).warning('Horizon adoption not persisted; source retained [%s]', type(exc).__name__)
+        return False
+    consume_horizon_intent(tracker['instId'], tracker['side'], expected=item)
+    return True
 
 
 def load_stop_cooldowns():
@@ -344,6 +382,8 @@ def clean_stale_open_orders() -> Tuple[bool, str]:
         return False, result["stderr"] or result["stdout"] or "invalid open-orders response"
     now_ts = int(time.time() * 1000)
     for order in result["data"]:
+        if str(order.get("reduceOnly", "false")).lower() in {"true", "1"}:
+            continue  # Closing orders are not subject to entry TTL cleanup.
         inst_id = str(order.get("instId") or "")
         order_id = str(order.get("ordId") or "")
         state = str(order.get("state", "live")).lower()
@@ -563,8 +603,8 @@ def prune_trackers(trackers: Dict[str, Any], real_pos_dict: Dict[str, Any]) -> i
     removed = 0
     for key in list(trackers):
         if key not in valid_keys:
-            trackers.pop(key, None)
-            removed += 1
+            if retire_tracker(trackers, key, market._selected().identity, reason='flat_observed_by_trader'):
+                removed += 1
     return removed
 
 
@@ -641,8 +681,22 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
         f"--posSide {pos_side} --ordType limit --px {effective_px} --sz {size} "
         f"--tpTriggerPx {effective_tp} --tpOrdPx=-1 --slTriggerPx {effective_sl} --slOrdPx=-1 --json"
     )
-    result = run_cmd_result(command, timeout=20)
-    from scripts.entry_diagnostics import submission_diagnostics
+    from scripts.decision_authorization import entry_dispatch_guard
+    dispatch_started = False
+    try:
+        with entry_dispatch_guard(env, plan):
+            dispatch_started = True
+            result = run_cmd_result(command, timeout=20)
+    except Exception as exc:
+        if not dispatch_started:
+            strategy_evidence.finish_intent(client_id, 'not_submitted', {'reason':type(exc).__name__})
+            strategy_evidence.best_effort(env.identity,'entry_rejection',{'instrument':inst_id,'decision_id':decision_id,
+                'client_id':client_id,'reason':'authorization_changed_before_dispatch','details':{'error_type':type(exc).__name__}})
+            return False, 'Opening authorization changed before dispatch; no order sent'
+        # Dispatch may already have happened. Preserve the committed intent and
+        # sanitize the exception rather than aborting the cycle or replaying it.
+        result = {'ok': False, 'error_type': type(exc).__name__}
+    from scripts.entry_diagnostics import submission_diagnostics, accepted_order_id
     failure_details = submission_diagnostics(result, env) if not result['ok'] else None
     strategy_evidence.best_effort(market._selected().identity, 'entry_submission',
         {'client_id': client_id, 'plan': plan, 'transport_ok': result['ok'],
@@ -650,21 +704,17 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
     if not result["ok"]:
         strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': plan.get('candidate_id'), 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'submission_unknown', 'client_id': client_id, 'details': failure_details, 'at': time.time()})
         return False, "Entry outcome unknown; durable reservation retained for read-only reconciliation"
-    payload = result.get("data")
-    order_id = None
-    if isinstance(payload, dict):
-        order_id = payload.get("ordId") or payload.get("orderId")
-        nested = payload.get("data")
-        if not order_id and isinstance(nested, dict):
-            order_id = nested.get("ordId")
-        elif not order_id and isinstance(nested, list) and nested and isinstance(nested[0], dict):
-            order_id = nested[0].get("ordId")
-    elif isinstance(payload, list) and payload and isinstance(payload[0], dict):
-        order_id = payload[0].get("ordId")
+    order_id = accepted_order_id(result.get('data'), client_id, inst_id)
     if not order_id:
-        strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': plan.get('candidate_id'), 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'accepted_missing_order_id', 'client_id': client_id, 'at': time.time()})
-        return False, "exchange accepted response without a verifiable order id"
-    strategy_evidence.finish_intent(client_id, 'acknowledged', {'order_id': str(order_id), 'size': size})
+        strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': plan.get('candidate_id'), 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'unverified_order_receipt', 'client_id': client_id, 'details': submission_diagnostics(result, env), 'at': time.time()})
+        return False, "Entry receipt unverified; durable reservation retained for read-only reconciliation"
+    try:
+        strategy_evidence.finish_intent(client_id, 'acknowledged', {'order_id': str(order_id), 'size': size})
+    except Exception as exc:
+        strategy_evidence.best_effort(env.identity, 'entry_ack_persistence_failed',
+            {'client_id': client_id, 'order_id': str(order_id), 'error_type': type(exc).__name__,
+             'reservation_retained': True})
+        return False, "Entry acknowledged but journal update failed; read-only reconciliation required, no resend"
     return True, str(order_id)
 
 
@@ -1326,11 +1376,12 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
         score, action, reasons, strat_tag, strat_desc = evaluate_asset_signal(f)
         entry_item = load_horizon_intents().get(pos_key) or {}
         entry_mode = entry_item.get("mode")
-        horizon_intent = consume_horizon_intent(inst_id, side_name)
+        horizon_intent = entry_item.get("horizon", "swing")
         trackers[pos_key] = {
             "horizon": horizon_intent,
             "mode": entry_mode or __import__("scripts.strategy_modes",fromlist=["mode_for"]).mode_for(horizon_intent),
             "setup": entry_item.get('setup') or 'unknown',
+            "decision_id": entry_item.get('decision_id'),
             "instId": inst_id,
             "name": name,
             "side": curr_pos["side"],
@@ -1359,6 +1410,7 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
     created=float(curr_pos.get('cTime') or 0)/1000
     if not t.get('mode') and saved.get('mode') and 0 <= created-float(saved.get('ts',0)) <= 300:
         t['mode']=saved['mode']; t['horizon']=saved['horizon'];t['decision_id']=saved.get('decision_id')
+        entry_item=saved
     if t.get('mode',{}).get('engine') == 'demo_scalp_v2':
         from scripts.minute_exit import enrich_volatility
         enrich_volatility(f,inst_id,market)
@@ -1369,6 +1421,9 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
     f['horizon'] = CURRENT_HORIZON
     f['mode'] = t.get('mode') or __import__('scripts.strategy_modes',fromlist=['mode_for']).mode_for(CURRENT_HORIZON)
     ex = _exit_preset(t, executed_actions, name)
+    adoption = entry_item or (saved if saved and t.get('entryIntent') == saved else {})
+    if adoption:
+        _persist_horizon_adoption(trackers, pos_key, adoption)
     setup=str(t.get('setup') or 'unknown')
     volatility = exit_policy.volatility(f)
     exit_atr = volatility['value']
@@ -1456,7 +1511,7 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
             add_stop_cooldown(inst_id, "long" if is_long else "short", "硬止损")
         if notify_trade_close:
             notify_trade_close(inst=name, pnl=pnl_val, stage="硬止损平仓", exit_px=cur_px)
-        trackers.pop(pos_key, None)
+        retire_tracker(trackers, pos_key, market._selected().identity, reason='confirmed_exit_by_trader')
         return True, "已" + protection_label
 
     if management.get('exit'):
@@ -1470,7 +1525,7 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
             executed_actions.append(f'[{name}] 收盘结构失效，主动退出待确认：{detail}')
             return False,'结构退出待确认'
         executed_actions.append(f'[{name}] {setup} 连续收盘结构失效，策略主动退出；不追加开仓冷却')
-        trackers.pop(pos_key,None)
+        retire_tracker(trackers, pos_key, market._selected().identity, reason='confirmed_exit_by_trader')
         return True,'收盘结构失效退出'
 
     default_tp_dist = max(atr * profile["tp_atr_mult"], entry_px * profile["min_profit_ratio"])
@@ -1508,7 +1563,7 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
         add_stop_cooldown(inst_id, "long" if is_long else "short", "云端保护核验失败")
         if notify_trade_close:
             notify_trade_close(inst=name, pnl=pnl_val, stage=f"云端{check_label}退出", exit_px=cur_px)
-        trackers.pop(pos_key, None)
+        retire_tracker(trackers, pos_key, market._selected().identity, reason='confirmed_exit_by_trader')
         return True, "保护核验安全退出"
     t["cloudProtection"] = {"verifiedAt": timestamp_full, "detail": protection_detail}
 
@@ -1550,7 +1605,7 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
         })
         if notify_trade_close:
             notify_trade_close(inst=name, pnl=float(curr_pos.get("upl", 0.0) or 0.0), stage="时间止损平仓", exit_px=cur_px)
-        if pos_key in trackers: del trackers[pos_key]
+        retire_tracker(trackers, pos_key, market._selected().identity, reason='confirmed_exit_by_trader')
         return True, "时间止损"
 
     # 3. Kinetic exit uses the same preset, ATR and cost activation as the
@@ -1576,30 +1631,35 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
         })
         if notify_trade_close:
             notify_trade_close(inst=name, pnl=pnl_val, stage="移动止盈", exit_px=cur_px)
-        trackers.pop(pos_key, None)
+        retire_tracker(trackers, pos_key, market._selected().identity, reason='confirmed_exit_by_trader')
         return True, "已移动止盈"
 
     return False, "持仓监控中"
 
 def execute_ai_position_management(real_pos_dict, trackers, timestamp_full, executed_actions):
     """Execute only fresh, high-confidence and risk-reducing AI position instructions."""
+    import math
+    from scripts.position_lifecycle import retire as retire_tracker
     from scripts.protection_policy import oco_coverage, positive, rounded_stop
     if not os.path.exists(AI_POSITION_MANAGEMENT_FILE):
         return
     try:
         with open(AI_POSITION_MANAGEMENT_FILE, "r", encoding="utf-8") as f:
             payload = json.load(f)
-        if int(time.time()) - int(payload.get("timestamp", 0) or 0) > 300:
-            executed_actions.append("AI持仓指令已过期，未执行")
-            return
+        from scripts.decision_authorization import validate_management
+        validate_management(payload, market._selected(), real_pos_dict)
     except Exception as e:
         executed_actions.append(f"AI持仓指令读取失败: {e}")
         return
 
     for instruction in payload.get("instructions", []):
+        if not isinstance(instruction, dict): continue
         inst_id = str(instruction.get("instId", ""))
         action = str(instruction.get("action", "HOLD")).upper()
-        confidence = float(instruction.get("confidence", 0) or 0)
+        try:
+            confidence = float(instruction.get("confidence", 0) or 0)
+            if not math.isfinite(confidence) or not 0 <= confidence <= 100: continue
+        except (ValueError, TypeError): continue
         reason = str(instruction.get("reason", "AI持仓管理"))[:120]
         position = real_pos_dict.get(inst_id)
         if not position or action == "HOLD":
@@ -1610,6 +1670,12 @@ def execute_ai_position_management(real_pos_dict, trackers, timestamp_full, exec
         avg_px = positive(position.get("avgPx")) or 0
         name = inst_id.replace("-USDT-SWAP", "")
 
+        try:
+            validate_management(payload, market._selected(), real_pos_dict, target=inst_id)
+        except Exception as exc:
+            executed_actions.append(f'[{name}] AI管理来源或持仓已变化，保留确定性保护：{type(exc).__name__}')
+            continue
+
         if action == "CLOSE_MARKET":
             if confidence < 85:
                 executed_actions.append(f"[{name}] AI平仓置信度{confidence:.0f}<85，拒绝执行")
@@ -1617,7 +1683,7 @@ def execute_ai_position_management(real_pos_dict, trackers, timestamp_full, exec
             closed, close_detail = close_position_confirmed(inst_id, pos_side, float(position.get("pos", 0) or 0), exit_reason='ai_exit', position=position)
             if closed:
                 executed_actions.append(f"[{name}] AI高置信度整仓退出: {reason}")
-                trackers.pop(f"{inst_id}_{pos_side}", None)
+                retire_tracker(trackers, f"{inst_id}_{pos_side}", market._selected().identity, reason="ai_confirmed_exit")
             else:
                 executed_actions.append(f"[{name}] AI平仓请求未获交易所确认，仓位保持不变: {close_detail}")
 
@@ -1704,6 +1770,12 @@ def execute_ai_position_management(real_pos_dict, trackers, timestamp_full, exec
                 except Exception:
                     tracker['cloudProtection'] = {'status': 'unknown', 'detail': 'position/protection changed during amendment'}
                     executed_actions.append(f"[{name}] UNKNOWN: position or current price changed; remaining amendments stopped")
+                    all_verified = False
+                    break
+                try:
+                    validate_management(payload, market._selected(), {inst_id: matching[0]}, target=inst_id)
+                except Exception:
+                    executed_actions.append(f'[{name}] AI管理授权已变化，停止剩余改单')
                     all_verified = False
                     break
                 old_sl = float(live_algo['slTriggerPx'])
@@ -2113,7 +2185,7 @@ def execute_portfolio():
     market.begin_signal_frame()
     # 2. Parallel fetch for the configured crypto universe
     with ThreadPoolExecutor(max_workers=len(TARGET_INSTRUMENTS)) as executor:
-        all_factors = list(executor.map(lambda item: fetch_single_instrument_data(item, all_positions, usdt_available), TARGET_INSTRUMENTS))
+        all_factors = list(executor.map(market.bind_signal_frame(lambda item: fetch_single_instrument_data(item, all_positions, usdt_available)), TARGET_INSTRUMENTS))
 
     # 3. Process Positions & Dynamic Trailing Exits
     executed_actions = []

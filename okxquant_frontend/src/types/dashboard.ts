@@ -149,6 +149,8 @@ export interface LLMRuntime {
 }
 
 export interface ExecutionProfileSnapshot {
+  mode_limits?: Record<'scalp' | 'swing', { max_leverage?: number; per_trade_equity_pct?: number }>
+
   profile_id?: string
   signature?: string
   execution?: {
@@ -184,6 +186,8 @@ export interface HorizonStat {
 }
 
 export interface DashboardResponse {
+  risk_status?: { status?: string; unresolved_entries?: number | null; daily_drawdown?: number | null; daily_threshold?: number; daily_blocked?: boolean | null; observed_at?: number }
+
   account_source_id?: string
   initializing?: boolean
   scenario_shadow?: ScenarioShadowStatus

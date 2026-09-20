@@ -9,13 +9,16 @@ from scripts import public_market
 from okxquant_backend.okx_trade_service import _request
 
 
-def reconcile_intents(env):
-    from scripts.entry_reconciliation import locate
-    pending=evidence.unresolved(env.identity)
-    if len(pending)>20: raise risk.RiskRejected('Too many unresolved order intents')
-    for client_id,plan in pending:
+def reconcile_intents(env, *, pending_orders=None):
+    from scripts.entry_reconciliation import locate, recoverable_intents
+    pending=recoverable_intents(env.identity)
+    # The existing 20-intent bound limits work, not whether recovery can start.
+    # Retire proven terminal/absent rows now so a backlog can drain next cycle.
+    overflow = len(pending) > 20
+    failure = None
+    for client_id,plan in pending[:20]:
         try:
-            order, proof = locate(env, client_id, plan, _request)
+            order, proof = locate(env, client_id, plan, _request, pending_orders=pending_orders)
             if order is None:
                 evidence.finish_intent(client_id, 'not_found', proof)
                 outcome = 'resolved_absent'
@@ -35,21 +38,80 @@ def reconcile_intents(env):
                  'error_type':type(exc).__name__,'exchange_code':getattr(exc,'code',None),
                  'reason':str(exc) if isinstance(exc,risk.RiskRejected) else 'read_failed',
                  'reservation_retained':True})
-            raise risk.RiskRejected('Prior entry outcome unknown; read reconciliation required') from exc
+            # A bad first receipt must not starve the other durable intents.
+            # Keep the account's uncertainty guard, but finish this read-only sweep.
+            failure = exc
+    if failure is not None:
+        raise risk.RiskRejected('Prior entry outcome unknown; read reconciliation required') from failure
+    if overflow:
+        raise risk.RiskRejected('Prior entries remain for next read-only reconciliation batch')
+
+
+
+def _usdt_equity_previous(env, previous, equity, at):
+    """Bridge legacy USD anchors once; never invent historical exchange rates.
+
+    A matching USDT account observation preserves the intervening USDT PnL.
+    Without one, preserve recorded drawdown ratios/blocking and explicitly mark
+    the conversion interval unattributed. The full legacy state stays durable.
+    """
+    if not previous or previous.get('equity_currency') == 'USDT':
+        return previous, False
+    if previous.get('equity_currency') not in (None, 'USD'):
+        raise risk.RiskRejected('Unsupported historical equity currency')
+    method = 'same_timestamp_balance'
+    basis = equity
+    unattributed = False
+    if at != previous['at']:
+        values = []
+        scopes = (env.identity, env.identity + ':execution:small300')
+        with evidence.connection() as db:
+            rows = db.execute('SELECT scope,payload FROM capital_pool_state WHERE scope IN (?,?)', scopes).fetchall()
+        for scope, raw in rows:
+            saved = json.loads(raw)
+            if saved.get('scope') == scope and saved.get('currency') == 'USDT' and saved.get('at') == previous['at']:
+                values.append(risk.number(saved.get('account_equity'), positive=True))
+        if values and max(values) - min(values) <= 1e-8:
+            basis = values[0]
+            method = 'same_timestamp_pool_observation'
+        else:
+            method = 'continuity_bridge_unattributed_interval'
+            unattributed = True
+    factor = basis / risk.number(previous['equity'], positive=True)
+    converted = {**previous, 'equity': basis, 'equity_currency': 'USDT',
+                 'day_anchor': risk.number(previous['day_anchor'], positive=True) * factor,
+                 'peak': risk.number(previous['peak'], positive=True) * factor,
+                 'currency_migration': {'method': method, 'at': at, 'legacy_state': previous,
+                     'interval_unattributed': unattributed, 'historical_fx_reconstructed': False}}
+    # Cash-flow totals were already USDT in the old implementation: never scale
+    # them or change the origin used by existing virtual capital allocations.
+    return converted, unattributed
+
+
+def _save_equity(env, state):
+    with evidence.connection() as db:
+        db.execute('INSERT OR REPLACE INTO equity_state VALUES (?,?)', (env.identity, evidence.canonical(state)))
+    evidence.append(env.identity, 'equity', state)
 
 
 def equity_guard(env, balance, policy):
     with evidence.connection() as db:
         row=db.execute('SELECT payload FROM equity_state WHERE scope=?',(env.identity,)).fetchone()
     previous=json.loads(row[0]) if row else None
-    equity=risk.number(balance.get('totalEq'),positive=True)
     at=risk.number(balance.get('uTime'),positive=True)/1000
+    equity=capital_pool.usdt_equity(balance)
+    if previous and at < previous['at']:
+        raise risk.RiskRejected('Equity observation did not advance')
+    migrating=bool(previous and previous.get('equity_currency') != 'USDT')
+    previous, continuity_bridge = _usdt_equity_previous(env,previous,equity,at)
     flow=0.; complete=previous is None
     if previous:
         if at==previous['at']:
             if abs(equity-previous['equity'])>1e-8: raise risk.RiskRejected('Contradictory equity timestamp')
             previous.setdefault('external_flow_total',0.)
             previous.setdefault('external_flow_origin',previous['at'])
+            if migrating:
+                _save_equity(env,previous)
             capital_pool.observe_existing(env,previous,policy,balance=balance)
             if previous['blocked']: raise risk.RiskRejected('Equity drawdown circuit breaker active')
             return previous
@@ -67,7 +129,7 @@ def equity_guard(env, balance, policy):
                 if ts<=previous['at'] or ts>at: continue
                 kind=str(bill.get('type'))
                 if kind=='1':
-                    if bill.get('ccy')!='USDT': raise risk.RiskRejected('Non-USDT external flow requires reconciliation')
+                    if bill.get('ccy')!='USDT': continue  # Not part of the USDT equity component.
                     flow+=risk.number(bill.get('balChg'))
                 elif kind not in {'2','8'}:
                     raise risk.RiskRejected('Unclassified account bill; manual flow review required')
@@ -76,10 +138,16 @@ def equity_guard(env, balance, policy):
             cursor=str(rows[-1].get('billId'))
             if cursor==after: break
             after=cursor
-    state=risk.update_equity_state(previous,equity=equity,at=at,cash_flow=flow,complete=complete,policy=policy)
-    with evidence.connection() as db:
-        db.execute('INSERT OR REPLACE INTO equity_state VALUES (?,?)',(env.identity,evidence.canonical(state)))
-    evidence.append(env.identity,'equity',state)
+    state=risk.update_equity_state(previous,equity=equity,at=at,
+        cash_flow=0. if continuity_bridge else flow,complete=complete,policy=policy)
+    state['equity_currency']='USDT'
+    state['external_flow_total']=risk.number((previous or {}).get('external_flow_total',0))+flow
+    if previous and previous.get('currency_migration'):
+        state['currency_migration']=previous['currency_migration']
+    if migrating:
+        state['currency_migration']['external_flow_delta_usdt']=flow
+        state['blocked']=state['blocked'] or bool(previous.get('blocked'))
+    _save_equity(env,state)
     capital_pool.observe_existing(env,state,policy,balance=balance)
     if state['blocked']: raise risk.RiskRejected('Equity drawdown circuit breaker active; protection remains enabled')
     return state
@@ -104,11 +172,19 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     if getattr(env,'connection_id','') and (record.get('connection_id')!=env.connection_id or record.get('binding_version')!=env.binding_version):
         raise risk.RiskRejected('Account binding changed after decision; fresh inference required')
     decision=record.get('decision',{})
+    from scripts.decision_authorization import assert_strategy
+    assert_strategy(decision)
     minute_engine=(record.get('features') or {}).get('strategy_engine') == 'demo_scalp_v2'
     if minute_engine:
         from scripts.demo_scalp import enabled
-        if env.mode != 'demo' or not enabled(env):
-            raise risk.RiskRejected('Minute experiment is enabled for DEMO only')
+        if not enabled(env):
+            raise risk.RiskRejected('Minute engine is not authorized for this account')
+        if env.mode == 'live':
+            from scripts.strategy_engine_runtime import status as engine_status, BINDING_FIELDS
+            binding=engine_status(env)
+            frozen_binding=decision.get('engine_binding') or {}
+            if any(frozen_binding.get(k)!=binding.get(k) for k in (*BINDING_FIELDS,'record_id')):
+                raise risk.RiskRejected('Minute engine authorization changed after decision')
         # Frozen identity must agree at every boundary; never trust a caller's horizon.
         if decision.get('horizon') != 'scalp' or horizon != 'scalp':
             raise risk.RiskRejected('Minute strategy mode mismatch')
@@ -156,7 +232,6 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     mode=mode_for(horizon)
     from scripts.execution_leverage import mode_policy, choose as choose_leverage, apply as apply_leverage
     policy=mode_policy(policy,horizon,env)
-    reconcile_intents(env)
     from pathlib import Path
     cooldown_file=Path(__file__).resolve().parents[1]/'data'/'stop_cooldown.json'
     if cooldown_file.exists():
@@ -182,6 +257,7 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     entry, stop, take_profit = [tick_price(v) for v in (entry, stop, take_profit)]
     positions=_request('GET','/api/v5/account/positions',{'instType':'SWAP'},env)
     pending=_request('GET','/api/v5/trade/orders-pending',{'instType':'SWAP'},env)
+    reconcile_intents(env,pending_orders=pending)
     balances=_request('GET','/api/v5/account/balance',{},env)
     if len(balances)!=1: raise risk.RiskRejected('Invalid account balance snapshot')
     observed_equity=equity_guard(env,balances[0],policy)
@@ -193,6 +269,9 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     basis=record.get('position_basis',{})
     if abs(sum(abs(risk.number(p.get('pos') or 0)) for p in existing)-abs(risk.number(basis.get('size') or 0)))>1e-9:
         raise risk.RiskRejected('Position basis changed since inference; no stale scale/entry reinterpretation')
+    if existing:
+        if len(existing)!=1 or any(not basis.get(k) or str(basis.get(k))!=str(existing[0].get(k)) for k in ('posId','cTime')):
+            raise risk.RiskRejected('Position lifecycle changed since inference; no stale scale authorization')
     if any(p.get('posSide')!=side for p in existing): raise risk.RiskRejected('Opposing/unsupported position appeared during inference')
     if any(p.get('instId')==inst_id and str(p.get('reduceOnly','false')).lower() not in {'true','1'} for p in pending):
         raise risk.RiskRejected('Instrument already has pending entry exposure')
@@ -251,6 +330,8 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     plan['portfolio_before']=portfolio
     plan['decision_id']=decision_id
     plan['scope']=env.identity
+    plan['strategy_profile_hash']=decision.get('strategy_profile_hash')
+    plan['engine_binding']=decision.get('engine_binding')
     plan['entry_policy']=decision.get('entry_policy')
     plan['candidate_id']=decision.get('candidate_id')
     plan['selection_research']=decision.get('selection_research')
@@ -265,13 +346,13 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
         plan['correlation_slot']=slot
         cluster={'BTC','ETH','SOL','DOGE','SUI','XRP'}
         with evidence.connection() as db:
-            peers=db.execute('SELECT payload FROM intents WHERE scope=? AND at>=? AND at<?',
+            peers=db.execute('SELECT payload FROM intents WHERE scope=? AND at>=? AND at<? AND state NOT IN ("not_submitted","not_found")',
                              (env.identity,slot*900,(slot+1)*900)).fetchall()
         for (raw,) in peers:
             peer=json.loads(raw)
             if inst_id.split('-')[0] in cluster and str(peer.get('instId','')).split('-')[0] in cluster and peer.get('side')==side:
                 raise risk.RiskRejected('Correlated same-direction entry already reserved in this 15M window')
-    actual_leverage=apply_leverage(env,inst_id,side,target_leverage,current_leverage,decision_id,_request)
+    actual_leverage=apply_leverage(env,inst_id,side,target_leverage,current_leverage,decision_id,_request,horizon=horizon)
     if time.time() >= float(decision.get('valid_until') or 0):
         raise risk.RiskRejected('Candidate expired during leverage confirmation')
     if actual_leverage!=current_leverage:
@@ -291,5 +372,10 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     plan['leverage']=actual_leverage
     plan['leverage_verified']=True
     plan['previous_leverage']=current_leverage
+    assert_strategy(decision)
+    if minute_engine and env.mode=='live':
+        current_binding=engine_status(env)
+        if not current_binding.get('enabled') or any(frozen_binding.get(k)!=current_binding.get(k) for k in (*BINDING_FIELDS,'record_id')):
+            raise risk.RiskRejected('Minute engine authorization changed before submission')
     client_id=evidence.begin_intent(env.identity,decision_id,inst_id,plan)
     return plan,client_id

@@ -34,9 +34,9 @@ def plugin_statuses() -> list[dict[str, Any]]:
     result = []
     for manifest in PLUGINS:
         enabled = True if not manifest.enabled_key else env.get(manifest.enabled_key) == "1"
-        health = "disabled" if not enabled else "healthy"
+        health = "disabled" if not enabled else "unknown"
         detail = "内置插件"
         payload = asdict(manifest)
-        payload.update({"enabled": enabled, "health": health, "detail": detail})
+        payload.update({"enabled": enabled, "health": health, "detail": detail, "execution_isolation": "in-process-trusted", "permissions_enforced": False, "health_verified": False})
         result.append(payload)
     return result

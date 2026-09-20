@@ -193,8 +193,9 @@ def _load(scope):
     if not isinstance(raw,dict) or raw.get('scope')!=scope or not isinstance(raw.get('items'),dict):raise ValueError('Invalid WAIT audit state')
     # Scope-specific audit files survive account resets; isolate them by the active cycle.
     try:
-        initial=json.loads((DATA/'account_initial_state.json').read_text(encoding='utf8'))
-        cycle_start=initial.get('reset_time')
+        from okxquant_backend.account_baseline import load_account_baseline
+        initial=load_account_baseline(scope=scope, path=DATA/'account_initial_state.json')
+        cycle_start=initial.get('reset_time') if initial.get('baseline_configured') else None
     except (OSError,ValueError,TypeError):
         cycle_start=None
     if cycle_start and raw.get('cycle_start') != cycle_start:

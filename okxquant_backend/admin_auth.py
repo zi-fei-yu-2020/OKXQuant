@@ -133,6 +133,9 @@ class AdminAuthStore:
         now_epoch = int(time.time())
         failure_message = ""
         with self.connect() as connection:
+            # Serialize read/verify/increment, otherwise concurrent failures can
+            # overwrite each other's counters and bypass the existing lockout.
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT * FROM admin_users WHERE username=? COLLATE NOCASE", (username.strip(),)).fetchone()
             if row and not row["enabled"]:
                 failure_message = "管理员账号已停用，请联系超级管理员"
@@ -216,6 +219,7 @@ class AdminAuthStore:
         if user_id == actor_id and not enabled:
             raise ValueError("不能停用当前登录账号")
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             target = connection.execute("SELECT role,enabled FROM admin_users WHERE id=?", (user_id,)).fetchone()
             if not target:
                 raise ValueError("管理员不存在")

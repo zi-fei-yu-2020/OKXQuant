@@ -3,18 +3,19 @@ import { computed } from 'vue'
 import { Wallet, TrendingUp, CalendarDays, Layers } from 'lucide-vue-next'
 import { useDashboardStore } from '../stores/dashboard'
 import AppCard from './ui/AppCard.vue'
+import { observedNumber } from '../utils/observationDisplay'
 const store = useDashboardStore()
 const account = computed(() => store.data?.account)
-const ready = computed(() => account.value?.total_eq != null)
+const ready = computed(() => observedNumber(account.value?.total_eq) !== null)
 const today = computed(() => store.data?.today_stats)
 const fmt = (value: unknown) =>
-  value == null || !Number.isFinite(Number(value))
+  observedNumber(value) === null
     ? '—'
     : Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const signed = (value: unknown) =>
-  value == null ? '—' : `${Number(value) > 0 ? '+' : ''}${fmt(value)}`
+  observedNumber(value) === null ? '—' : `${Number(value) > 0 ? '+' : ''}${fmt(value)}`
 const tone = (value: unknown) =>
-  !ready.value || value == null || Number(value) === 0
+  !ready.value || observedNumber(value) === null || Number(value) === 0
     ? 'var(--text-main)'
     : Number(value) > 0
       ? 'var(--color-up)'
@@ -68,17 +69,17 @@ const positionMargin = computed(() =>
       </div>
       <div
         class="metric-card__value num-tabular"
-        :style="{ color: tone(today?.net_realized ?? today?.total_pnl) }"
+        :style="{ color: tone(today?.net_realized) }"
       >
-        {{ ready ? signed(today?.net_realized ?? today?.total_pnl) : '—' }}
+        {{ ready ? signed(today?.net_realized) : '—' }}
         <span class="text-xs font-normal tracking-normal text-[var(--text-faint)]">USDT</span>
       </div>
       <div class="metric-card__footer">
         {{
           ready
-            ? `${Number(today?.win_trades || 0) + Number(today?.loss_trades || 0)} 笔平仓`
+            ? `${observedNumber(today?.closed_trades) ?? '—'} 笔已结算`
             : '暂无成交数据'
-        }}<span class="ml-auto">胜率 {{ ready && today ? `${fmt(today.win_rate)}%` : '—' }}</span>
+        }}<span class="ml-auto">胜率 {{ ready && (observedNumber(today?.closed_trades) ?? 0) > 0 && observedNumber(today?.win_rate) !== null ? `${fmt(today?.win_rate)}%` : '—' }}</span>
       </div>
       <div class="metric-card__footer mt-1">
         UTC+8 · 手续费 {{ ready ? fmt(today?.fees_paid ?? today?.total_fees ?? today?.fees) : '—' }}

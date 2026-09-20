@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import secrets
 import subprocess
 import threading
@@ -30,19 +31,19 @@ def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def _run_cli(command: list[str], timeout: int = 20) -> list[dict[str, Any]]:
+def _run_cli(command: list[str], timeout: int = 20, environment: OKXEnvironment | None = None) -> list[dict[str, Any]]:
     try:
-        res = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        res = subprocess.run(command, capture_output=True, text=True, timeout=timeout,
+                             env=environment.cli_env() if environment else None)
     except Exception as exc:
-        raise RuntimeError(f"OKX CLI 执行失败：{type(exc).__name__}: {exc}") from exc
+        raise RuntimeError(f"OKX CLI execution failed: {type(exc).__name__}") from None
     if res.returncode != 0:
-        err_msg = res.stderr.strip() or res.stdout.strip() or f"exit code {res.returncode}"
-        raise RuntimeError(f"OKX CLI 错误：{err_msg}")
+        raise RuntimeError(f"OKX CLI execution failed (exit code {res.returncode}); account unchanged")
     try:
         data = json.loads(res.stdout or "[]")
         rows = data if isinstance(data, list) else [data]
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"OKX CLI JSON 解析失败：{exc} stdout={res.stdout[:200]}") from exc
+        raise RuntimeError("OKX CLI returned invalid JSON; raw response omitted") from None
     failures = [row for row in rows if isinstance(row, dict) and str(row.get("sCode", row.get("code", "0"))) != "0"]
     if failures:
         code = failures[0].get("sCode", failures[0].get("code", "--"))
@@ -59,9 +60,14 @@ def _request_untracked(method: str, path: str, params: dict[str, Any] | list[dic
     if isinstance(params, list) and (method == "GET" or not params or not all(isinstance(row, dict) for row in params)):
         raise ValueError("OKX 批量请求需要非空对象数组，且不能用于 GET")
     selected = env or selected_environment()
+    from .connection_transport import READ_PATHS, WRITE_PATHS
+    if selected.base_url != "https://www.okx.com" or method not in {"GET", "POST"} or path not in (READ_PATHS if method == "GET" else WRITE_PATHS):
+        raise ValueError("Only allowlisted OKX REST operations are permitted")
     from okxquant_backend.account_connections import assert_current
     assert_current(selected)
     if not selected.configured:
+        if any((selected.api_key, selected.secret_key, selected.passphrase)):
+            raise RuntimeError("Selected API credential group is incomplete; no OAuth fallback")
         if isinstance(params, list):
             raise RuntimeError("批量 OKX REST 操作需要当前环境的静态 API Key")
         # Fallback to CLI
@@ -70,18 +76,18 @@ def _request_untracked(method: str, path: str, params: dict[str, Any] | list[dic
             cmd = ["okx", mode_flag, "account", "positions", "--json"]
             if params and params.get("instId"):
                 cmd.extend(["--instId", str(params["instId"])])
-            return _run_cli(cmd, timeout=timeout)
+            return _run_cli(cmd, timeout=timeout, environment=selected)
         elif path == "/api/v5/trade/orders-pending":
             cmd = ["okx", mode_flag, "swap", "orders", "--json"]
             if params and params.get("instId"):
                 cmd.extend(["--instId", str(params["instId"])])
-            return _run_cli(cmd, timeout=timeout)
+            return _run_cli(cmd, timeout=timeout, environment=selected)
         elif path == "/api/v5/trade/cancel-order":
             cmd = ["okx", mode_flag, "swap", "cancel", str(params.get("instId")), "--ordId", str(params.get("ordId")), "--json"]
-            return _run_cli(cmd, timeout=timeout)
+            return _run_cli(cmd, timeout=timeout, environment=selected)
         elif path == "/api/v5/trade/close-position":
             cmd = ["okx", mode_flag, "swap", "close", "--instId", str(params.get("instId")), "--mgnMode", str(params.get("mgnMode", "cross")), "--posSide", str(params.get("posSide", "net")), "--autoCxl", "--json"]
-            return _run_cli(cmd, timeout=timeout)
+            return _run_cli(cmd, timeout=timeout, environment=selected)
         raise RuntimeError(f"OKX {selected.mode.upper()} 静态 API Key 未配置，且不支持该操作的 CLI 回退：{path}")
 
     cleaned = ([{k: v for k, v in row.items() if v not in (None, "")} for row in params]
@@ -98,11 +104,20 @@ def _request_untracked(method: str, path: str, params: dict[str, Any] | list[dic
             "OK-ACCESS-SIGN":signature, "OK-ACCESS-TIMESTAMP":timestamp, "OK-ACCESS-PASSPHRASE":selected.passphrase,
         }
         if selected.simulated: headers["x-simulated-trading"] = "1"
-        request = urllib.request.Request(selected.base_url + request_path, data=body_text.encode() if body_text else None, headers=headers, method=method)
+        request = urllib.request.Request(selected.base_url + request_path, data=body_text.encode() if body_text else None, method=method)
+        for key, value in headers.items():
+            # urllib must never forward signed credentials to a redirected host.
+            request.add_unredirected_header(key, value)
         return request
     from .okx_request_transport import request_json
     payload=request_json(make_request,method=method,path=path,timeout=timeout,scope=selected.identity)
-    if str(payload.get("code", "0")) != "0": raise OKXAPIError(payload.get("code"), payload.get("msg"))
+    def api_error(code, message):
+        text = str(message or "Request failed")
+        for secret in (selected.api_key, selected.secret_key, selected.passphrase):
+            if secret:
+                text = text.replace(secret, "[REDACTED]")
+        return OKXAPIError(code, text)
+    if str(payload.get("code", "0")) != "0": raise api_error(payload.get("code"), payload.get("msg"))
     reconciliation_reads = {'/api/v5/trade/order', '/api/v5/trade/orders-pending',
                             '/api/v5/trade/orders-history', '/api/v5/trade/fills-history',
                             '/api/v5/account/positions'}
@@ -112,7 +127,7 @@ def _request_untracked(method: str, path: str, params: dict[str, Any] | list[dic
     data = payload.get("data") or []
     if not isinstance(data, list): data = [data]
     failures = [row for row in data if isinstance(row, dict) and str(row.get("sCode", "0")) != "0"]
-    if failures: raise OKXAPIError(failures[0].get("sCode"), failures[0].get("sMsg"))
+    if failures: raise api_error(failures[0].get("sCode"), failures[0].get("sMsg"))
     return [row for row in data if isinstance(row, dict)]
 
 
@@ -127,9 +142,12 @@ def _request(method: str, path: str, params=None, env=None, timeout: int = 20):
 
 
 def _create_intent(env: OKXEnvironment, position: dict[str, Any]) -> tuple[str, str]:
-    token = secrets.token_urlsafe(32); size = abs(float(position.get("pos", 0) or 0)); side = str(position.get("posSide") or "net").lower()
+    token = secrets.token_urlsafe(32); signed_size = float(position.get("pos", 0) or 0)
+    if not math.isfinite(signed_size) or signed_size == 0:
+        raise ValueError("Invalid position size for close confirmation")
+    size = abs(signed_size); side = str(position.get("posSide") or "net").lower()
     confirmation = f"CLOSE {env.mode.upper()} {position.get('instId')} {side.upper()} {size:g}"
-    record = {"environment_id":env.identity,"instId":str(position.get("instId")),"posSide":side,"posId":str(position.get("posId") or ""),"expected_size":size,"confirmation":confirmation,"expires_at":time.time()+INTENT_TTL_SECONDS}
+    record = {"environment_id":env.identity,"connection_id":env.connection_id,"binding_version":env.binding_version,"credential_fingerprint":env.fingerprint,"instId":str(position.get("instId")),"posSide":side,"posId":str(position.get("posId") or ""),"expected_size":size,"expected_signed_size":signed_size,"confirmation":confirmation,"expires_at":time.time()+INTENT_TTL_SECONDS}
     with _INTENT_LOCK:
         now=time.time(); stale=[key for key,value in _INTENTS.items() if value["expires_at"]<now]
         for key in stale: _INTENTS.pop(key,None)
@@ -162,13 +180,23 @@ def _position_match(positions: list[dict[str, Any]], intent: dict[str, Any]) -> 
 
 
 def fast_close_confirmed(close_token: str, confirmation: str) -> dict[str, Any]:
+    from scripts.trade_lock import writer
+    # Serialize the entire read/validate/cancel/close/confirm transaction, not just
+    # individual POSTs, so two independently issued tokens cannot race a close.
+    with writer():
+        return _fast_close_confirmed(close_token, confirmation)
+
+
+def _fast_close_confirmed(close_token: str, confirmation: str) -> dict[str, Any]:
     intent=_consume_intent(close_token); env=selected_environment()
-    if env.identity!=intent["environment_id"]: raise ValueError("OKX 环境或凭证已变化，请刷新当前持仓")
+    if (env.identity,env.connection_id,env.binding_version,env.fingerprint)!=(intent["environment_id"],intent["connection_id"],intent["binding_version"],intent["credential_fingerprint"]): raise ValueError("OKX 环境或凭证已变化，请刷新当前持仓")
     if confirmation.strip().upper()!=intent["confirmation"]: raise ValueError(f"确认短语必须精确为：{intent['confirmation']}")
     target=_position_match(_request("GET","/api/v5/account/positions",{"instType":"SWAP","instId":intent["instId"]},env),intent)
     if not target: raise ValueError("目标仓位已不存在，请刷新")
-    actual=abs(float(target.get("pos",0) or 0)); tolerance=max(1e-12,actual*1e-6)
-    if abs(actual-intent["expected_size"])>tolerance: raise ValueError(f"仓位数量已从 {intent['expected_size']} 变化为 {actual}，请刷新")
+    signed_actual=float(target.get("pos",0) or 0)
+    if not math.isfinite(signed_actual): raise ValueError("Invalid current position size")
+    actual=abs(signed_actual); tolerance=max(1e-12,actual*1e-6)
+    if abs(signed_actual-intent["expected_signed_size"])>tolerance: raise ValueError(f"仓位数量已从 {intent['expected_size']} 变化为 {actual}，请刷新")
     target_side=intent["posSide"] if intent["posSide"] in {"long","short"} else ("long" if float(target.get("pos",0) or 0)>0 else "short")
     canceled=[]; cancel_failures=[]
     for order in _request("GET","/api/v5/trade/orders-pending",{"instType":"SWAP","instId":intent["instId"]},env):
@@ -184,12 +212,13 @@ def fast_close_confirmed(close_token: str, confirmation: str) -> dict[str, Any]:
     if cancel_failures:
         raise RuntimeError("平仓前存在无法撤销的同仓位委托：" + "; ".join(cancel_failures))
     close_side = intent["posSide"] if intent["posSide"] in {"long", "short"} else "net"
-    client_id=f"okxquantclose{int(time.time())}"
+    client_id="oqclose"+hashlib.sha256(close_token.encode()).hexdigest()[:24]
     close_result=_request("POST","/api/v5/trade/close-position",{"instId":intent["instId"],"mgnMode":str(target.get("mgnMode") or "cross"),"posSide":close_side,"autoCxl":True,"clOrdId":client_id},env)
     remaining=actual
     for _ in range(10):
         time.sleep(.7); current=_position_match(_request("GET","/api/v5/account/positions",{"instType":"SWAP","instId":intent["instId"]},env),intent)
         remaining=abs(float(current.get("pos",0) or 0)) if current else 0.0
+        if not math.isfinite(remaining): raise RuntimeError("Close submitted but current position size is invalid; do not repeat")
         if remaining<=tolerance: break
     if remaining>tolerance: raise RuntimeError(f"平仓请求已受理但仓位未确认归零，剩余 {remaining}；请刷新，禁止重复点击")
     try:

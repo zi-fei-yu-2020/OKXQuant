@@ -1,6 +1,8 @@
 """Persistent Beijing-time schedules shared by the admin plane and scheduler."""
 from __future__ import annotations
 import json
+import copy
+import re
 import os
 import tempfile
 from pathlib import Path
@@ -18,12 +20,22 @@ DEFAULT_SCHEDULE = {
 
 def load_schedule() -> dict[str, Any]:
     if not SCHEDULE_FILE.exists():
-        return dict(DEFAULT_SCHEDULE)
+        return copy.deepcopy(DEFAULT_SCHEDULE)
     try:
         payload = json.loads(SCHEDULE_FILE.read_text(encoding="utf-8"))
-        return {**DEFAULT_SCHEDULE, **payload}
+        if not isinstance(payload, dict):
+            return copy.deepcopy(DEFAULT_SCHEDULE)
+        result = copy.deepcopy(DEFAULT_SCHEDULE)
+        times = payload.get("briefing_times")
+        valid = lambda value: isinstance(value, str) and re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", value) is not None
+        if isinstance(times, list) and 1 <= len(times) <= 6 and all(valid(t) for t in times):
+            result["briefing_times"] = sorted(set(times))
+        for key in ("self_improvement_time", "backup_time"):
+            if valid(payload.get(key)):
+                result[key] = payload[key]
+        return result
     except (OSError, json.JSONDecodeError):
-        return dict(DEFAULT_SCHEDULE)
+        return copy.deepcopy(DEFAULT_SCHEDULE)
 
 
 def save_schedule(schedule: dict[str, Any]) -> None:

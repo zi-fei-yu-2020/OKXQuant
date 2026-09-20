@@ -320,7 +320,7 @@ def _oauth_page(env, params, deadline):
 
 
 def _fetch_all(env, deadline, priority):
-    result, seen = [], set()
+    result, seen = [], {}
     first_started = None
     # SDK CLI accepts single enum types: no implicit 3-type fan-out for OAuth.
     for kind in (('conditional,oco',) if env.configured else ('conditional','oco')):
@@ -337,7 +337,14 @@ def _fetch_all(env, deadline, priority):
             for row in rows:
                 algo_id = str(row.get('algoId') or '')
                 if not algo_id or not row.get('instId'): raise _WireError('invalid_order_identity')
-                if algo_id not in seen: result.append(row); seen.add(algo_id)
+                if algo_id in seen:
+                    if seen[algo_id] != row:
+                        # Exchange-side triggers/amendments need not change our
+                        # local epoch. Do not keep an earlier green duplicate.
+                        raise _WireError('snapshot_changed_during_read', retryable=True)
+                else:
+                    result.append(row)
+                    seen[algo_id] = row
             if len(rows) < 100: break
             cursor = str(rows[-1].get('algoId') or '')
             if not cursor or cursor == after: raise _WireError('pagination_incomplete')

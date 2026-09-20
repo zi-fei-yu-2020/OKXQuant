@@ -15,6 +15,7 @@ ExecStart=/usr/bin/env python3 -m uvicorn okxquant_backend.app:app --host 0.0.0.
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

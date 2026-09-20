@@ -126,6 +126,8 @@ def compute_instrument_factors(item: Dict[str, Any], smart_money_pool: Dict[str,
             "skewness": 0.0,
             "kurtosis": 0.0,
             "continuation_prob_pct": 50.0,
+            "probability_calibrated": False,
+            "probability_semantics": "heuristic_direction_score_not_empirical_win_rate",
             "breakdown_prob_pct": 50.0,
             "var_95_pct": 1.5,
             "cvar_95_pct": 2.2,
@@ -191,7 +193,7 @@ def compute_instrument_factors(item: Dict[str, Any], smart_money_pool: Dict[str,
                 tr_list.append(tr)
             if len(tr_list) >= 14:
                 atr = sum(tr_list[-14:]) / 14
-                factors["volatility_channel"]["atr_14"] = round(atr, 4)
+                factors["volatility_channel"]["atr_14"] = atr  # Price units: do not round low-priced assets to zero.
                 if factors["price"] > 0:
                     factors["volatility_channel"]["atr_pct"] = round(atr / factors["price"] * 100, 2)
 
@@ -202,8 +204,8 @@ def compute_instrument_factors(item: Dict[str, Any], smart_money_pool: Dict[str,
             if len(gains) >= 14:
                 avg_g = sum(gains[-14:]) / 14
                 avg_l = sum(losses[-14:]) / 14
-                rs = (avg_g / avg_l) if avg_l > 0 else 100.0
-                factors["trend_momentum"]["rsi_14"] = round(100.0 - (100.0 / (1.0 + rs)), 1)
+                rsi = 50.0 if avg_g == avg_l == 0 else 100.0 if avg_l == 0 else 100.0 - 100.0 / (1.0 + avg_g / avg_l)
+                factors["trend_momentum"]["rsi_14"] = round(rsi, 1)
 
             # VWAP Bias
             pv_sum = sum(closes[i] * vols[i] for i in range(len(closes)))
@@ -277,7 +279,7 @@ def compute_instrument_factors(item: Dict[str, Any], smart_money_pool: Dict[str,
                 tr_list_1h.append(tr)
             if len(tr_list_1h) >= 14:
                 atr_1h = sum(tr_list_1h[-14:]) / 14
-                factors["volatility_channel"]["atr_1h"] = round(atr_1h, 4)
+                factors["volatility_channel"]["atr_1h"] = atr_1h  # Preserve price-unit precision.
                 if factors["price"] > 0:
                     factors["volatility_channel"]["atr_1h_pct"] = round(atr_1h / factors["price"] * 100, 2)
     except Exception:
@@ -486,7 +488,7 @@ def update_factor_library() -> Dict[str, Any]:
             print(f"[Factor Library] SmartMoney read unavailable: {type(exc).__name__}")
         with ThreadPoolExecutor(max_workers=6) as executor:
             results = list(executor.map(
-                lambda item: market.run_with_deadline(deadline, compute_instrument_factors, item, smart_money_pool), instruments))
+                market.bind_signal_frame(lambda item: market.run_with_deadline(deadline, compute_instrument_factors, item, smart_money_pool)), instruments))
         fresh = smart_money_ok and all(
             item.get("price", 0) > 0 and item["collection_quality"]["status"] == "fresh" for item in results)
         snapshot = {

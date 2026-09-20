@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useApiAction } from '../../composables/useApiAction'
+const { action, actionBusy, canManage } = useApiAction(() => loading.value || loadFailed.value)
+
 import AppCard from '../../components/ui/AppCard.vue'
 
 import { useFeedback, useToast } from '../../composables/useFeedback'
@@ -30,6 +33,7 @@ const { api } = useApi()
 const auth = useAuthStore()
 
 const loading = ref(true)
+const loadFailed = ref(false)
 const saving = ref(false)
 const testing = ref(false)
 const bannerMsg = useFeedback()
@@ -85,6 +89,7 @@ const roleColors: Record<string, string> = {
 }
 
 async function loadData() {
+  loadFailed.value = false
   loading.value = true
   try {
     const [cRes, mRes] = await Promise.all([
@@ -100,13 +105,29 @@ async function loadData() {
     }
   } catch (e: any) {
     if (e?.silent) return
+    loadFailed.value = true
     bannerMsg.value = { text: `加载配置失败: ${e.message}`, type: 'err' }
   } finally {
     loading.value = false
   }
 }
 
-async function saveConfig() {
+const toggleCouncil = action(async () => {
+  try {
+    // Toggle persisted mode independently; do not save or discard role drafts.
+    const current = await api('/api/v1/admin/council/config')
+    const res = await api('/api/v1/admin/council/config', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled: !current.enabled, consensus_mode: current.consensus_mode, timeout_seconds: current.timeout_seconds, roles: current.roles }),
+    })
+    councilConfig.value.enabled = res.config.enabled
+    bannerMsg.value = { text: res.config.enabled ? '已切换为委员会模式，下一次新决策生效；未保存的角色编辑保持。' : '已切换为单模型模式，下一次新决策生效；未保存的角色编辑保持。', type: 'ok' }
+  } catch (e: any) {
+    if (!e?.silent) bannerMsg.value = { text: `切换失败：${e.message}`, type: 'err' }
+  }
+})
+
+const saveConfig = action(async () => {
   if (!auth.isSuperadmin) {
     bannerMsg.value = { text: '仅超级管理员可修改投委会配置', type: 'err' }
     return
@@ -135,11 +156,11 @@ async function saveConfig() {
   } finally {
     saving.value = false
   }
-}
+})
 
-async function applySuite(suiteId: string) {
+const applySuite = action(async (suiteId: string) => {
   if (!auth.isSuperadmin) return
-  if (!(await confirm('确定载入对冲基金标准投委会套件吗？将恢复标准交易员阵容。'))) return
+  if (!(await confirm('载入标准套件会恢复交易员阵容，并丢弃此页未保存编辑。继续？'))) return
   try {
     const res = await api('/api/v1/admin/council/apply-suite', {
       method: 'POST',
@@ -151,7 +172,7 @@ async function applySuite(suiteId: string) {
     if (e?.silent) return
     bannerMsg.value = { text: `载入失败: ${e.message}`, type: 'err' }
   }
-}
+})
 
 function addNewCustomTrader() {
   if (!auth.isSuperadmin) return
@@ -190,10 +211,10 @@ async function removeRole(roleId: string) {
   bannerMsg.value = { text: '已移除席位，点击右上角「保存配置」后生效', type: 'warn' }
 }
 
-async function resetRole(roleId: string) {
+const resetRole = action(async (roleId: string) => {
   if (
     !(await confirm(
-      `确定将【${councilConfig.value.roles[roleId]?.name || roleId}】恢复出厂提示词吗？`,
+      `确定将【${councilConfig.value.roles[roleId]?.name || roleId}】恢复出厂提示词吗？此页其他未保存编辑也会丢失。`,
     ))
   )
     return
@@ -208,9 +229,9 @@ async function resetRole(roleId: string) {
     if (e?.silent) return
     bannerMsg.value = { text: `重置失败: ${e.message}`, type: 'err' }
   }
-}
+})
 
-async function runDebateTest() {
+const runDebateTest = action(async () => {
   testing.value = true
   testResult.value = null
   expandedReasoning.value = {}
@@ -238,7 +259,7 @@ async function runDebateTest() {
   } finally {
     testing.value = false
   }
-}
+}, false)
 
 onMounted(loadData)
 
@@ -249,6 +270,7 @@ const toast = useToast()
 
 <template>
   <div class="space-y-4">
+    <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading || actionBusy" @click="loadData()">重试</button></div>
     <!-- Notice Banner -->
 
     <!-- 1. Top Control Station: Switch, Consensus Mode & Actions -->
@@ -307,7 +329,7 @@ const toast = useToast()
           <!-- Toggle Button -->
           <button
             type="button"
-            @click="auth.isSuperadmin && (councilConfig.enabled = !councilConfig.enabled)"
+            @click="toggleCouncil"
             class="flex items-center space-x-2 px-3 py-1.5 rounded-xl border cursor-pointer transition-colors text-sm font-sans font-bold"
             :style="
               councilConfig.enabled
@@ -322,7 +344,7 @@ const toast = useToast()
                     color: 'var(--text-muted)',
                   }
             "
-            :disabled="!auth.isSuperadmin"
+            :disabled="(!auth.isSuperadmin) || actionBusy"
           >
             <ToggleRight v-if="councilConfig.enabled" class="w-4 h-4 text-emerald-400" />
             <ToggleLeft v-else class="w-4 h-4 text-[var(--text-muted)]" />
@@ -332,7 +354,7 @@ const toast = useToast()
           <!-- Save Button -->
           <button
             @click="saveConfig"
-            :disabled="saving || !auth.isSuperadmin"
+            :disabled="(saving || !auth.isSuperadmin) || actionBusy || !canManage"
             class="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-sm font-sans font-bold cursor-pointer disabled:opacity-40 shadow-xs transition-all"
             style="background-color: var(--text-main); color: var(--bg-card)"
           >
@@ -343,7 +365,7 @@ const toast = useToast()
           <!-- Test Button -->
           <button
             @click="runDebateTest"
-            :disabled="testing"
+            :disabled="(testing) || actionBusy"
             class="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl border text-sm font-sans font-bold cursor-pointer disabled:opacity-40 transition-all shadow-xs"
             style="
               background-color: var(--bg-card-subtle);
@@ -423,7 +445,7 @@ const toast = useToast()
               border-color: var(--border-subtle);
               color: var(--text-main);
             "
-            :disabled="!auth.isSuperadmin"
+            :disabled="(!auth.isSuperadmin) || actionBusy"
           />
           <span class="text-xs font-sans text-[var(--text-muted)]"
             >秒 (超时自动降级为单模型决策)</span
@@ -433,7 +455,7 @@ const toast = useToast()
         <div class="flex items-center space-x-2">
           <button
             @click="applySuite('hedge_fund_desk')"
-            :disabled="!auth.isSuperadmin"
+            :disabled="(!auth.isSuperadmin) || actionBusy || !canManage"
             class="flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-sm font-sans cursor-pointer transition-all"
             style="
               background-color: var(--bg-card-subtle);
@@ -446,7 +468,7 @@ const toast = useToast()
           </button>
           <button
             @click="addNewCustomTrader"
-            :disabled="!auth.isSuperadmin"
+            :disabled="(!auth.isSuperadmin) || actionBusy"
             class="flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-dashed text-sm font-sans cursor-pointer transition-all"
             style="border-color: var(--color-brand); color: var(--color-brand)"
           >
@@ -482,7 +504,7 @@ const toast = useToast()
             </span>
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-2">
-                <input :aria-label="String(roleId) + ' 席位名称'"
+                <input :disabled="actionBusy" :aria-label="String(roleId) + ' 席位名称'"
                   v-model="role.name"
                   class="bg-transparent border-b border-dashed text-sm font-bold font-sans outline-none max-w-[240px]"
                   style="border-color: var(--border-medium); color: var(--text-main)"
@@ -544,7 +566,7 @@ const toast = useToast()
                   border-color: var(--border-subtle);
                   color: var(--text-main);
                 "
-                :disabled="!auth.isSuperadmin"
+                :disabled="(!auth.isSuperadmin) || actionBusy"
               >
                 <option value="">(继承全局主脑)</option>
                 <option v-for="m in availableModels" :key="m.id" :value="m.id">
@@ -568,7 +590,7 @@ const toast = useToast()
                   border-color: var(--border-subtle);
                   color: var(--text-main);
                 "
-                :disabled="!auth.isSuperadmin"
+                :disabled="(!auth.isSuperadmin) || actionBusy"
               />
             </div>
 
@@ -576,7 +598,7 @@ const toast = useToast()
             <button
               v-if="!role.is_arbitrator && roleId !== 'cio'"
               @click="role.enabled = role.enabled === false ? true : false"
-              :disabled="!auth.isSuperadmin"
+              :disabled="(!auth.isSuperadmin) || actionBusy"
               class="cursor-pointer p-1"
               :class="role.enabled !== false ? 'text-emerald-400' : 'text-[var(--text-muted)]'"
               :title="role.enabled !== false ? '静音此交易员' : '激活此交易员'"
@@ -593,7 +615,7 @@ const toast = useToast()
                 !['trader_trend', 'trader_momentum', 'trader_quant'].includes(String(roleId))
               "
               @click="removeRole(String(roleId))"
-              :disabled="!auth.isSuperadmin"
+              :disabled="(!auth.isSuperadmin) || actionBusy"
               class="p-1.5 rounded text-rose-400 hover:opacity-80 cursor-pointer"
               title="移除此席位"
             >
@@ -601,7 +623,7 @@ const toast = useToast()
             </button>
 
             <!-- Expand Accordion Button -->
-            <button
+            <button :disabled="actionBusy"
               @click="expandedRole = expandedRole === roleId ? '' : String(roleId)"
               class="p-1.5 rounded cursor-pointer transition-colors"
               style="color: var(--text-muted)"
@@ -634,7 +656,7 @@ const toast = useToast()
                   border-color: var(--border-subtle);
                   color: var(--text-main);
                 "
-                :disabled="!auth.isSuperadmin"
+                :disabled="(!auth.isSuperadmin) || actionBusy"
               />
               <span class="text-xs text-[var(--text-muted)]">(0.1~0.2 严格理性 / 0.3+ 进取)</span>
             </div>
@@ -642,7 +664,7 @@ const toast = useToast()
             <!-- Quick Data Slots Inserter -->
             <div class="flex flex-wrap items-center gap-1 text-xs font-sans">
               <span class="text-[var(--text-muted)]">插入插槽:</span>
-              <button
+              <button :disabled="actionBusy"
                 v-for="slot in [
                   { k: 'macro_4h', label: '4H宏观' },
                   { k: 'calculus_1h', label: '微积分动能' },
@@ -670,7 +692,7 @@ const toast = useToast()
 
               <button
                 @click="resetRole(String(roleId))"
-                :disabled="!auth.isSuperadmin"
+                :disabled="(!auth.isSuperadmin) || actionBusy || !canManage"
                 class="ml-2 flex items-center space-x-1 text-xs text-purple-400 hover:underline cursor-pointer"
               >
                 <RotateCcw class="w-3 h-3" />
@@ -689,7 +711,7 @@ const toast = useToast()
               border-color: var(--border-subtle);
               color: var(--text-main);
             "
-            :disabled="!auth.isSuperadmin"
+            :disabled="(!auth.isSuperadmin) || actionBusy"
             placeholder="编写该席位的实战职责、资金/持仓审查规范与作战提案指引..."
           ></textarea>
         </div>
@@ -722,7 +744,7 @@ const toast = useToast()
             全流程耗时 {{ testResult.transcript?.total_duration_ms }}ms
           </span>
         </div>
-        <button
+        <button :disabled="actionBusy"
           @click="testResult = null"
           class="text-sm font-sans cursor-pointer px-3 py-1 rounded-lg border"
           style="
@@ -769,7 +791,7 @@ const toast = useToast()
             class="pt-2 border-t"
             style="border-color: var(--border-subtle)"
           >
-            <button
+            <button :disabled="actionBusy"
               @click="expandedReasoning[String(key)] = !expandedReasoning[String(key)]"
               class="text-xs font-sans text-purple-400 cursor-pointer"
             >

@@ -18,14 +18,27 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_DIRS = ("okxquant_backend", "okxquant_gateway", "scripts", "dashboard", "plugins", "tests", "okxquant_frontend")
+SOURCE_DIRS = ("okxquant_backend", "okxquant_gateway", "scripts", "dashboard", "plugins", "tests", "okxquant_frontend", ".github", "docker", "deploy")
 IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", "node_modules", "dist", ".ui-artifacts", ".env", ".env.*")
+
+
+def _source_ignore(directory: str, names: list[str]) -> set[str]:
+    # Do not dereference a source link into a live runtime/credential directory.
+    ignored = set(IGNORE(directory, names))
+    ignored.update(name for name in names if (Path(directory) / name).is_symlink())
+    return ignored
 
 
 def copy_sources(destination: Path) -> None:
     for name in SOURCE_DIRS:
-        shutil.copytree(ROOT / name, destination / name, ignore=IGNORE)
-    for name in ("README.md", "STANDALONE.md", "requirements.txt", "env.example"):
+        if (ROOT / name).is_symlink():
+            raise RuntimeError("Refusing a linked source directory")
+        shutil.copytree(ROOT / name, destination / name, ignore=_source_ignore)
+    for name in ("README.md", "STANDALONE.md", "requirements.txt", "env.example", "Dockerfile", "compose.yaml"):
+        if (ROOT / name).is_symlink():
+            raise RuntimeError("Refusing a linked source file")
+        if name in {"Dockerfile", "compose.yaml"} and not (ROOT / name).exists():
+            continue
         shutil.copy2(ROOT / name, destination / name)
     for name in ("data", "logs", "backups", "home"):
         (destination / name).mkdir()

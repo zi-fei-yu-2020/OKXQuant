@@ -77,7 +77,7 @@ def collect(coins, previous=None, *, now=None, reader=None, connection=None):
             parsed=sentiments(rows,coins) if name=='sentiment' else articles(rows)
             fetched[name]=parsed
             sections[name]={'status':'fresh','last_success_at':now,'last_attempt_at':now,'error':None,'data':parsed}
-        except (connection_transport.ConnectionError,ValueError,KeyError,TypeError) as exc:
+        except (connection_transport.ConnectionError,ValueError,KeyError,TypeError,OverflowError) as exc:
             sections[name]={**old,'status':'stale' if 'data' in old else 'unavailable','last_attempt_at':now,
                             'error':getattr(exc,'code','invalid_response')}
     raw=[];seen=set()
@@ -112,6 +112,7 @@ def collect(coins, previous=None, *, now=None, reader=None, connection=None):
 
 
 def _recent(section, now):
+    if not isinstance(section, dict): return False
     at = section.get('last_success_at')
     return (section.get('status') == 'fresh' and isinstance(at, (int, float))
             and not isinstance(at, bool) and math.isfinite(at) and 0 <= now-at <= MAX_AGE)
@@ -123,12 +124,16 @@ def for_strategy(payload, *, now=None):
     if not isinstance(payload, dict) or payload.get('schema') != 2 or payload.get('connection_status') not in {'fresh', 'partial'}:
         return None
     sections = payload.get('sections') or {}
+    if not isinstance(sections, dict): return None
     news = []; seen = set()
     for name in ('important', 'latest'):
         section = sections.get(name) or {}
         if not _recent(section, now):
             continue
-        for row in section.get('data') or []:
+        rows = section.get('data') or []
+        if not isinstance(rows, list): continue
+        for row in rows:
+            if not isinstance(row, dict): continue
             try:
                 at = float(row.get('cTime') or 0) / 1000
             except (TypeError, ValueError):
@@ -145,10 +150,13 @@ def for_strategy(payload, *, now=None):
                          'importance': 'high' if name == 'important' else row.get('importance', 'unknown'),
                          'url': row.get('sourceUrl', '')})
     sentiment = sections.get('sentiment') or {}
-    fresh_sentiment = _recent(sentiment, now)
+    fresh_sentiment = _recent(sentiment, now) and isinstance(sentiment.get('data'), dict)
+    if fresh_sentiment:
+        fresh_sentiment = all(isinstance(row, dict) for row in sentiment['data'].values())
     if not news and not fresh_sentiment:
         return None
     filtered = copy.deepcopy(payload)
+    filtered['sections'] = {key: value for key, value in sections.items() if isinstance(value, dict)}
     filtered['latest_news'] = sorted(news, key=lambda r: r['source_at'], reverse=True)
     # Clearing the stale score is essential: UNKNOWN macro text alone does not stop factor use.
     filtered['coins_sentiment'] = copy.deepcopy(sentiment.get('data') or {}) if fresh_sentiment else {}
@@ -213,6 +221,8 @@ def load_strategy_snapshot(path, coins, *, now=None):
     try:
         with open(path, encoding='utf8') as handle:
             payload = json.load(handle)
+        if not isinstance(payload, dict):
+            raise ValueError('invalid_news_cache')
         connection = account_connections.news_connection()
         if (payload.get('connection_id') != connection['id'] or
                 payload.get('connection_generation', 0) != connection.get('generation', 0)):

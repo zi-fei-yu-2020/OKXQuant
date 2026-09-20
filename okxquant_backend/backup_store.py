@@ -1,6 +1,8 @@
 """Versioned custom backup jobs for the OKXQuant disaster-recovery runtime."""
 from __future__ import annotations
 import copy
+from functools import wraps
+from scripts.config_lock import configuration_write
 import json
 import os
 import re
@@ -25,6 +27,20 @@ DEFAULT_EXCLUDES = [".git/**", ".env", ".okx/**", ".bypy/**", "backups/**", "log
 TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 ENV_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
 
+
+
+def _serialized(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with configuration_write(CONFIG_FILE):
+            return function(*args, **kwargs)
+    return wrapped
+
+
+def validate_job_id(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", value):
+        raise ValueError("Invalid backup job ID")
+    return value
 
 def _now() -> str:
     return datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
@@ -78,7 +94,7 @@ def _normalize_target(raw: dict[str, Any]) -> dict[str, Any]:
 
 def _normalize_job(raw: dict[str, Any]) -> dict[str, Any]:
     base = _default_job(); base.update({k: v for k, v in raw.items() if k in base})
-    base["id"] = str(raw.get("id") or f"backup-{uuid.uuid4().hex[:10]}")
+    base["id"] = validate_job_id(str(raw.get("id") or f"backup-{uuid.uuid4().hex[:10]}"))
     base["name"] = str(raw.get("name") or "自定义灾备任务").strip()[:80]
     base["description"] = str(raw.get("description") or "").strip()[:300]
     base["enabled"] = bool(raw.get("enabled", True)); base["timezone"] = "Asia/Shanghai"
@@ -114,15 +130,25 @@ def _migrate(raw: dict[str, Any]) -> dict[str, Any]:
 
 def load_backup_config() -> dict[str, Any]:
     try:
-        raw = json.loads(CONFIG_FILE.read_text(encoding="utf-8")); return _migrate(raw if isinstance(raw, dict) else {})
-    except (OSError, json.JSONDecodeError, ValueError): return _default()
+        raw = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("Backup configuration must be an object")
+        return _migrate(raw)
+    except FileNotFoundError:
+        return _default()
+    except (OSError, json.JSONDecodeError, ValueError, TypeError, AttributeError):
+        # Do not re-enable the default job or overwrite an unreadable config.
+        raise ValueError("Backup configuration is unreadable; repair it before saving") from None
 
 
+@_serialized
 def save_backup_config(payload: dict[str, Any]) -> None:
     jobs = payload.get("jobs") if isinstance(payload.get("jobs"), list) else []
     if not jobs: raise ValueError("至少保留一个灾备任务")
     if len(jobs) > MAX_JOBS: raise ValueError(f"灾备任务最多 {MAX_JOBS} 个")
     normalized = {"version": 2, "jobs": [_normalize_job(x) for x in jobs]}
+    if len({job["id"] for job in normalized["jobs"]}) != len(normalized["jobs"]):
+        raise ValueError("Duplicate backup job ID")
     for job in normalized["jobs"]: validate_backup_job(job, raise_error=True)
     _atomic_write(normalized)
 
@@ -183,6 +209,7 @@ def _rekey_targets(targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
+@_serialized
 def create_job(name: str, source_id: str = "nightly-default") -> dict[str, Any]:
     config = load_backup_config()
     if len(config["jobs"]) >= MAX_JOBS: raise ValueError(f"灾备任务最多 {MAX_JOBS} 个")
@@ -192,6 +219,7 @@ def create_job(name: str, source_id: str = "nightly-default") -> dict[str, Any]:
     config["jobs"].append(job); save_backup_config(config); return job
 
 
+@_serialized
 def update_job(job_id: str, changes: dict[str, Any]) -> dict[str, Any]:
     config = load_backup_config(); index = next((i for i,x in enumerate(config["jobs"]) if x["id"] == job_id), None)
     if index is None: raise ValueError("灾备任务不存在")
@@ -199,6 +227,7 @@ def update_job(job_id: str, changes: dict[str, Any]) -> dict[str, Any]:
     validate_backup_job(job, raise_error=True); config["jobs"][index] = job; save_backup_config(config); return job
 
 
+@_serialized
 def delete_job(job_id: str) -> None:
     config = load_backup_config()
     if len(config["jobs"]) <= 1: raise ValueError("至少保留一个灾备任务")
@@ -219,6 +248,7 @@ def export_job(job_id: str) -> dict[str, Any]:
     return {"format": "okxquant-backup-job", "version": 1, "exported_at": _now(), "job": safe}
 
 
+@_serialized
 def import_job(payload: dict[str, Any], name_override: str = "") -> dict[str, Any]:
     if payload.get("format") != "okxquant-backup-job" or not isinstance(payload.get("job"), dict): raise ValueError("无效的 OKXQuant 灾备任务文件")
     config = load_backup_config()
@@ -238,6 +268,7 @@ def load_backup_methods() -> dict[str, Any]:
     }
 
 
+@_serialized
 def save_backup_methods(methods: dict[str, Any]) -> None:
     job = list_jobs()[0]; targets = {x["type"]: x for x in job["targets"]}
     for target_type in ("baidu", "local"):

@@ -49,6 +49,9 @@ def validate_bars(rows, width, at, minimum=20):
         raise ValueError('insufficient_closed_candles')
     previous = None
     for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError('invalid_candle_row')
+        # ts_ms is the CLOSE boundary, not the exchange raw opening timestamp.
         ts = row.get('ts_ms')
         if not isinstance(ts, int) or isinstance(ts, bool) or ts % width or ts > at or row.get('confirm') is not True:
             raise ValueError('unconfirmed_or_future_candle')

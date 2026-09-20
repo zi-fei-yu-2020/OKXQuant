@@ -125,15 +125,8 @@ def get_cpa_client_config() -> Tuple[str, str]:
 def load_closed_trades(scope=None):
     from scripts.memory_registry import scope_of
     scope=scope_of(scope)
-    account_init_file = os.path.join(DATA_DIR, "account_initial_state.json")
-    reset_time_str = "1970-01-01 00:00:00"
-    if os.path.exists(account_init_file):
-        try:
-            with open(account_init_file, "r", encoding="utf-8") as f:
-                acc_init = json.load(f)
-                reset_time_str = acc_init.get("reset_time", "1970-01-01 00:00:00")
-        except Exception:
-            pass
+    from okxquant_backend.account_baseline import load_account_baseline
+    reset_time_str=load_account_baseline(scope=scope, path=os.path.join(DATA_DIR,'account_initial_state.json'))['reset_time']
 
     from scripts.evolution_evidence import review_rows, enrich
     if not os.path.exists(LEDGER_JSON_FILE):
@@ -375,7 +368,8 @@ def run_self_evolution(force: bool = False):
             if (previous_report.get('review_status') == 'success' and previous_report.get('review_protocol') == REVIEW_PROTOCOL
                     and previous_report.get("ledger_revision") == ledger_revision
                     and previous_report.get('account_scope') == memory_scope
-                    and previous_report.get('memory_version_at_review') == memory_state['active_version']):
+                    and previous_report.get('memory_version_at_review') == memory_state['active_version']
+                    and previous_report.get('memory_prompt_hash_at_review') == memory_state['prompt_hash']):
                 record_status('no_new_evidence', ledger_revision=ledger_revision)
                 log_msg("No new closed-trade evidence; keeping the successful review and approved memory")
                 return previous_report
@@ -516,7 +510,8 @@ def run_self_evolution(force: bool = False):
         "proposed_change_status": proposed_change_status,
         "pending_candidate_count": sum(c['status']=='pending' for c in candidates),
         "memory_candidate_ids": candidate_ids,
-        "memory_version_at_review": memory_registry.view(DATA_DIR,scope=memory_scope)['active_version'],
+        "memory_version_at_review": memory_state['active_version'],
+        "memory_prompt_hash_at_review": memory_state['prompt_hash'],
         "account_scope": memory_scope,
         "recommendations": actions_taken,
         "change_status": change_status,

@@ -4,7 +4,8 @@ This module provides the core mathematical, continuous physical state, definite 
 and stochastic probabilistic foundation for OKXQuant.
 
 All functions are strictly causal: chronological sequences with newest observation last.
-No lookahead bias. Closed candle data is enforced.
+No lookahead bias within supplied sequences. Timestamp/confirmation validation
+must be performed by the upstream closed-candle adapter before passing OHLCV.
 """
 from __future__ import annotations
 
@@ -13,7 +14,38 @@ from typing import Any, Dict, Iterable, List, Sequence
 
 
 def _finite(values: Iterable[float]) -> List[float]:
-    return [float(v) for v in values if v is not None and math.isfinite(float(v)) and float(v) > 0]
+    # Never compress a time series by dropping a bad observation: doing so turns
+    # a multi-bar move into a one-bar derivative and misaligns its volume.
+    result = []
+    for value in values:
+        if isinstance(value, bool):
+            raise ValueError("invalid_price_series")
+        value = float(value)
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("invalid_price_series")
+        result.append(value)
+    return result
+
+
+def _aligned_inputs(closes, highs=None, lows=None, vols=None):
+    prices = _finite(closes)
+    for values, positive in ((highs, True), (lows, True), (vols, False)):
+        if values is None:
+            continue
+        if len(values) != len(prices):
+            raise ValueError("unaligned_candle_series")
+        for value in values:
+            if isinstance(value, bool):
+                raise ValueError("invalid_candle_series")
+            number = float(value)
+            if not math.isfinite(number) or number < 0 or (positive and number == 0):
+                raise ValueError("invalid_candle_series")
+    return prices
+
+
+def _invalid_series(reason, sample_size=0):
+    return {"valid": False, "reason": reason, "sample_size": sample_size,
+            "definite_integrals": {}, "probability_theory": {}}
 
 
 def _ema(values: Sequence[float], span: int = 3) -> List[float]:
@@ -119,7 +151,12 @@ def calculate_definite_integrals(
     2. deviation_area_integral (路径偏离面积分): \int_{t-T}^t (P - P0)/P0 d tau
     3. volume_action_integral (量价做功功率积分): \int (dP/P) * Vol d tau
     """
-    prices = _finite(closes)
+    try:
+        prices = _aligned_inputs(closes, highs, lows, vols)
+    except (ValueError, TypeError, OverflowError) as exc:
+        return _invalid_series(str(exc))
+    if isinstance(window, bool) or not isinstance(window, int) or window < 2:
+        return _invalid_series("invalid_integral_window")
     n = len(prices)
     if n < 4:
         return {
@@ -152,7 +189,7 @@ def calculate_definite_integrals(
 
     # 3. Volume-Weighted Action Integral (Work Done by Capital)
     volume_action_raw = 0.0
-    if vols and len(vols) >= n:
+    if vols is not None and len(vols) == n:
         sub_vols = [float(v) for v in vols[-sub_n:]]
         total_vol = sum(sub_vols) or 1.0
         for i in range(1, len(sub_prices)):
@@ -198,7 +235,16 @@ def calculate_probability_theory(
     5. var_95_pct (95% 置信度在险价值): 下行极端单期最大预期损失
     6. cvar_95_pct (95% 条件在险价值 / 预期尾部损失): 穿透 VaR 时的平均损失期望
     """
-    r_list = [float(r) for r in returns if math.isfinite(float(r))]
+    try:
+        if any(isinstance(r, bool) for r in returns):
+            raise ValueError("invalid_return_series")
+        r_list = [float(r) for r in returns]
+        if not all(math.isfinite(r) for r in r_list) or not all(
+                math.isfinite(float(x)) and not isinstance(x, bool) for x in (velocity, acceleration)):
+            raise ValueError("invalid_probability_input")
+    except (ValueError, TypeError, OverflowError) as exc:
+        return _invalid_series(str(exc))
+    velocity, acceleration = float(velocity), float(acceleration)
     n = len(r_list)
     if n < 5:
         return {
@@ -206,6 +252,8 @@ def calculate_probability_theory(
             "skewness": 0.0,
             "kurtosis": 0.0,
             "continuation_prob_pct": 50.0,
+            "probability_calibrated": False,
+            "probability_semantics": "heuristic_direction_score_not_empirical_win_rate",
             "breakdown_prob_pct": 50.0,
             "var_95_pct": 1.5,
             "cvar_95_pct": 2.2,
@@ -279,7 +327,10 @@ def calculate_calculus(
     lag: int = 1
 ) -> Dict[str, Any]:
     """Calculate causal calculus, definite integrals and probability metrics for a single series."""
-    prices = _finite(closes)
+    try:
+        prices = _aligned_inputs(closes, highs, lows, vols)
+    except (ValueError, TypeError, OverflowError) as exc:
+        return _invalid_series(str(exc))
     if len(prices) < 6:
         return {
             "valid": False,
@@ -369,11 +420,16 @@ def calculate_multi_timeframe(candles_by_tf: Dict[str, Sequence[Sequence[float]]
     for timeframe, candles in candles_by_tf.items():
         # OKX packages are newest-first; reverse to chronological order.
         rows = list(reversed(candles or []))
-        closes = [row[3] for row in rows if len(row) >= 4]
-        highs = [row[1] for row in rows if len(row) >= 4]
-        lows = [row[2] for row in rows if len(row) >= 4]
-        vols = [row[4] for row in rows if len(row) >= 5]
-        features = calculate_calculus(closes, highs, lows, vols)
+        # The contract is stripped OHLC[V], not raw timestamp-prefixed OKX rows.
+        # Reject a malformed frame rather than skip rows or shift field meanings.
+        if any(not isinstance(row, (list, tuple)) or len(row) not in (4, 5) for row in rows):
+            features = _invalid_series("expected_stripped_ohlcv")
+        else:
+            closes = [row[3] for row in rows]
+            highs = [row[1] for row in rows]
+            lows = [row[2] for row in rows]
+            vols = [row[4] for row in rows if len(row) == 5] if any(len(row) == 5 for row in rows) else None
+            features = calculate_calculus(closes, highs, lows, vols)
         result[timeframe] = features
         if features.get("valid"):
             valid.append(features)
@@ -401,7 +457,10 @@ def calculate_multi_timeframe(candles_by_tf: Dict[str, Sequence[Sequence[float]]
     elif abs(direction_votes) <= 1:
         regime = "RANGE_LOW_VELOCITY"
     else:
-        regime = "BULL_DECELERATING" if direction_votes > 0 and acceleration < 0 else ("BEAR_DECELERATING" if acceleration > 0 else "MIXED_TRANSITION")
+        if direction_votes > 0:
+            regime = "BULL_DECELERATING" if acceleration < 0 else "BULL_STABLE"
+        else:
+            regime = "BEAR_DECELERATING" if acceleration > 0 else "BEAR_STABLE"
 
     # Aggregate Definite Integrals across timeframes
     int_valid = [f["definite_integrals"] for f in valid if f.get("definite_integrals", {}).get("valid")]
@@ -445,6 +504,8 @@ def calculate_multi_timeframe(candles_by_tf: Dict[str, Sequence[Sequence[float]]
             "skewness": round(avg_skewness, 2),
             "kurtosis": round(avg_kurtosis, 2),
             "continuation_prob_pct": round(avg_continuation_prob, 1),
+            "probability_calibrated": False,
+            "probability_semantics": "heuristic_direction_score_not_empirical_win_rate",
             "breakdown_prob_pct": round(avg_breakdown_prob, 1),
             "var_95_pct": round(max_var_95, 2),
             "cvar_95_pct": round(max_cvar_95, 2),

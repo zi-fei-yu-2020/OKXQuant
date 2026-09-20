@@ -23,12 +23,13 @@ def closing_orders(history,orders):
     # Use the whole lifecycle for partial exits; retain narrow matching only when
     # old fixtures/receipts genuinely lack an opening timestamp.
     lower=start if 0<start<=end else end-5000
+    upper=end if 0<start<=end else end+5000
     matches={}
     for order in orders:
         if not isinstance(order,dict) or not order.get('ordId'):continue
         if order.get('instId')!=history.get('instId') or order.get('side')!=side or order.get('posSide') not in (direction,'net'):continue
-        if order.get('state') not in ('filled','canceled','mmp_canceled') or number(order.get('accFillSz'))<=0:continue
-        if not lower<=fill_time(order)<=end+5000:continue
+        if order.get('state') not in ('filled','partially_filled','canceled','mmp_canceled') or number(order.get('accFillSz'))<=0:continue
+        if not lower<=fill_time(order)<=upper:continue
         identity=str(order['ordId']);old=matches.get(identity)
         score=lambda row:(number(row.get('uTime')),number(row.get('accFillSz')),bool(row.get('algoId')),bool(row.get('clOrdId')),bool(row.get('source')))
         if old is None or score(order)>score(old):matches[identity]=order

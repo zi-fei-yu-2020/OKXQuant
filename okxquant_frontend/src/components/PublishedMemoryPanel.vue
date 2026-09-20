@@ -11,8 +11,8 @@ const ruleCount = computed(() => props.publication && Array.isArray(props.public
 <template>
   <AppCard class="research-panel min-w-0" data-published-memory>
     <header class="research-header">
-      <h3>运行记忆</h3>
-      <AppBadge :tone="publication?.active_version ? 'brand' : 'neutral'">{{ publication?.active_version ? `版本 v${publication.active_version}` : publication?.status === 'legacy_unmanaged' ? '尚未纳管' : '版本待核验' }}</AppBadge>
+      <h3>已发布运行记忆</h3>
+      <AppBadge :tone="publication?.status === 'unavailable' ? 'warning' : publication?.active_version ? 'brand' : 'neutral'">{{ publication?.status === 'unavailable' ? '状态不可用' : publication?.active_version ? `版本 v${publication.active_version}` : publication?.status === 'legacy_unmanaged' ? '尚未纳管' : '版本待核验' }}</AppBadge>
     </header>
     <p v-if="publication?.status === 'unavailable'" role="alert" class="research-notice">{{ publication.message || '运行记忆不可用，已阻止回退到其他来源。' }}</p>
     <p v-else-if="!publication" class="research-note">尚未取得运行记忆状态，不推断已启用规则数量。</p>

@@ -111,3 +111,12 @@ test('notification queue remains bounded', () => {
   assert.equal(toast.items.value[0].message, 'Error 4')
   for (const item of [...toast.items.value]) toast.dismiss(item.id)
 })
+
+test('mixed-case project names retain exact-phrase confirmation gating', async () => {
+  const dialogs = useDialogs()
+  const waiting = dialogs.prompt('需输入确认短语：BACKUP OKXQuant')
+  assert.equal(dialogs.active.value.options.requiredText, 'BACKUP OKXQuant')
+  dialogs.finish(null)
+  await waiting
+  await tick()
+})

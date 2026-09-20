@@ -96,15 +96,15 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
   if (to.meta.requiresAuth) {
-    await auth.restoreSession()
-    if (!auth.isAuthenticated) {
+    const verified = await auth.restoreSession()
+    if (!verified || !auth.isAuthenticated) {
       return { name: 'admin-login' }
     }
   }
   // Redirect logged-in users away from login page
   if (to.name === 'admin-login') {
-    await auth.restoreSession()
-    if (auth.isAuthenticated) return { name: 'admin-overview' }
+    const verified = await auth.restoreSession()
+    if (verified && auth.isAuthenticated) return { name: 'admin-overview' }
   }
 })
 

@@ -12,8 +12,11 @@ _thread_lock = threading.RLock()
 @contextmanager
 def writer(timeout=60, *, account=None, inst_id=None, side=None):
     import fcntl
-    key = '|'.join(str(v or '') for v in (account, inst_id, side))
-    lock_path = PATH if not key else PATH.with_name(PATH.name + '.' + hashlib.sha256(key.encode()).hexdigest()[:20])
+    # Portfolio/default writers and instrument-scoped writers must contend.
+    # Keep the deployed default ('||') filename so old default writers still
+    # participate during a rolling restart; scope hints never shard this gate.
+    key = '||'
+    lock_path = PATH.with_name(PATH.name + '.' + hashlib.sha256(key.encode()).hexdigest()[:20])
     if not _thread_lock.acquire(timeout=timeout):
         raise TimeoutError('Position writer busy; no order sent')
     handle = None
