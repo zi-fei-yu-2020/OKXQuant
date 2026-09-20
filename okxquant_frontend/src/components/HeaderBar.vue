@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { APP_LOGO_SRC } from '../config/branding'
 const route = useRoute()
 const clock = ref('')
 let timer: ReturnType<typeof setInterval> | undefined
@@ -38,7 +39,7 @@ const tabs = [
   <header class="terminal-header">
     <div class="terminal-header__inner">
       <RouterLink to="/" class="terminal-brand"
-        ><span class="brand-mark"><img src="/favicon.svg?v=okxquant-20260915" alt="OKXQuant" class="brand-mark__image" /></span><span
+        ><span class="brand-mark"><img  :src="APP_LOGO_SRC" alt="OKXQuant" class="brand-mark__image" /></span><span
           >OKXQuant</span
         ></RouterLink
       >
