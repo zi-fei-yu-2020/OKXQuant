@@ -25,22 +25,47 @@ def text_content(value):
 
 
 def verify_completion(response, protocol):
+    """Check envelope structure as well as finish flags; never accept refusal text."""
+    def require(condition):
+        if not condition:
+            raise ContractError('Model response is incomplete, refused, or malformed')
+    require(isinstance(response, dict))
     if protocol == 'claude_messages':
-        reason = response.get('stop_reason')
-        if reason not in (None, 'end_turn', 'stop_sequence'):
-            raise ContractError('模型响应未完整结束：' + str(reason)[:60])
+        require(response.get('stop_reason') in (None, 'end_turn', 'stop_sequence'))
+        blocks = response.get('content', [])
+        require(isinstance(blocks, list))
+        for block in blocks:
+            require(isinstance(block, dict))
+            require(block.get('type') in ('text', 'thinking', 'redacted_thinking'))
+            if block.get('type') == 'text':
+                require(isinstance(block.get('text'), str))
     elif protocol == 'openai_responses':
-        if response.get('status') not in (None, 'completed') or response.get('incomplete_details'):
-            raise ContractError('模型响应未完整结束：' + str(response.get('status'))[:60])
+        require(response.get('status') in (None, 'completed') and not response.get('incomplete_details'))
+        require(not response.get('error'))
+        if response.get('output_text') is not None:
+            require(isinstance(response['output_text'], str))
+        output = response.get('output', [])
+        require(isinstance(output, list))
+        for item in output:
+            require(isinstance(item, dict))
+            require(item.get('type') in ('message', 'reasoning'))
+            require(item.get('status') in (None, 'completed'))
+            if item.get('type') == 'message':
+                blocks = item.get('content', [])
+                require(isinstance(blocks, list))
+                for block in blocks:
+                    require(isinstance(block, dict))
+                    require(block.get('type') == 'output_text' and isinstance(block.get('text'), str))
     else:
-        choices = response.get('choices') or []
-        if len(choices) != 1:
-            raise ContractError('模型必须返回唯一决策响应')
+        choices = response.get('choices')
+        require(isinstance(choices, list) and len(choices) == 1)
         choice = choices[0]
-        if choice.get('finish_reason') not in (None, 'stop'):
-            raise ContractError('模型响应未完整结束：' + str(choice.get('finish_reason'))[:60])
-        if (choice.get('message') or {}).get('refusal'):
-            raise ContractError('模型拒绝输出决策')
+        require(isinstance(choice, dict))
+        require(choice.get('finish_reason') in (None, 'stop'))
+        message = choice.get('message', {})
+        require(isinstance(message, dict))
+        require(not message.get('refusal') and not message.get('tool_calls') and not message.get('function_call'))
+        text_content(message.get('content'))
 
 
 def decode_with_regeneration(initial, regenerate=None, *, report=None, clock=time.monotonic):

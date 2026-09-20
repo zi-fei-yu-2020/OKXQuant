@@ -7,8 +7,6 @@ on:
 permissions:
   contents: read
   packages: write
-  attestations: write
-  id-token: write
 
 env:
   REGISTRY: ghcr.io
@@ -18,9 +16,23 @@ jobs:
   publish-image:
     name: Build and publish Docker image
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python for offline release gate
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify release offline before registry login
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip check
+          python scripts/run_tests.py --verbose
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3

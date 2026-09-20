@@ -580,12 +580,13 @@ def construct_full_market_prompt(packages: List[Dict[str, Any]], pos_summary: st
 
     avail_balance_str = f"{usdt_available:.2f} USDT" if usdt_available > 0 else "0 USDT；不得假设存在可用资金"
 
+    selected = profile if profile is not None else active_profile()
     capital_context = capital_pool.status(market._selected())
     previous_wait_reviews = wait_audit.prepare(market._selected().identity, packages, active_positions_detail)
     runtime_vars = {
         'previous_wait_reviews': previous_wait_reviews,
         'capital_pool': capital_context,
-        'execution_profile': __import__('scripts.execution_profiles',fromlist=['runtime']).runtime(),
+        'execution_profile': __import__('scripts.execution_profiles',fromlist=['runtime']).runtime(selected),
         "pending_orders_status": "verified" if pending_verified else "unknown",
         "decision_timestamp": f"【推演基准时间】: {now_bj_str}",
         "account_balance": f"【交易所账户可用资金】: {avail_balance_str}" + (f"；策略资金池上限={capital_context.get('configured_cap', 'UNKNOWN')} USDT，风险净值={capital_context.get('risk_equity', '待初始化')}；不是额外现金，不能借用池外权益放大建议。" if capital_context.get("enabled") else ""),
@@ -597,7 +598,6 @@ def construct_full_market_prompt(packages: List[Dict[str, Any]], pos_summary: st
     }
     from dataclasses import asdict
     from scripts.risk_policy import load_policy
-    selected = profile if profile is not None else active_profile()
     bundle = trading_prompt.compose(selected, runtime_vars, packages, override=get_user_prompt_override(),
         positions=active_positions_detail, pending=pending_orders_detail, risk_contract=asdict(load_policy()))
     bundle.manifest['memory_publication']={k:memory_state.get(k) for k in ('scope','active_version','prompt_hash')}
@@ -647,7 +647,9 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
     now_bj = datetime.datetime.now(tz_bj)
     time_str = now_bj.strftime("%Y-%m-%d %H:%M:%S")
 
-    market.begin_signal_frame()
+    cycle_environment = market._selected()
+    cycle_as_of = time.time()
+    market.begin_signal_frame(cycle_as_of)
     eligible, availability = support.trading_universe(TARGET_INSTRUMENTS, active_positions_detail, market._selected().mode)
     if not eligible:
         LAST_INFERENCE_ERROR = "当前环境无已核验可交易标的，仅保留行情观察"
@@ -655,7 +657,7 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
         return None
     print(f"[AI Brain Batch] 并行获取 {len(eligible)} 个交易/持仓管理标的；其余标的仅作行情观察")
     with ThreadPoolExecutor(max_workers=8) as executor:
-        packages = list(executor.map(fetch_single_instrument_package, eligible))
+        packages = list(executor.map(market.bind_signal_frame(fetch_single_instrument_package), eligible))
     for package in packages:
         package["environment_support"] = availability["items"][package["instId"]]
 
@@ -880,7 +882,7 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                 repaired_text, _, usage, _ = execute_llm_request(
                     messages=messages, model=model_name, base_url=base_url, api_key=api_key,
                     api_format=api_format, reasoning_effort=effort, temperature=0.2,
-                    response_format={'type':'json_object'}, timeout=timeout, max_attempts=max_attempts)
+                    response_format={'type':'json_object'}, timeout=timeout, max_attempts=max_attempts, require_complete=True)
             except Exception as exc:
                 meter.finish('failed', error=exc)
                 raise
@@ -941,6 +943,7 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
             })
         pos_mgmt_list = validated_pos_mgmt
 
+        assert_cycle_current(cycle_environment, cycle_as_of)
         # Execute Pending Orders Cancellation if AI Brain decides CANCEL
         pending_mgmt_list = brain_output.get("pending_orders_management", [])
         strategy_evidence.best_effort(market._selected().identity, 'management_decision', {
@@ -960,7 +963,8 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                         and re.fullmatch(r'[A-Z0-9]+-USDT-SWAP', p_inst_id)
                         and re.fullmatch(r'[0-9]{1,32}', p_ord_id)):
                     cxl_cmd = okx_private_command(f"okx swap cancel {p_inst_id} --ordId {p_ord_id} --json")
-                    with trade_lock.writer(), algo_reader.command_barrier(cxl_cmd, market._selected()):
+                    with trade_lock.writer(), algo_reader.command_barrier(cxl_cmd, cycle_environment):
+                        assert_cycle_current(cycle_environment, cycle_as_of)
                         cxl_res = subprocess.run(cxl_cmd, shell=True, capture_output=True, text=True, timeout=10)
                     strategy_evidence.best_effort(market._selected().identity, 'cancel_submission',
                         {'instrument': p_inst_id, 'order_id': p_ord_id, 'transport_ok': cxl_res.returncode == 0})
@@ -1010,7 +1014,9 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                 "timestamp": int(time.time()),
                 "data_as_of": p.get("data_as_of", market.signal_as_of()),
                 "execution_profile_signature": cycle_execution["signature"],
-                "position_basis": {"side": active_position_sides.get(inst_id), "size": next((abs(safe_float(x.get("pos", x.get("size", 0)))) for x in (active_positions_detail or []) if x.get("instId") == inst_id), 0.0)},
+                "strategy_profile_hash": trading_prompt.profile_signature(profile),
+                **account_basis(cycle_environment),
+                "position_basis": {"side": active_position_sides.get(inst_id), "size": next((abs(safe_float(x.get("pos", x.get("size", 0)))) for x in (active_positions_detail or []) if x.get("instId") == inst_id), 0.0), **{k:next((x.get(k) for x in (active_positions_detail or []) if x.get("instId")==inst_id),None) for k in ("posId","cTime")}},
                 "time_str": time_str,
                 "macro_assessment": macro_summary,
                 "thought_process": {
@@ -1018,13 +1024,14 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                     "calculus_dynamics": d_item.get("calculus_dynamics", "模型未提供具体微积分证据"),
                     "math_prob_rationale": d_item.get("math_prob_rationale", "模型未提供具体定积分与概率证据"),
                     "volume_and_oi": d_item.get("volume_and_oi", f"OI: {p['oiUsd']}, Taker: {p['takerNetUsd']}"),
-                    "risk_reward_evaluation": "目标 R:R ≥ 2.5；执行底线 2.0"
+                    "risk_reward_evaluation": f"基础净盈亏比门槛={prompt_bundle.risk_contract.get('minimum_net_rr', 'UNKNOWN')}；执行预设={cycle_execution['execution'].get('minimum_net_rr', '沿用基础策略')}；最终以执行器复核为准"
                 },
                 "smart_money": p.get("smart_money", {}),
                 "adx_1h": p.get("adx_1h", "--"),
                 "decision": {
                     "action": final_action,
                     "memory_publication": prompt_bundle.manifest.get("memory_publication"),
+                    "strategy_profile_hash": trading_prompt.profile_signature(profile),
                     "model_action": str(raw_proposal.get("action", "MISSING")).upper()[:24],
                     "model_confidence": model_score,
                     "candidate_id": d_item.get("candidate_id"),
@@ -1074,7 +1081,8 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
         import hashlib
         # Use the immutable prompt-time snapshot for attribution.
         news_snapshot = dict(prompt_bundle.manifest.get('news_snapshot') or {})
-        strategy_evidence.record_decisions(market._selected().identity, standard_cache, packages, model_name,
+        assert_cycle_current(cycle_environment, cycle_as_of)
+        strategy_evidence.record_decisions(cycle_environment.identity, standard_cache, packages, model_name,
             hashlib.sha256(effective_system_prompt.encode()).hexdigest(), time.time(), news_snapshot=news_snapshot)
         try:
             audit_status = wait_audit.commit(market._selected().identity, standard_cache, packages,
@@ -1089,9 +1097,15 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                 if row['decision']['action']=='WAIT':
                     row['decision'].update(contract_valid=False,decision_status='incomplete',validation_reason='WAIT审计无法持久化')
         atomic_write_json(os.path.join(DATA_DIR,'trading_output_validation.json'),brain_output['validation'])
+        assert_cycle_current(cycle_environment, cycle_as_of)
         atomic_write_json(AI_DECISION_CACHE_FILE, standard_cache)
         atomic_write_json(AI_POSITION_MANAGEMENT_FILE, {
-            "timestamp": int(time.time()),
+            "timestamp": int(cycle_as_of),
+            "generated_at": time.time(),
+            **account_basis(cycle_environment),
+            "execution_profile_signature": cycle_execution["signature"],
+            "strategy_profile_hash": trading_prompt.profile_signature(profile),
+            "position_basis": active_positions_detail,
             "time_str": time_str,
             "instructions": pos_mgmt_list
         })
@@ -1144,6 +1158,14 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
         return standard_cache
 
     except Exception as e:
+        # A history/audit write can fail AFTER cache publication. A failed cycle
+        # must not leave partially published instructions available to consumers.
+        for path, empty in ((AI_DECISION_CACHE_FILE, {}),
+                            (AI_POSITION_MANAGEMENT_FILE, {'timestamp': 0, 'instructions': []})):
+            try:
+                atomic_write_json(path, empty)
+            except OSError:
+                print('[AI Brain Batch] Failed to invalidate decision artifacts')
         from okxquant_backend.llm_transport import public_failure
         failure = public_failure(e)
         if failure:
@@ -1164,6 +1186,27 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
         print(f'[AI Brain Batch] Error in batch inference: {LAST_INFERENCE_ERROR}')
         return None
 
+def account_basis(environment):
+    """Non-secret provenance shared by cache and management consumers."""
+    return {'account_scope': environment.identity, 'connection_id': getattr(environment, 'connection_id', ''),
+            'binding_version': getattr(environment, 'binding_version', 0)}
+
+
+def assert_cycle_current(environment, as_of):
+    """Do not cancel or publish actionable instructions from an obsolete frame."""
+    age = time.time() - float(as_of)
+    if not 0 <= age <= DECISION_MAX_AGE_SECONDS:
+        raise trading_prompt.ContractError('Inference frame expired or invalid; instructions discarded')
+    if account_basis(market._selected()) != account_basis(environment):
+        raise trading_prompt.ContractError('Account changed during inference; instructions discarded')
+    # Real OKXEnvironment always carries source/connection provenance. Lightweight
+    # read-only market adapters may expose only mode + identity. Never skip a
+    # registry check for a real legacy, managed, or unbound runtime environment.
+    if hasattr(environment, 'source') or getattr(environment, 'connection_id', ''):
+        from okxquant_backend.account_connections import assert_current
+        assert_current(environment)
+
+
 def get_latest_ai_decision(inst_id: str, max_age_seconds: int = DECISION_MAX_AGE_SECONDS) -> Optional[Dict[str, Any]]:
     """Read a validated decision only while its cache timestamp is fresh."""
     if os.path.exists(AI_DECISION_CACHE_FILE):
@@ -1173,11 +1216,19 @@ def get_latest_ai_decision(inst_id: str, max_age_seconds: int = DECISION_MAX_AGE
             item = data.get(inst_id)
             if not isinstance(item, dict):
                 return None
+            environment = market._selected()
+            if any(item.get(key) != value for key, value in account_basis(environment).items()):
+                return None
+            from okxquant_backend.account_connections import assert_current
+            assert_current(environment)
+            current_profile = active_profile()
+            if item.get('strategy_profile_hash') != trading_prompt.profile_signature(current_profile):
+                return None
             timestamp = int(item.get("timestamp", 0) or 0)
             if timestamp <= 0 or not 0 <= time.time() - timestamp <= max_age_seconds:
                 return None
             decision = item.get('decision', {})
-            if decision.get('action') in {'BUY_LONG','SELL_SHORT'} and (decision.get('contract_version') != trading_prompt.VERSION or not decision.get('contract_valid') or time.time() >= float(decision.get('valid_until') or 0)):
+            if decision.get('action') in {'BUY_LONG','SELL_SHORT'} and (decision.get('contract_version') != trading_prompt.VERSION or not decision.get('contract_valid') or not time.time() < safe_float(decision.get('valid_until'))):
                 return None
             return item
         except Exception:

@@ -9,7 +9,7 @@ from scripts.okx_runtime import replace_cli_prefix as okx_private_command
 from scripts.instrument_pool import load_instruments
 from scripts.evolution_status import public_status as evolution_status
 from scripts.memory_registry import public_view as memory_publication
-from scripts.dashboard_stats import today_lifecycle_stats
+from scripts.dashboard_stats import today_lifecycle_stats, scoped_rows
 import os
 import json
 import time
@@ -219,22 +219,11 @@ def _wait_state(state_data, factors, execution_profile):
 
 def _execution_profile_snapshot():
     try:
-        from scripts.execution_profiles import runtime
-        value=runtime(); execution=dict(value.get("execution", {}))
-        # Standard keeps its original policy source; expose the effective values
-        # so the dashboard never renders missing profile fields as question marks.
-        from scripts.risk_policy import Policy
-        policy=Policy()
-        execution.setdefault("per_trade_equity_pct", policy.per_trade_equity_pct)
-        execution.setdefault("single_asset_margin_usdt", policy.single_asset_margin_usdt)
-        execution.setdefault("max_leverage", policy.max_leverage)
-        execution.setdefault("daily_drawdown_pct", policy.daily_drawdown_pct)
-        execution.setdefault("max_active_instruments", len(load_instruments()))
-        execution.setdefault("total_margin_usdt", round(policy.single_asset_margin_usdt * max(1, min(3, len(load_instruments()))), 2))
-        execution.setdefault("max_same_direction_positions", execution["max_active_instruments"])
-        return {"profile_id": value.get("profile_id"), "execution": execution, "signature": value.get("signature")}
+        from scripts.operational_status import execution_snapshot
+        return execution_snapshot()
     except Exception as exc:
-        return {"profile_id": "unknown", "execution": {}, "error": type(exc).__name__}
+        return {'profile_id':'unknown','execution':{},'error':type(exc).__name__}
+
 
 def _build_factors_from_local_files(positions, timestamp_full):
     """Build factors_list from trading_state.json + ai_brain_decisions.json.
@@ -425,7 +414,8 @@ def _inject_local_data_into_stale(stale, positions, timestamp_full):
     if os.path.exists(LEDGER_JSON_FILE):
         try:
             with open(LEDGER_JSON_FILE, "r", encoding="utf-8") as f:
-                local_ledger_rows = json.load(f)
+                from scripts.okx_runtime import selected_environment
+                local_ledger_rows = scoped_rows(json.load(f), selected_environment().identity)
                 stale["trades"] = local_ledger_rows[:60]
         except Exception:
             pass
@@ -1123,7 +1113,7 @@ def _update_cache_cycle():
     if os.path.exists(LEDGER_JSON_FILE):
         try:
             with open(LEDGER_JSON_FILE, "r", encoding="utf-8") as f:
-                ledger_trades = json.load(f)
+                ledger_trades = scoped_rows(json.load(f), environment.identity)
         except Exception:
             pass
     
@@ -1576,6 +1566,9 @@ def monitoring_snapshot():
     if age > 15:
         health.update({"status": "STALE", "partial": True})
     data["data_health"] = health
+    from scripts.operational_status import risk_snapshot
+    try: data['risk_status'] = risk_snapshot(DATA_DIR, env=environment)
+    except Exception: data['risk_status'] = {'status':'unavailable'}
     return data
 
 
@@ -1583,7 +1576,7 @@ def monitoring_snapshot():
 async def get_all_data():
     return JSONResponse(
         monitoring_snapshot(),
-        headers={"Cache-Control": "public, max-age=0, s-maxage=2, stale-while-revalidate=5"},
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -1591,7 +1584,7 @@ async def get_all_data():
 async def get_overview():
     return JSONResponse(
         monitoring_snapshot(),
-        headers={"Cache-Control": "public, max-age=1, s-maxage=3, stale-while-revalidate=5"},
+        headers={"Cache-Control": "no-store"},
     )
 
 if __name__ == "__main__":

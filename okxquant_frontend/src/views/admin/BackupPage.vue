@@ -1,4 +1,5 @@
 <script setup lang="ts">
+
 import AppField from '../../components/ui/AppField.vue'
 import AppCard from '../../components/ui/AppCard.vue'
 import LoadingState from '../../components/ui/LoadingState.vue'
@@ -35,6 +36,19 @@ const latestDisplay = computed(() => backupLatest(simple.value?.latest))
 const targetTypes = ref<any[]>([])
 const status = ref<any>(null)
 const uploadFileInput = ref<HTMLInputElement | null>(null)
+const loadFailed = ref(false)
+const actionBusy = ref(false)
+const canManage = computed(() => auth.isSuperadmin)
+// Backup upload uses its own multipart transport; guard the whole operation, not just api().
+function action<Args extends unknown[], Result>(handler: (...args: Args) => Promise<Result>, superadmin = true) {
+  return async (...args: Args) => {
+    if (actionBusy.value || loading.value || loadFailed.value) return
+    if (superadmin && !auth.isSuperadmin) { toast.warning('仅超级管理员可执行此操作'); return }
+    actionBusy.value = true
+    try { return await handler(...args) }
+    finally { actionBusy.value = false }
+  }
+}
 
 const enabled = ref(false)
 const scheduleTime = ref('02:00')
@@ -57,6 +71,7 @@ const credentialFields = computed(() => {
 })
 
 async function load() {
+  loadFailed.value = false
   loading.value = true
   try {
     const results = await Promise.allSettled([
@@ -81,6 +96,7 @@ async function load() {
     if (firstFailure) throw firstFailure.reason
   } catch (e: any) {
     if (e?.silent) return
+    loadFailed.value = true
     bannerMsg.value = { text: `加载失败：${e.message}`, type: 'err' }
   } finally {
     loading.value = false
@@ -99,7 +115,7 @@ function payload() {
   }
 }
 
-async function testConnection() {
+const testConnection = action(async () => {
   busy.value = 'test'
   bannerMsg.value = null
   try {
@@ -114,13 +130,14 @@ async function testConnection() {
   } finally {
     busy.value = ''
   }
-}
+})
 
-async function save() {
+const save = action(async () => {
   busy.value = 'save'
   bannerMsg.value = null
   try {
     await api('/api/v1/admin/backups/simple', { method: 'PUT', body: JSON.stringify(payload()) })
+    credentials.value = {}
     bannerMsg.value = {
       text: '✅ 灾备配置已保存，每天北京时间 ' + scheduleTime.value + ' 自动执行',
       type: 'ok',
@@ -132,9 +149,9 @@ async function save() {
   } finally {
     busy.value = ''
   }
-}
+})
 
-async function runNow() {
+const runNow = action(async () => {
   const phrase = await prompt(
     '立即执行完整灾备（打包并按已启用目标上传）需输入确认短语：BACKUP OKXQuant',
   )
@@ -157,7 +174,7 @@ async function runNow() {
   } finally {
     busy.value = ''
   }
-}
+}, false)
 
 async function downloadArchive(archiveName: string) {
   try {
@@ -196,7 +213,7 @@ function triggerUpload() {
   }
 }
 
-async function onFileSelected(e: Event) {
+const onFileSelected = action(async (e: Event) => {
   const target = e.target as HTMLInputElement
   const file = target.files?.[0]
   if (!file) return
@@ -228,16 +245,16 @@ async function onFileSelected(e: Event) {
     busy.value = ''
     if (target) target.value = ''
   }
-}
+})
 
-async function restoreArchive(archiveName: string) {
+const restoreArchive = action(async (archiveName: string) => {
   const clean = archiveName.split('/').pop() || archiveName
   const phrase = await prompt(
     `警告：仅恢复可信备份包中允许的源码与运行数据，不恢复认证及密钥。请先停止 gateway、trader 及自动拉起机制，否则返回 409；系统不会自动停机或修改云端保护订单。\n如确认恢复归档【${clean}】，请输入确认短语：RESTORE OKXQuant`,
   )
   if (!phrase) return
   if (phrase.trim().toUpperCase() !== 'RESTORE OKXQuant') {
-    toast.success('确认短语不正确，已取消恢复！')
+    toast.warning('确认短语不正确，已取消恢复')
     return
   }
   busy.value = 'restore'
@@ -261,7 +278,7 @@ async function restoreArchive(archiveName: string) {
   } finally {
     busy.value = ''
   }
-}
+})
 
 function fmtBytes(n: number) {
   if (!n) return '--'
@@ -280,6 +297,7 @@ const toast = useToast()
 
 <template>
   <div class="space-y-4">
+    <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading || actionBusy" @click="load()">重试</button></div>
     <LoadingState v-if="loading" />
 
     <template v-else-if="simple">
@@ -298,7 +316,7 @@ const toast = useToast()
               v-model="enabled"
               type="checkbox"
               class="accent-blue-500 w-4 h-4"
-              :disabled="!auth.isSuperadmin"
+              :disabled="(!auth.isSuperadmin) || actionBusy"
             />
             <span :class="enabled ? 'text-emerald-500 font-bold' : 'text-[var(--text-muted)]'">{{
               enabled ? '每日自动灾备已启用' : '已停用'
@@ -351,7 +369,7 @@ const toast = useToast()
                 ><select
                   :id="fieldId"
                   v-model="destination"
-                  :disabled="!auth.isSuperadmin"
+                  :disabled="(!auth.isSuperadmin) || actionBusy"
                   class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border cursor-pointer"
                   style="
                     background-color: var(--bg-input);
@@ -379,7 +397,7 @@ const toast = useToast()
                   :id="fieldId"
                   v-model="scheduleTime"
                   type="time"
-                  :disabled="!auth.isSuperadmin"
+                  :disabled="(!auth.isSuperadmin) || actionBusy"
                   class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
                   style="
                     background-color: var(--bg-input);
@@ -401,7 +419,7 @@ const toast = useToast()
                   type="number"
                   min="1"
                   max="365"
-                  :disabled="!auth.isSuperadmin"
+                  :disabled="(!auth.isSuperadmin) || actionBusy"
                   class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border num-tabular"
                   style="
                     background-color: var(--bg-input);
@@ -432,7 +450,7 @@ const toast = useToast()
                   ><input
                     :id="fieldId"
                     v-model="endpoint"
-                    :disabled="!auth.isSuperadmin"
+                    :disabled="(!auth.isSuperadmin) || actionBusy"
                     placeholder="https://s3.us-west-004.backblazeb2.com"
                     class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
                     style="
@@ -452,7 +470,7 @@ const toast = useToast()
                   ><input
                     :id="fieldId"
                     v-model="bucket"
-                    :disabled="!auth.isSuperadmin"
+                    :disabled="(!auth.isSuperadmin) || actionBusy"
                     class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
                     style="
                       background-color: var(--bg-input);
@@ -472,7 +490,7 @@ const toast = useToast()
                     :id="fieldId"
                     v-model="credentials[f]"
                     type="password"
-                    :disabled="!auth.isSuperadmin"
+                    :disabled="(!auth.isSuperadmin) || actionBusy"
                     :placeholder="simple.configured ? '留空保持现有值' : ''"
                     class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
                     style="
@@ -489,7 +507,7 @@ const toast = useToast()
           <template v-if="auth.isSuperadmin">
             <button
               @click="testConnection"
-              :disabled="busy !== ''"
+              :disabled="(busy !== '') || actionBusy || !canManage"
               class="flex items-center space-x-1 px-3 py-2 rounded-lg border text-sm font-sans cursor-pointer disabled:opacity-40 transition-all shadow-xs"
               style="
                 background-color: var(--bg-card-subtle);
@@ -503,7 +521,7 @@ const toast = useToast()
             </button>
             <button
               @click="save"
-              :disabled="busy !== ''"
+              :disabled="(busy !== '') || actionBusy || !canManage"
               class="flex items-center space-x-1 px-3 py-2 rounded-lg text-sm font-sans font-bold cursor-pointer disabled:opacity-40 transition-all shadow-xs"
               style="background-color: var(--text-main); color: var(--bg-card)"
             >
@@ -513,7 +531,7 @@ const toast = useToast()
             </button>
             <button
               @click="runNow"
-              :disabled="busy !== ''"
+              :disabled="(busy !== '') || actionBusy"
               class="flex items-center space-x-1 px-3 py-2 rounded-lg text-sm font-sans font-bold cursor-pointer disabled:opacity-40 transition-all shadow-xs"
               style="
                 background-color: var(--color-down-bg);
@@ -527,7 +545,7 @@ const toast = useToast()
             </button>
 
             <!-- Hidden file input for upload -->
-            <input
+            <input :disabled="actionBusy || !canManage"
               ref="uploadFileInput"
               type="file"
               accept=".tar.gz,.tgz"
@@ -536,7 +554,7 @@ const toast = useToast()
             />
             <button
               @click="triggerUpload"
-              :disabled="busy !== ''"
+              :disabled="(busy !== '') || actionBusy"
               class="flex items-center space-x-1 px-3 py-2 rounded-lg border text-sm font-sans font-bold cursor-pointer disabled:opacity-40 transition-all shadow-xs"
               style="
                 background-color: var(--bg-card-subtle);
@@ -667,7 +685,7 @@ const toast = useToast()
                   </td>
                   <td class="py-2.5 px-4 text-center">
                     <div class="flex items-center justify-center space-x-2">
-                      <button
+                      <button :disabled="actionBusy"
                         @click="downloadArchive(a.name)"
                         class="p-1 rounded hover:bg-[var(--bg-badge)] text-[var(--color-brand)] transition-colors cursor-pointer"
                         title="下载归档到本地"
@@ -677,7 +695,7 @@ const toast = useToast()
                       <button
                         v-if="auth.isSuperadmin"
                         @click="restoreArchive(a.name)"
-                        :disabled="busy === 'restore'"
+                        :disabled="(busy === 'restore') || actionBusy || !canManage"
                         class="p-1 rounded hover:bg-[var(--bg-badge)] text-amber-500 transition-colors cursor-pointer"
                         title="恢复此备份到系统"
                       >

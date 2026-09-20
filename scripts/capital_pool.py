@@ -92,7 +92,16 @@ def assert_new_scope(scope,config):
             rows=db.execute('SELECT scope,payload FROM capital_pool_state WHERE scope<>?',(scope,)).fetchall()
         for old_scope,payload in rows:
             state=json.loads(payload)
-            if state.get('allocation_id')==config.allocation_id:raise RiskRejected('Credentials/account identity changed; explicit allocation migration required')
+            if state.get('allocation_id')!=config.allocation_id:continue
+            old_environment=state.get('environment')
+            # Legacy states predate the explicit field, but canonical account
+            # scopes already distinguish simulated and real exchange accounts.
+            if old_environment not in ('demo','live'):
+                old_environment=next((mode for mode in ('demo','live') if old_scope.startswith('okx:'+mode+':')),None)
+            if old_environment in ('demo','live') and old_environment!=config.environment:continue
+            # Unknown legacy scopes remain conservative; never infer a new
+            # account within the same environment or reset its accumulated loss.
+            raise RiskRejected('Credentials/account identity changed; explicit allocation migration required')
     except RiskRejected:raise
     except (sqlite3.Error,ValueError,TypeError,AttributeError):raise RiskRejected('Allocation identity registry requires review; no fresh budget created') from None
 
@@ -129,7 +138,7 @@ def advance(previous,config,scope,observation,*,flat,policy):
         drawdown={**((previous or {}).get('drawdown') or {}),'blocked':True,'reason':'Capital pool depleted'}
     else:
         drawdown=update_equity_state((previous or {}).get('drawdown'),equity=nav,at=at,cash_flow=0,complete=True,policy=policy)
-    return {'scope':scope,'version':VERSION,'currency':'USDT','allocation_id':config.allocation_id,'allocation_fingerprint':config.allocation_fingerprint,
+    return {'scope':scope,'version':VERSION,'currency':'USDT','environment':config.environment,'allocation_id':config.allocation_id,'allocation_fingerprint':config.allocation_fingerprint,
             'initial_budget':initial,'configured_cap':config.budget_usdt,'baseline_adjusted_equity':baseline,
             'account_equity':equity,'external_flow_total':flow,'external_flow_origin':origin,'at':at,'pool_nav':nav,'risk_equity':risk_equity,
             'strategy_pnl_since_allocation':nav-initial,'drawdown':drawdown,
@@ -194,6 +203,15 @@ def check_account(balance):
         if abs(number(item.get('liab') or 0))>1e-8:raise RiskRejected('Borrowed balances cannot fund the capital pool')
 
 
+def usdt_equity(balance):
+    """USDT component for standard account risk; not a dedicated-pool assertion."""
+    details=balance.get('details')
+    if not isinstance(details,list):raise RiskRejected('USDT equity breakdown unavailable')
+    rows=[d for d in details if isinstance(d,dict) and d.get('ccy')=='USDT']
+    if len(rows)!=1:raise RiskRejected('A unique USDT equity row is required')
+    return number(rows[0].get('eq'),positive=True)
+
+
 def currency_observation(observation,balance):
     check_account(balance)
     usdt=next(item for item in balance['details'] if item['ccy']=='USDT')
@@ -223,7 +241,7 @@ def initialize_flat(env,observation,balance,positions,orders,policy):
 
 def admit(env,observation,balance,positions,orders,metadata,*,inst_id,available,policy,leverage_reader):
     config=load_config()
-    if not config.enabled:return Budget(False,number(balance['totalEq'],positive=True),available,policy,{},config_signature(config))
+    if not config.enabled:return Budget(False,usdt_equity(balance),available,policy,{},config_signature(config))
     if config.environment!=env.mode:raise RiskRejected('Capital pool environment mismatch')
     check_account(balance)
     observation=currency_observation(observation,balance)

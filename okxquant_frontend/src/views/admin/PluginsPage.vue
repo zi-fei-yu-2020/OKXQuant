@@ -11,15 +11,18 @@ import { Blocks, ShieldAlert, RefreshCw } from 'lucide-vue-next'
 const { api } = useApi()
 const data = ref<any>(null)
 const loading = ref(true)
+const loadFailed = ref(false)
 const errText = ref('')
 
 async function load() {
+  loadFailed.value = false
   loading.value = true
   try {
     data.value = await api('/api/v1/admin/plugins')
     errText.value = ''
   } catch (e: any) {
     if (e?.silent) return
+    loadFailed.value = true
     errText.value = e.message
   } finally {
     loading.value = false
@@ -33,6 +36,7 @@ useErrorFeedback(errText)
 
 <template>
   <div class="space-y-4 max-w-[2160px] mx-auto">
+    <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading" @click="load()">重试</button></div>
     <LoadingState v-if="loading" />
 
     <template v-else-if="data">

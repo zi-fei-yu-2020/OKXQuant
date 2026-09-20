@@ -9,7 +9,7 @@ from pathlib import Path
 from scripts.entry_candidates import verified_bars
 from scripts.scalp_ranking import VERSION as RANK_VERSION
 
-VERSION='scalp-research-v1'
+VERSION='scalp-research-v2'
 DB_PATH=Path(__file__).resolve().parents[1]/'data'/'scalp_research.db'
 WIDTH=60000;HORIZONS=(15,30,60);MAX_CAPTURE=24;MAX_PENDING=2000
 SCHEMA='''CREATE TABLE IF NOT EXISTS frames(scope TEXT NOT NULL,frame INTEGER NOT NULL,at REAL NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(scope,frame));
@@ -24,7 +24,12 @@ def encode(x):return json.dumps(x,sort_keys=True,ensure_ascii=False,allow_nan=Fa
 def make_case(scope,package,plan,metric,observed_at):
     # Only the next complete minute can be assessed from OHLC. No assumed fill
     # at the earlier candle close and no invented price path in the entry minute.
-    born=int(observed_at*1000);start=((born+WIDTH-1)//WIDTH)*WIDTH
+    if isinstance(observed_at,bool) or not math.isfinite(observed_at) or observed_at<0:
+        raise ValueError('Invalid shadow observation time')
+    born=int(observed_at*1000)
+    # Round the original instant, not truncated milliseconds: even a fraction
+    # of a millisecond after a boundary excludes that partial minute.
+    start=math.ceil(observed_at/(WIDTH/1000))*WIDTH
     identity=hashlib.sha256(encode([scope,VERSION,plan['id'],born]).encode()).hexdigest()[:32]
     return {'id':identity,'instrument':package['instId'],'candidate_id':plan['id'],'setup':plan['setup'],
             'action':plan['action'],'entry':plan['entry_price'],'stop':plan['stop_loss_price'],'target':plan['take_profit_price'],
@@ -40,8 +45,9 @@ def advance(case,bars,now_ms):
     if out['status']!='tracking':return out
     side=1 if out['action']=='BUY_LONG' else -1
     end=out['end_ms'];start=out['observation_start_ms']
-    for bar in bars:
+    for bar in sorted(bars,key=lambda row:row['close_ms']):
         at=int(bar['close_ms'])
+        if at!=bar['close_ms'] or at%WIDTH:raise ValueError('Invalid shadow candle time')
         if not out['last_close_ms']<at<=min(now_ms,end):continue
         if at!=out['last_close_ms']+WIDTH:
             out['data_complete']=False

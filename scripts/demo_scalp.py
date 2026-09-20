@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Opt-in DEMO-only minute strategy. No LLM call and no blind order retry.
+"""Minute strategy: legacy DEMO opt-in or explicitly bound LIVE consent.
+No LLM call and no blind order retry.
 Both this runner and legacy AI use the same durable entry/risk gateway and writer lock.
 """
 from pathlib import Path
@@ -20,12 +21,8 @@ CONFIG=ROOT/'data'/'demo_scalp.json'
 
 
 def enabled(env):
-    if env.mode != 'demo': return False
-    from scripts.okx_runtime import _load_dotenv
-    if _load_dotenv().get('OKXQUANT_AUTOTRADE_ENABLED','1') != '1': return False
-    try: cfg=json.loads(CONFIG.read_text(encoding='utf8'))
-    except (OSError,ValueError): return False
-    return cfg.get('enabled') is True and cfg.get('version') == 'demo-scalp-v2'
+    from scripts.strategy_engine_runtime import enabled as engine_enabled
+    return engine_enabled(env)
 
 
 def chosen_entries(packages, policy, *, include_rank=False):
@@ -77,22 +74,29 @@ def run(*, observe_only=False):
     env=freeze_environment()
     try:
         if not enabled(env): return {'status':'disabled','mode':env.mode}
+        live_start=None
+        if env.mode=='live':
+            from scripts.strategy_engine_runtime import status, BINDING_FIELDS
+            live_start=status(env)
+            if live_start.get('enabled') is not True:return {'status':'disabled','mode':env.mode}
         execution_env=trader.freeze_okx_environment()
-        if execution_env.identity!=env.identity or execution_env.mode!='demo':
-            raise ValueError('DEMO execution binding changed')
+        if (execution_env.identity!=env.identity or execution_env.mode!=env.mode
+                or getattr(execution_env,'connection_id','')!=getattr(env,'connection_id','')
+                or getattr(execution_env,'binding_version',0)!=getattr(env,'binding_version',0)):
+            raise ValueError('Minute execution binding changed')
         now=closed_frame_time(); anchor=int(now)//60
         market.begin_signal_frame(now)
         items=load_instruments(); support=pool_support(items,env.mode,refresh=True)
         tradable=[i for i in items if support['items'].get(i['instId'],{}).get('can_open')]
         with ThreadPoolExecutor(max_workers=4) as pool:
-            packages=list(pool.map(fetch_single_instrument_package,tradable))
+            packages=list(pool.map(market.bind_signal_frame(fetch_single_instrument_package),tradable))
         news=load_strategy_snapshot(ROOT/'data'/'news_sentiment.json',[p['instId'].split('-')[0] for p in packages])
         for p in packages:
             p['environment_support']=support['items'][p['instId']];p['news_snapshot']=news
         policy=load_policy(); candidates,diagnostics,ranking=chosen_entries(packages,policy,include_rank=True)
         from scripts.scalp_ranking import legacy_key
         result={'status':'observed' if observe_only else 'evaluated','engine':'demo_scalp_v2',
-                'at':now,'ranking_observed_at':time.time(),'candidate_count':len(candidates),'checks':diagnostics,'selected':None,'ranking':ranking,
+                'mode':env.mode,'at':now,'ranking_observed_at':time.time(),'candidate_count':len(candidates),'checks':diagnostics,'selected':None,'ranking':ranking,
                 'entry_policy':__import__('scripts.demo_scalp_policy',fromlist=['descriptor']).descriptor()}
         if observe_only: return result
         with writer(timeout=5):
@@ -133,6 +137,13 @@ def run(*, observe_only=False):
                         row=materialize(p,plan,time.time(),policy)
                         row['decision']['selection_research']={'ranking':ranking['metrics'].get(plan['id']),
                             'comparison':result['selection_compare'],'version':ranking['version']}
+                        if env.mode=='live':
+                            from scripts.strategy_engine_runtime import status, BINDING_FIELDS
+                            live_binding=status(env)
+                            if (live_binding.get('enabled') is not True or any(
+                                    live_binding.get(key)!=live_start.get(key) for key in (*BINDING_FIELDS,'record_id'))):
+                                return {**result,'status':'disabled','mode':env.mode}
+                            row['decision']['engine_binding']={key:live_binding[key] for key in (*BINDING_FIELDS,'record_id')}
                         cache={p['instId']:row}
                         evidence.record_decisions(env.identity,cache,[p],'program:demo-scalp-v2',
                             hashlib.sha256(b'demo-scalp-v2').hexdigest(),time.time(),news_snapshot=news)

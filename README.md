@@ -73,3 +73,9 @@ Current release: v0.1.0.
 ## License
 
 MIT. This project is for research and simulated trading validation. It is not investment advice.
+
+
+## 2026-09 全链路审查与策略切换
+
+审查范围、修复闭环、standard/small300 的真实有效参数、LIVE 分钟策略独立授权与验收限制，见 `docs/audit-2026-09-20-closure.md`。
+新增规则使用有限纯数据规则语言，不执行任意上传的 Python。管理员保存/启用策略不等于已经成交；新决策读取最新配置，已有仓位保持原生命周期保护。

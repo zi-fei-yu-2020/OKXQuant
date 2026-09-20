@@ -137,7 +137,8 @@ def load_inputs(env,orders):
     cycle_start = 0.0
     try:
         from datetime import datetime, timezone, timedelta
-        initial = ledger_monitor.load('account_initial_state.json', {})
+        from okxquant_backend.account_baseline import load_account_baseline
+        initial = load_account_baseline(scope=env.identity)
         cycle_start = datetime.strptime(initial.get('reset_time','1970-01-01 00:00:00'), '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone(timedelta(hours=8))).timestamp() * 1000
     except (TypeError, ValueError, OverflowError):
         cycle_start = 0.0

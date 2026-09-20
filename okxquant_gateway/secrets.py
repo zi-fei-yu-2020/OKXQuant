@@ -5,6 +5,7 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Mapping
+from scripts.config_lock import configuration_write
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -41,39 +42,51 @@ def _fernet(create: bool = False) -> Fernet | None:
     if not KEY_FILE.exists():
         if not create:
             return None
-        _atomic_write(KEY_FILE, Fernet.generate_key())
+        with configuration_write(KEY_FILE):
+            if not KEY_FILE.exists():
+                _atomic_write(KEY_FILE, Fernet.generate_key())
     return Fernet(KEY_FILE.read_bytes().strip())
 
 
-def load_secrets() -> dict[str, str]:
+def load_secrets(*, strict: bool = False) -> dict[str, str]:
     fernet = _fernet(False)
-    if not fernet or not STORE_FILE.exists():
+    if not STORE_FILE.exists():
+        return {}
+    if not fernet:
+        if strict:
+            raise ValueError("Secret key missing; existing encrypted data was preserved")
         return {}
     try:
         payload = json.loads(fernet.decrypt(STORE_FILE.read_bytes()).decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("Invalid secret document")
         return {key: str(value) for key, value in payload.items() if key in SECRET_KEYS and value}
-    except (InvalidToken, OSError, json.JSONDecodeError):
+    except (InvalidToken, OSError, ValueError, UnicodeError):
+        if strict:
+            raise ValueError("Secret storage unreadable; existing encrypted data was preserved") from None
         return {}
 
 
 def save_secrets(values: Mapping[str, str]) -> None:
-    current = load_secrets()
-    current.update({key: value for key, value in values.items() if key in SECRET_KEYS and value})
-    fernet = _fernet(True)
-    assert fernet is not None
-    ciphertext = fernet.encrypt(json.dumps(current, ensure_ascii=False, sort_keys=True).encode("utf-8"))
-    _atomic_write(STORE_FILE, ciphertext)
+    with configuration_write(STORE_FILE):
+        current = load_secrets(strict=True)
+        current.update({key: value for key, value in values.items() if key in SECRET_KEYS and value})
+        fernet = _fernet(True)
+        assert fernet is not None
+        ciphertext = fernet.encrypt(json.dumps(current, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+        _atomic_write(STORE_FILE, ciphertext)
 
 
 def delete_secrets(keys: list[str] | tuple[str, ...] | set[str]) -> None:
-    current = load_secrets()
-    for key in keys:
-        current.pop(str(key), None)
-        os.environ.pop(str(key), None)
-    fernet = _fernet(True)
-    assert fernet is not None
-    ciphertext = fernet.encrypt(json.dumps(current, ensure_ascii=False, sort_keys=True).encode("utf-8"))
-    _atomic_write(STORE_FILE, ciphertext)
+    with configuration_write(STORE_FILE):
+        current = load_secrets(strict=True)
+        for key in keys:
+            current.pop(str(key), None)
+            os.environ.pop(str(key), None)
+        fernet = _fernet(True)
+        assert fernet is not None
+        ciphertext = fernet.encrypt(json.dumps(current, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+        _atomic_write(STORE_FILE, ciphertext)
 
 
 def inject_into_environment() -> int:

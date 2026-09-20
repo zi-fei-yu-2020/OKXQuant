@@ -17,7 +17,8 @@ def collect_fills(env,*,max_pages=5):
         row=db.execute('SELECT payload FROM sync_state WHERE scope=?',(env.identity,)).fetchone()
     state=json.loads(row[0]) if row else {}
     cycle_file=ROOT/'data'/'account_initial_state.json'
-    try: cycle=json.loads(cycle_file.read_text(encoding='utf8')); cycle_start=float(__import__('datetime').datetime.strptime(cycle.get('reset_time','1970-01-01 00:00:00'),'%Y-%m-%d %H:%M:%S').replace(tzinfo=__import__('datetime').timezone(__import__('datetime').timedelta(hours=8))).timestamp())
+    from okxquant_backend.account_baseline import load_account_baseline
+    try: cycle=load_account_baseline(scope=env.identity, path=cycle_file); cycle_start=float(__import__('datetime').datetime.strptime(cycle.get('reset_time','1970-01-01 00:00:00'),'%Y-%m-%d %H:%M:%S').replace(tzinfo=__import__('datetime').timezone(__import__('datetime').timedelta(hours=8))).timestamp())
     except Exception: cycle_start=0.0
     since=max(cycle_start, float(state.get('since',max(0,float(state.get('covered_until',0))-300))))
     cursor=state.get('cursor');seen=set();count=0;complete=False

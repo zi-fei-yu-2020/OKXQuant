@@ -5,6 +5,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import struct
@@ -31,8 +32,23 @@ MANDATORY_EXCLUDES = (".git/**", ".env", ".okx/**", ".bypy/**", "backups/**", "l
 SCOPE_PATHS = {
     "data": ("data",), "scripts": ("scripts",), "dashboard": ("dashboard",), "okxquant_backend": ("okxquant_backend",), "okxquant_gateway": ("okxquant_gateway",),
     "tests": ("tests",), "recovery_guide": ("RECOVERY_GUIDE.md",), "agent_profile": ("SOUL.md", "PROFILE.md", "AGENTS.md", "MEMORY.md"),
-    "root_configs": ("README.md", "requirements.txt", "pyproject.toml", "docker-compose.yml", "Dockerfile", ".gitignore"),
+    "root_configs": ("README.md", "requirements.txt", "pyproject.toml", "docker-compose.yml", "compose.yaml", "Dockerfile", ".gitignore"),
 }
+
+
+def safe_backup_directory(path: Path) -> Path:
+    """Validate again at execution time; never trust persisted target settings."""
+    root = ROOT.resolve()
+    base = root / "backups"
+    candidate = Path(os.path.abspath(path))
+    if not candidate.is_relative_to(base):
+        raise ValueError("Backup target must remain under project backups/")
+    for part in (base, *candidate.parents, candidate):
+        if part.is_relative_to(base) and part.is_symlink():
+            raise ValueError("Linked backup directory refused")
+    if not candidate.resolve().is_relative_to(base):
+        raise ValueError("Backup path escapes root")
+    return candidate
 
 
 def prune(paths: Iterable[Path], retention: int) -> None:
@@ -41,29 +57,50 @@ def prune(paths: Iterable[Path], retention: int) -> None:
 
 
 def retain_local_archive(source: Path, retention: int, destination_dir: Path | None = None) -> Path:
-    destination_dir = destination_dir or LOCAL_DIR
+    if isinstance(retention, bool) or int(retention) < 1:
+        raise ValueError("At least one local archive must be retained")
+    destination_dir = safe_backup_directory(destination_dir or LOCAL_DIR)
     destination_dir.mkdir(parents=True, exist_ok=True)
     destination = destination_dir / source.name
-    shutil.copy2(source, destination)
-    prune(destination_dir.glob("okxquant_backup_*"), retention)
+    if destination.is_symlink() or (destination.exists() and destination.stat().st_nlink > 1):
+        raise ValueError("Linked backup file refused")
+    # Atomic replacement never truncates an existing hard-linked file.
+    fd, temporary = tempfile.mkstemp(prefix=".archive-", dir=destination_dir)
+    try:
+        with os.fdopen(fd, "wb") as output, source.open("rb") as input_file:
+            shutil.copyfileobj(input_file, output)
+            output.flush(); os.fsync(output.fileno())
+        os.replace(temporary, destination)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    # Jobs sharing a target directory must not delete one another's history.
+    archive_name = re.compile(r"okxquant_backup_(.+)_\d{8}_\d{6}(?:_\d{6})?\.tar\.gz(?:\.aes256)?$")
+    identity = archive_name.fullmatch(source.name)
+    if identity:
+        siblings = (p for p in destination_dir.glob("okxquant_backup_*")
+                    if (match := archive_name.fullmatch(p.name)) and match.group(1) == identity.group(1))
+        prune(siblings, retention)
     return destination
 
 
 def sqlite_hot_backups(timestamp: str, retention: int, destination_dir: Path | None = None) -> list[Path]:
-    destination_dir = destination_dir or SQLITE_DIR
+    destination_dir = safe_backup_directory(destination_dir or SQLITE_DIR)
     destination_dir.mkdir(parents=True, exist_ok=True)
     created: list[Path] = []
     for source in (ROOT / "data").glob("*.db"):
-        if source.name == "okxquant_admin.db": continue
+        if source.is_symlink() or source.stat().st_nlink != 1 or _excluded("data/" + source.name, []): continue
         destination = destination_dir / f"{source.stem}_{timestamp}.db"
-        source_conn = sqlite3.connect(source)
+        if destination.exists() or destination.is_symlink():
+            raise ValueError("SQLite backup destination already exists")
+        source_conn = sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)
         try:
             target_conn = sqlite3.connect(destination)
             try: source_conn.backup(target_conn)
             finally: target_conn.close()
         finally: source_conn.close()
         os.chmod(destination, 0o600); created.append(destination)
-    prune(destination_dir.glob("*.db"), retention)
+    for source in (ROOT / "data").glob("*.db"):
+        prune(destination_dir.glob(f"{source.stem}_*.db"), retention)
     return created
 
 
@@ -75,27 +112,65 @@ def calculate_sha256(path: Path) -> str:
 
 
 def _excluded(relative: str, patterns: list[str]) -> bool:
-    rel = relative.replace(os.sep, "/").lstrip("./")
+    rel = relative.replace(os.sep, "/")
+    while rel.startswith("./"):
+        rel = rel[2:]
+    parts = tuple(rel.split("/"))
+    from scripts.backup_restore import PRIVATE_PARTS, PRIVATE_SUFFIXES, _allowed
+    if any(p.casefold().startswith(".env") or p.casefold() in PRIVATE_PARTS for p in parts):
+        return True
+    if parts[-1].casefold().endswith(PRIVATE_SUFFIXES):
+        return True
+    if parts[0] == "data" and not _allowed(parts, True):
+        return True
     return any(fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(f"{rel}/", pattern) for pattern in [*MANDATORY_EXCLUDES, *patterns])
 
 
 def _tar_filter(patterns: list[str]):
     def filter_info(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
-        return None if _excluded(info.name, patterns) else info
+        return None if not (info.isfile() or info.isdir()) or _excluded(info.name, patterns) else info
     return filter_info
 
 
 def create_archive(job: dict[str, Any], timestamp: str) -> tuple[Path, list[str]]:
-    staging = BACKUPS / "staging"; staging.mkdir(parents=True, exist_ok=True)
+    staging = safe_backup_directory(BACKUPS / "staging"); staging.mkdir(parents=True, exist_ok=True)
     safe_id = "".join(c for c in str(job["id"]) if c.isalnum() or c in "-_")[:48]
     path = staging / f"okxquant_backup_{safe_id}_{timestamp}.tar.gz"
     included: list[str] = []
-    with tarfile.open(path, "w:gz", compresslevel=int(job.get("compression_level", 6))) as archive:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as raw, tarfile.open(fileobj=raw, mode="w:gz", compresslevel=int(job.get("compression_level", 6))) as archive:
+        patterns = job.get("exclude", [])
+        def add_source(source: Path, relative: str) -> None:
+            if source.is_symlink() or _excluded(relative, patterns):
+                return
+            if source.is_dir():
+                archive.add(source, arcname=relative, recursive=False, filter=_tar_filter(patterns))
+                for child in sorted(source.iterdir()):
+                    add_source(child, relative + "/" + child.name)
+            elif source.is_file() and source.stat().st_nlink == 1:
+                if relative.startswith("data/") and source.suffix.lower() in {".db", ".sqlite", ".sqlite3"}:
+                    # The archive itself must be WAL-consistent even when the
+                    # separate optional SQLite-retention target is disabled.
+                    with tempfile.TemporaryDirectory(prefix=".sqlite-archive-", dir=staging) as directory:
+                        snapshot = Path(directory) / "snapshot.db"
+                        snapshot.touch(mode=0o600)
+                        reader = sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)
+                        try:
+                            writer = sqlite3.connect(snapshot)
+                            try:
+                                reader.backup(writer)
+                            finally:
+                                writer.close()
+                        finally:
+                            reader.close()
+                        archive.add(snapshot, arcname=relative, recursive=False, filter=_tar_filter(patterns))
+                else:
+                    archive.add(source, arcname=relative, recursive=False, filter=_tar_filter(patterns))
         for scope in job.get("scope", []):
             for relative in SCOPE_PATHS.get(scope, ()):
                 source = ROOT / relative
                 if source.exists() and not _excluded(relative, job.get("exclude", [])):
-                    archive.add(source, arcname=relative, recursive=True, filter=_tar_filter(job.get("exclude", []))); included.append(relative)
+                    add_source(source, relative); included.append(relative)
     if not included:
         path.unlink(missing_ok=True); raise RuntimeError("所选范围没有可归档文件")
     os.chmod(path, 0o600)
@@ -113,7 +188,8 @@ def encrypt_archive(source: Path, key_env: str) -> Path:
     if not secret: raise RuntimeError(f"加密已启用但环境变量 {key_env} 未配置")
     salt = os.urandom(16); nonce = os.urandom(12); key = _derive_key(secret, salt); target = source.with_suffix(source.suffix + ".aes256")
     encryptor = Cipher(algorithms.AES(key), modes.GCM(nonce)).encryptor()
-    with source.open("rb") as inp, target.open("wb+") as out:
+    fd = os.open(target, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb+") as out, source.open("rb") as inp:
         out.write(MAGIC); out.write(salt); out.write(nonce); out.write(b"\x00" * 16)
         for chunk in iter(lambda: inp.read(1024 * 1024), b""): out.write(encryptor.update(chunk))
         out.write(encryptor.finalize()); out.seek(len(MAGIC) + len(salt) + len(nonce)); out.write(encryptor.tag)
@@ -130,15 +206,30 @@ def decrypt_archive(source: Path, key_env: str, destination: Path) -> Path:
         salt, nonce, tag = inp.read(16), inp.read(12), inp.read(16)
         if len(salt) != 16 or len(nonce) != 12 or len(tag) != 16: raise RuntimeError("加密归档头损坏")
         decryptor = Cipher(algorithms.AES(_derive_key(secret, salt)), modes.GCM(nonce, tag)).decryptor()
-        with destination.open("wb") as out:
-            for chunk in iter(lambda: inp.read(1024 * 1024), b""): out.write(decryptor.update(chunk))
-            out.write(decryptor.finalize()); out.flush(); os.fsync(out.fileno())
-    os.chmod(destination, 0o600); return destination
+        if destination.is_symlink() or (destination.exists() and destination.stat().st_nlink != 1):
+            raise ValueError("Linked decryption destination refused")
+        fd, temporary = tempfile.mkstemp(prefix=".decrypt-", dir=destination.parent)
+        try:
+            with os.fdopen(fd, "wb") as out:
+                for chunk in iter(lambda: inp.read(1024 * 1024), b""):
+                    out.write(decryptor.update(chunk))
+                # Publish only after authentication succeeds; a bad tag must
+                # neither truncate the previous file nor expose partial plaintext.
+                out.write(decryptor.finalize()); out.flush(); os.fsync(out.fileno())
+            os.replace(temporary, destination)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    return destination
 
 
 def verify_archive(path: Path, expected_sha256: str = "", key_env: str = "") -> dict[str, Any]:
-    BACKUPS.mkdir(parents=True, exist_ok=True)
+    safe_backup_directory(BACKUPS).mkdir(parents=True, exist_ok=True)
     if not path.exists(): raise RuntimeError("归档文件不存在")
+    from scripts.backup_restore import RestoreLimits, restore_archive
+    if path.is_symlink() or path.stat().st_nlink != 1 or not path.is_file():
+        raise ValueError("Archive must be an independent regular file")
+    if path.stat().st_size > RestoreLimits().max_archive_bytes:
+        raise ValueError("Archive exceeds verification size limit")
     checksum = calculate_sha256(path)
     if expected_sha256 and checksum != expected_sha256: raise RuntimeError("SHA256 校验失败")
     temp: Path | None = None; tar_path = path
@@ -146,12 +237,13 @@ def verify_archive(path: Path, expected_sha256: str = "", key_env: str = "") -> 
         if path.name.endswith(".aes256"):
             fd, temp_name = tempfile.mkstemp(prefix="okxquant-verify-", suffix=".tar.gz", dir=BACKUPS)
             os.close(fd); temp = Path(temp_name); tar_path = decrypt_archive(path, key_env, temp)
-        with tarfile.open(tar_path, "r:gz") as archive:
-            members = archive.getmembers()
-            unsafe = [m.name for m in members if Path(m.name).is_absolute() or ".." in Path(m.name).parts]
-            if unsafe: raise RuntimeError(f"归档包含不安全路径：{unsafe[0]}")
-            roots = sorted({Path(m.name).parts[0] for m in members if Path(m.name).parts})
-        return {"valid": True, "sha256": checksum, "members": len(members), "roots": roots, "encrypted": path.name.endswith(".aes256")}
+        # Verification and restore share the same CRC, decompression, metadata,
+        # member-count, link, path and alias limits. Never call getmembers() on
+        # an unbounded archive supplied to the administrative verify endpoint.
+        with tempfile.TemporaryDirectory(prefix="okxquant-verify-target-") as target:
+            checked = restore_archive(tar_path, Path(target), verify_only=True)
+        return {"valid": True, "sha256": checksum, **checked, "encrypted": path.name.endswith(".aes256")}
+
     finally:
         if temp: temp.unlink(missing_ok=True)
 
@@ -166,7 +258,7 @@ def upload_baidu(source: Path, remote_path: str, retries: int) -> dict[str, Any]
             code = bypy.ByPy().upload(str(source), destination)
             if code == 0: return {"success": True, "attempts": attempt, "destination": f"/apps/bypy/{destination}"}
             last = f"ByPy 返回 {code}"
-        except Exception as exc: last = f"{type(exc).__name__}: {exc}"
+        except Exception as exc: last = f"{type(exc).__name__}: backup operation failed; external detail withheld"
         if attempt < retries: time.sleep(min(attempt * 5, 30))
     return {"success": False, "attempts": retries, "destination": destination, "error": last}
 
@@ -307,7 +399,7 @@ def deliver_target(source: Path, target: dict[str, Any]) -> dict[str, Any]:
         if target.get("auth_mode","bypy")=="oauth": return upload_baidu_oauth(source,target)
         return upload_baidu(source,target.get("remote_path","OKXQUANT_Backups"),int(target.get("retries",3)))
     if target_type=="local":
-        destination=(ROOT/str(target.get("path") or "backups/local")).resolve()
+        destination=ROOT/str(target.get("path") or "backups/local")
         return {"success":True,"attempts":1,"destination":str(retain_local_archive(source,int(target.get("retention",3)),destination).relative_to(ROOT))}
     upload = upload_s3 if target_type == "s3" else upload_oss if target_type == "oss" else upload_webdav if target_type in {"webdav","aliyundrive","quark"} else None
     if not upload: raise RuntimeError(f"不支持的灾备目标：{target_type}")
@@ -316,13 +408,16 @@ def deliver_target(source: Path, target: dict[str, Any]) -> dict[str, Any]:
         try:
             result = upload(source, target); result["attempts"] = attempt; return result
         except Exception as exc:
-            last = f"{type(exc).__name__}: {exc}"
+            last = f"{type(exc).__name__}: backup operation failed; external detail withheld"
             if attempt < retries: time.sleep(min(attempt * 5, 30))
     return {"success": False, "attempts": retries, "error": last}
 
 
 def run_backup_job(job: dict[str, Any]) -> dict[str, Any]:
-    started = datetime.now(BJ_TZ); stamp = started.strftime("%Y%m%d_%H%M%S")
+    from okxquant_backend.backup_store import validate_job_id
+    validate_job_id(str(job["id"]))
+    safe_backup_directory(MANIFEST_DIR)
+    started = datetime.now(BJ_TZ); stamp = started.strftime("%Y%m%d_%H%M%S_%f")
     result: dict[str, Any] = {"job_id": job["id"], "job_name": job["name"], "started_at": started.strftime("%Y-%m-%d %H:%M:%S"), "status": "running", "targets": [], "sqlite": [], "errors": []}
     archive: Path | None = None
     try:
@@ -340,7 +435,7 @@ def run_backup_job(job: dict[str, Any]) -> dict[str, Any]:
             result["archive_members"] = verification["members"]; result["archive_roots"] = verification["roots"]
             for target in enabled_file_targets:
                 try: target_result = deliver_target(archive, target)
-                except Exception as exc: target_result = {"success": False, "attempts": 1, "error": f"{type(exc).__name__}: {exc}"}
+                except Exception as exc: target_result = {"success": False, "attempts": 1, "error": f"{type(exc).__name__}: backup operation failed; external detail withheld"}
                 result["targets"].append({"id": target["id"], "type": target["type"], **target_result})
         if job.get("sqlite", {}).get("enabled"):
             sqlite_dir = SQLITE_DIR / str(job["id"])
@@ -355,9 +450,12 @@ def run_backup_job(job: dict[str, Any]) -> dict[str, Any]:
             archive.unlink(missing_ok=True); result["temporary_cleaned"] = True
         elif archive: result["temporary_cleaned"] = False
     except Exception as exc:
-        result["status"] = "failed"; result["errors"].append(f"{type(exc).__name__}: {exc}")
+        result["status"] = "failed"; result["errors"].append(f"{type(exc).__name__}: backup operation failed; external detail withheld")
     result["finished_at"] = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
     MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
-    manifest = MANIFEST_DIR / f"{job['id']}_{stamp}.json"; manifest.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"); os.chmod(manifest, 0o600)
+    manifest = MANIFEST_DIR / f"{job['id']}_{stamp}.json"
+    fd = os.open(manifest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     result["manifest"] = str(manifest.relative_to(ROOT))
     return result

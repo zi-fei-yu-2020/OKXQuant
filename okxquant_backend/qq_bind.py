@@ -263,20 +263,27 @@ def poll_bind_task(task_id: str) -> dict[str, Any]:
 
 
 def _persist(app_id: str, client_secret: str, openid: str) -> None:
-    from okxquant_gateway.secrets import save_secrets
-    from okxquant_backend.settings_store import update_env
+    from okxquant_gateway.secrets import save_secrets, delete_secrets
+    from okxquant_backend.settings_store import update_env, remove_env
+    from okxquant_backend.notifications import _env
 
-    values: dict[str, str] = {}
+    previous = _env()
+    values = {}
     if client_secret:
         values["OKXQUANT_QQ_CLIENT_SECRET"] = client_secret
     if openid:
         values["OKXQUANT_QQ_OPENID"] = openid
     if values:
         save_secrets(values)
-
+    if client_secret:
+        remove_env({"OKXQUANT_QQ_CLIENT_SECRET"})
     env_update = {"OKXQUANT_QQ_APP_ID": app_id}
     if openid:
         env_update["OKXQUANT_QQ_OPENID"] = openid
+    elif previous.get("OKXQUANT_QQ_APP_ID") != app_id:
+        # OpenIDs are bot-specific; never carry a previous bot's destination.
+        delete_secrets(["OKXQUANT_QQ_OPENID"])
+        env_update["OKXQUANT_QQ_OPENID"] = ""
     update_env(env_update)
 
 

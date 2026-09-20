@@ -41,7 +41,7 @@ class RestoreLimits:
 SOURCE_DIRS = frozenset({"scripts", "dashboard", "okxquant_backend", "okxquant_gateway", "tests"})
 ROOT_FILES = frozenset({
     "RECOVERY_GUIDE.md", "SOUL.md", "PROFILE.md", "AGENTS.md", "MEMORY.md",
-    "README.md", "requirements.txt", "pyproject.toml", "docker-compose.yml",
+    "README.md", "requirements.txt", "pyproject.toml", "docker-compose.yml", "compose.yaml",
     "Dockerfile", ".gitignore",
 })
 SOURCE_SUFFIXES = frozenset({".py", ".pyi", ".sh", ".ps1", ".bat", ".md", ".rst", ".txt",
@@ -209,11 +209,12 @@ def _check_headers(path: Path, limits: RestoreLimits) -> None:
             source.seek(end)
 
 
-def restore_archive(archive: Path, destination: Path, *, limits: RestoreLimits | None = None) -> dict:
+def restore_archive(archive: Path, destination: Path, *, limits: RestoreLimits | None = None, verify_only: bool = False) -> dict:
     """Validate and stage the whole archive, then replace allowed regular files.
 
     Existing ordinary files may be replaced; symlinks/hardlinks/special objects
-    may not. destination must already exist. Excluded members are still checked
+    may not. destination must already exist. verify_only checks the same bounded
+    headers/payload stream without publishing any member. Excluded members are still checked
     for unsafe types, paths, duplicate conflicts and size limits.
     """
     limits = limits or RestoreLimits()
@@ -280,6 +281,8 @@ def restore_archive(archive: Path, destination: Path, *, limits: RestoreLimits |
                     # Even excluded entries cannot exploit an existing target link.
                     _preflight(root_fd, parts, member.isdir(), check_sqlite=allowed)
                     entries.append((member, parts, allowed))
+                if verify_only:
+                    return {"members": len(entries), "roots": sorted({parts[0] for _, parts, _ in entries})}
                 for index, (member, parts, allowed) in enumerate(entries):
                     if not allowed:
                         skipped.append("/".join(parts))

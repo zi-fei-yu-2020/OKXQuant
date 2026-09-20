@@ -14,6 +14,7 @@ import time
 import datetime
 import subprocess
 import re
+import hashlib
 
 WORKSPACE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(WORKSPACE_DIR, "data")
@@ -30,32 +31,57 @@ BLACK_SWAN_PATTERNS = [
     (r"(USDT|USDC|DAI).*(严重脱锚|脱锚幅度|depeg|脱锚超过|跌破0\.9[0-8])", "头部稳定币恶性脱锚危机"),
     (r"(币安|OKX|Coinbase|Kraken).*(暂停全部提现|停止提币|申请破产重组|破产倒闭|发生严重挤兑)", "主流中心化交易所崩盘挤兑"),
     (r"(以太坊主网|比特币网络|Solana网络|BNB Chain).*(遭遇51%攻击|全网瘫痪停机|紧急硬分叉回滚)", "顶级底层公链系统性故障/51%攻击"),
-    (r"(全面取缔所有加密|宣布比特币非法|宣布数字货币交易非法|爆发核危机|宣战)", "国家级极端不可抗力/战争")
+    (r"(全面取缔所有加密|宣布比特币非法|宣布数字货币交易非法|爆发核危机)", "国家级极端不可抗力/战争")
 ]
 
-def trigger_circuit_breaker(headline: str, keyword: str):
+_COUNTRIES = r'(?:俄罗斯|乌克兰|美国|伊朗|以色列|中国|朝鲜|韩国|印度|巴基斯坦)'
+_WAR_DECLARATION = re.compile(_COUNTRIES + r'.{0,12}(?:向|对)' + _COUNTRIES + r'.{0,8}宣战')
+_NEGATED_EVENT = re.compile(r'(?:否认|辟谣|并未|没有|未曾|不会|不实|谣言|假设|如果|假如).{0,32}(?:脱锚|提现|提币|破产|挤兑|攻击|瘫痪|回滚|非法|核危机|宣战)', re.I)
+
+
+def black_swan_reason(text):
+    """Correct lexical false positives; not a news sentiment trading filter."""
+    for sentence in re.split(r'[。！？!?；;\n]', text):
+        if _NEGATED_EVENT.search(sentence):
+            continue
+        for pattern, name in BLACK_SWAN_PATTERNS:
+            if re.search(pattern, sentence, re.I): return name
+        if _WAR_DECLARATION.search(sentence): return '国家级极端不可抗力/战争'
+    return None
+
+
+def trigger_circuit_breaker(headline: str, keyword: str, *, event_id=None, source_at=None):
+    from pathlib import Path
+    from scripts.config_lock import configuration_write
+    from scripts.public_market import atomic_json
     tz_bj = datetime.timezone(datetime.timedelta(hours=8))
-    now_bj = datetime.datetime.now(tz_bj)
     now_ts = int(time.time())
-    
-    cb_data = {
-        "active": True,
-        "triggered_at": now_bj.strftime("%Y-%m-%d %H:%M:%S"),
-        "expires_at_ts": now_ts + 1800,  # 30 minutes freeze
-        "headline": headline,
-        "keyword": keyword,
-        "action": "暂停新开仓 30 分钟，启动存量持仓保本防御"
-    }
-    
-    with open(CIRCUIT_BREAKER_FILE, "w", encoding="utf-8") as f:
-        json.dump(cb_data, f, ensure_ascii=False, indent=2)
-        
+    day = datetime.datetime.fromtimestamp(float(source_at or now_ts), tz_bj).strftime('%Y-%m-%d')
+    key = hashlib.sha256((day + ':' + headline.strip() + ':' + keyword).encode()).hexdigest()
+    with configuration_write(CIRCUIT_BREAKER_FILE):
+        try:
+            previous = json.loads(Path(CIRCUIT_BREAKER_FILE).read_text(encoding='utf8'))
+            if not isinstance(previous, dict): previous = {}
+        except (OSError,ValueError): previous = {}
+        seen = list(previous.get('seen_events') or [])
+        if key in seen: return False
+        # Preserve the original expiry for legacy repeats instead of sliding
+        # the same 30-minute event window forward on every harvest.
+        if previous.get('headline') == headline and str(previous.get('triggered_at') or '').startswith(day):
+            return False
+        cb_data = {'active': True, 'triggered_at': datetime.datetime.fromtimestamp(now_ts,tz_bj).strftime('%Y-%m-%d %H:%M:%S'),
+                   'expires_at_ts': now_ts + 1800, 'headline': headline, 'keyword': keyword,
+                   'event_id': event_id, 'source_at': source_at, 'seen_events': (seen + [key])[-256:],
+                   'action': '暂停新开仓 30 分钟，启动存量持仓保本防御'}
+        atomic_json(CIRCUIT_BREAKER_FILE, cb_data)
     try:
         from qq_notifier import notify_circuit_breaker
-        notify_circuit_breaker(headline, f"命中突发高危词汇【{keyword}】")
+        notify_circuit_breaker(headline, f'命中突发高危事件【{keyword}】')
     except Exception:
         pass
-    print(f"🚨 黑天鹅熔断已激活: {headline}")
+    print(f'黑天鹅事件已记录: {headline}')
+    return True
+
 
 def is_circuit_breaker_active():
     if os.path.exists(CIRCUIT_BREAKER_FILE):
@@ -81,10 +107,9 @@ def fetch_and_analyze_news_sentiment():
         now=time.time()
         for item in fresh.get('latest_news', []):
             if not 0<=now-item.get('source_at',0)<900: continue
-            for pattern,name in BLACK_SWAN_PATTERNS:
-                if re.search(pattern, item.get('title','')+' '+item.get('summary',''), re.IGNORECASE):
-                    trigger_circuit_breaker(item['title'], name)
-                    break
+            reason=black_swan_reason(item.get('title','')+' '+item.get('summary',''))
+            if reason:
+                trigger_circuit_breaker(item['title'], reason, event_id=item.get('id'), source_at=item.get('source_at'))
         active,info=is_circuit_breaker_active()
         payload['circuit_breaker']=info if active else {'active':False}
         if active: payload['macro_sentiment']='避险熔断中'

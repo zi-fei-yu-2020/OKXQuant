@@ -2,6 +2,8 @@
 from __future__ import annotations
 import os
 import tempfile
+from contextlib import contextmanager
+from scripts.config_lock import configuration_write
 from pathlib import Path
 from typing import Mapping
 from .config import ROOT, environment_file, refresh_settings
@@ -27,6 +29,7 @@ MANAGED_KEYS = {
     "OKXQUANT_NOTIFY_TELEGRAM_ENABLED",
     "OKXQUANT_TELEGRAM_BOT_TOKEN",
     "OKXQUANT_TELEGRAM_CHAT_ID",
+    "OKXQUANT_TELEGRAM_API_BASE",
     "OKXQUANT_NOTIFY_QQ_ENABLED",
     "OKXQUANT_QQ_APP_ID",
     "OKXQUANT_QQ_CLIENT_SECRET",
@@ -59,59 +62,54 @@ def mask_url(url: str, visible_tail: int = 6) -> str:
     return f"{url[:12]}{'*' * 8}{url[-visible_tail:]}"
 
 
-def remove_env(keys: set[str] | list[str] | tuple[str, ...]) -> None:
-    targets = set(keys)
-    existing = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.exists() else []
-    result = []
-    for line in existing:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped and stripped.split("=", 1)[0].strip() in targets:
-            continue
-        result.append(line)
+@contextmanager
+def _transaction():
+    """Use the shared cross-process configuration lock, not a trading lock."""
+    with configuration_write(ENV_FILE):
+        yield
+
+
+def _write_lines(lines: list[str]) -> None:
     fd, temp_path = tempfile.mkstemp(prefix=".okxquant-env-", dir=ENV_FILE.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write("\n".join(result).rstrip() + "\n"); handle.flush(); os.fsync(handle.fileno())
-        os.chmod(temp_path, 0o600); os.replace(temp_path, ENV_FILE); os.chmod(ENV_FILE, 0o600)
-    finally:
-        if os.path.exists(temp_path): os.unlink(temp_path)
-    for key in targets: os.environ.pop(key, None)
-
-
-def update_env(values: Mapping[str, str | bool | None]) -> None:
-    ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
-    existing: list[str] = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.exists() else []
-    remaining = {key: value for key, value in values.items() if key in MANAGED_KEYS and value is not None}
-    result: list[str] = []
-    for line in existing:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            result.append(line)
-            continue
-        key = stripped.split("=", 1)[0].strip()
-        if key not in remaining:
-            result.append(line)
-            continue
-        value = remaining.pop(key)
-        result.append(f"{key}={str(value)}")
-    if remaining:
-        if result and result[-1]:
-            result.append("")
-        result.extend(f"{key}={str(value)}" for key, value in remaining.items())
-
-    fd, temp_path = tempfile.mkstemp(prefix=".okxquant-env-", dir=ENV_FILE.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write("\n".join(result) + "\n")
+            handle.write("\n".join(lines).rstrip() + "\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temp_path, 0o600)
         os.replace(temp_path, ENV_FILE)
-        os.chmod(ENV_FILE, 0o600)
     finally:
         if os.path.exists(temp_path):
             os.unlink(temp_path)
-    for key, value in values.items():
-        if key in MANAGED_KEYS and value is not None:
-            os.environ[key] = str(value)
-    refresh_settings()
+
+
+def _line_key(line: str) -> str:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        return ""
+    return stripped.split("=", 1)[0].strip()
+
+
+def remove_env(keys: set[str] | list[str] | tuple[str, ...]) -> None:
+    targets = set(keys)
+    with _transaction():
+        existing = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.exists() else []
+        _write_lines([line for line in existing if _line_key(line) not in targets])
+        for key in targets:
+            os.environ.pop(key, None)
+
+
+def update_env(values: Mapping[str, str | bool | None]) -> None:
+    updates = {key: ("1" if value else "0") if isinstance(value, bool) else str(value)
+               for key, value in values.items() if key in MANAGED_KEYS and value is not None}
+    # Check all inputs before touching either file or process environment.
+    if any(any(c in value for c in ("\r", "\n", "\x00")) for value in updates.values()):
+        raise ValueError("Environment values must be single-line strings")
+    with _transaction():
+        existing = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.exists() else []
+        # Remove every old occurrence: a later duplicate must not override a saved value.
+        result = [line for line in existing if _line_key(line) not in updates]
+        result.extend(f"{key}={value}" for key, value in updates.items())
+        _write_lines(result)
+        os.environ.update(updates)
+        refresh_settings()

@@ -10,6 +10,7 @@ from typing import Any
 from okxquant_gateway.events import GatewayEvent
 
 BJ_TZ = timezone(timedelta(hours=8))
+MANUAL_JOBS = frozenset({"self_improvement"})
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=FULL;
@@ -45,6 +46,17 @@ CREATE TABLE IF NOT EXISTS job_runs (
   detail TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_job_runs_name ON job_runs(job_name, id DESC);
+CREATE TABLE IF NOT EXISTS manual_job_requests (
+  request_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_name TEXT NOT NULL CHECK(job_name = 'self_improvement'),
+  actor TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','success','failed')),
+  created_at TEXT NOT NULL,
+  finished_at TEXT NOT NULL DEFAULT '',
+  run_id INTEGER REFERENCES job_runs(id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_manual_job_active
+  ON manual_job_requests(job_name) WHERE status IN ('pending','running');
 CREATE TABLE IF NOT EXISTS runtime_state (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -85,8 +97,8 @@ class GatewayStore:
             except OSError: pass
 
     @contextmanager
-    def connect(self):
-        connection = sqlite3.connect(self.path, timeout=10)
+    def connect(self, *, timeout=10):
+        connection = sqlite3.connect(self.path, timeout=timeout)
         self._secure_files()
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
@@ -153,6 +165,67 @@ class GatewayStore:
     def recover_processing(self) -> None:
         with self.connect() as connection:
             connection.execute("UPDATE deliveries SET status='retry' WHERE status='processing'")
+            connection.execute(
+                "UPDATE job_runs SET status='failed', return_code=125, finished_at=?, "
+                "detail='gateway restarted; previous execution outcome unknown' WHERE status='running'",
+                (datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S"),),
+            )
+            connection.execute(
+                "UPDATE manual_job_requests SET status='failed',finished_at=? WHERE status='running'",
+                (datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S"),),
+            )
+
+    def request_job(self, job_name: str, *, actor: str = "") -> dict[str, Any]:
+        """Persist one review-only request; pending/running clicks are idempotent.
+
+        Authentication/confirmation belongs to the API. This second allowlist
+        prevents internal callers from manually dispatching trading jobs.
+        """
+        if job_name not in MANUAL_JOBS:
+            raise ValueError("Manual execution is only allowed for self_improvement review")
+        actor = str(actor).replace("\r", " ").replace("\n", " ")[:160]
+        now = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM manual_job_requests WHERE job_name=? AND status IN ('pending','running')",
+                (job_name,),
+            ).fetchone()
+            deduplicated = row is not None
+            if row is None:
+                cursor = connection.execute(
+                    "INSERT INTO manual_job_requests(job_name,actor,created_at) VALUES (?,?,?)",
+                    (job_name, actor, now),
+                )
+                row = connection.execute("SELECT * FROM manual_job_requests WHERE request_id=?", (cursor.lastrowid,)).fetchone()
+        return {**dict(row), "deduplicated": deduplicated}
+
+    def job_requests(self, limit: int = 30) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT * FROM manual_job_requests ORDER BY request_id DESC LIMIT ?",
+                                      (max(1, min(limit, 200)),)).fetchall()
+        return [dict(row) for row in rows]
+
+    def pending_job_requests(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT * FROM manual_job_requests WHERE status='pending' ORDER BY request_id").fetchall()
+        return [dict(row) for row in rows]
+
+    def claim_job_request(self, request_id: int) -> dict[str, Any] | None:
+        """Claim and create its job run in one transaction, at actual execution."""
+        now = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT * FROM manual_job_requests WHERE request_id=? AND status='pending'",
+                                     (request_id,)).fetchone()
+            if row is None or row["job_name"] not in MANUAL_JOBS:
+                return None
+            cursor = connection.execute("INSERT INTO job_runs(job_name,status,started_at) VALUES (?,'running',?)",
+                                        (row["job_name"], now))
+            run_id = int(cursor.lastrowid)
+            connection.execute("UPDATE manual_job_requests SET status='running',run_id=? WHERE request_id=?",
+                               (run_id, request_id))
+        return {**dict(row), "status": "running", "run_id": run_id}
 
     def replay_dead(self, delivery_id: int) -> bool:
         now = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
@@ -169,13 +242,17 @@ class GatewayStore:
             cursor = connection.execute("INSERT INTO job_runs(job_name,status,started_at) VALUES (?,'running',?)", (job_name, now))
             return int(cursor.lastrowid)
 
-    def finish_job(self, run_id: int, return_code: int, detail: str) -> None:
+    def finish_job(self, run_id: int, return_code: int, detail: str, *, timeout=10) -> None:
         now = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
         status = "success" if return_code == 0 else "failed"
-        with self.connect() as connection:
+        with self.connect(timeout=timeout) as connection:
             connection.execute(
                 "UPDATE job_runs SET status=?, finished_at=?, return_code=?, detail=? WHERE id=?",
                 (status, now, return_code, detail[-2000:], run_id),
+            )
+            connection.execute(
+                "UPDATE manual_job_requests SET status=?,finished_at=? WHERE run_id=? AND status='running'",
+                (status, now, run_id),
             )
 
     def job_runs(self, limit: int = 30) -> list[dict[str, Any]]:

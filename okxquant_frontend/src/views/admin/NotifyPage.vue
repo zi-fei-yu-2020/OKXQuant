@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useApiAction } from '../../composables/useApiAction'
+const { action, actionBusy, canManage } = useApiAction(() => loading.value || loadFailed.value)
+
 import AppField from '../../components/ui/AppField.vue'
 import AppCard from '../../components/ui/AppCard.vue'
 import LoadingState from '../../components/ui/LoadingState.vue'
@@ -7,17 +10,20 @@ import AppDialog from '../../components/ui/AppDialog.vue'
 
 import { useFeedback, useToast } from '../../composables/useFeedback'
 
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useApi } from '../../composables/useApi'
 import { Zap } from 'lucide-vue-next'
 
 const { api } = useApi()
 const config = ref<any>(null)
 const loading = ref(true)
+const loadFailed = ref(false)
 const testResults = ref<Record<string, any>>({})
 const captureModal = ref(false)
 const captureStatus = ref<any>(null)
 let captureTimer: any = null
+let capturePolling = false
+let captureGeneration = 0
 
 const enabledChannelsCount = computed(() => {
   if (!config.value) return 0
@@ -35,7 +41,8 @@ function showNotificationBanner(type: 'ok' | 'warn' | 'error', text: string) {
   }, 6000)
 }
 
-async function loadConfig(silent = false) {
+async function loadConfig(silent = false, channel?: string) {
+  loadFailed.value = false
   if (!silent) loading.value = true
   try {
     const res = await api('/api/v1/admin/notifications')
@@ -46,9 +53,11 @@ async function loadConfig(silent = false) {
     }
     const schedule = await api('/api/v1/admin/notifications/schedule')
     res._briefingTimes = schedule.briefing_times?.join(', ') || ''
-    config.value = res
+    if (channel && config.value) config.value[channel] = res[channel]
+    else config.value = res
   } catch (e: any) {
     if (e?.silent) return
+    loadFailed.value = true
     console.error(e)
     showNotificationBanner('error', '加载通知配置失败: ' + (e.message || String(e)))
   } finally {
@@ -56,7 +65,8 @@ async function loadConfig(silent = false) {
   }
 }
 
-async function toggleChannel(channel: string, enabled: boolean) {
+const toggleChannel = action(async (channel: string, enabled: boolean) => {
+  const previous = config.value?.[channel]?.enabled
   try {
     const payload: any = { enabled }
     if (config.value) {
@@ -85,15 +95,16 @@ async function toggleChannel(channel: string, enabled: boolean) {
       body: JSON.stringify(payload),
     })
     showNotificationBanner('ok', res.message || `${channel} 通道已成功${enabled ? '开启' : '关闭'}`)
-    await loadConfig(true)
+    // Only this channel was saved; preserve other channels and schedule drafts.
+    if (config.value?.[channel]) config.value[channel].enabled = enabled
   } catch (e: any) {
     if (e?.silent) return
     showNotificationBanner('error', e.message || '通道状态切换失败')
-    await loadConfig(true)
+    if (config.value?.[channel]) config.value[channel].enabled = previous
   }
-}
+}, false)
 
-async function saveAll() {
+const saveAll = action(async () => {
   try {
     const body: any = {
       webhook_enabled: config.value.webhook.enabled,
@@ -114,14 +125,15 @@ async function saveAll() {
       body: JSON.stringify(body),
     })
     showNotificationBanner('ok', res.message || '全部通知通道配置已保存')
-    await loadConfig(true)
+    config.value.qq._secret = ''
+    config.value.telegram._token = ''
   } catch (e: any) {
     if (e?.silent) return
     showNotificationBanner('error', e.message || '保存配置失败')
   }
-}
+})
 
-async function diagnose(channel: string) {
+const diagnose = action(async (channel: string) => {
   try {
     const res = await api('/api/v1/admin/notifications/diagnose', {
       method: 'POST',
@@ -132,9 +144,9 @@ async function diagnose(channel: string) {
     if (e?.silent) return
     testResults.value[channel] = { status: 'failed', detail: e.message }
   }
-}
+}, false)
 
-async function startCapture() {
+const startCapture = action(async () => {
   try {
     const res = await api('/api/v1/admin/notifications/qq/capture-openid/start', {
       method: 'POST',
@@ -147,28 +159,31 @@ async function startCapture() {
     if (e?.silent) return
     toast.error(e.message)
   }
-}
+})
 
 function pollCapture(captureId: string) {
   if (captureTimer) clearInterval(captureTimer)
+  const generation = ++captureGeneration
   captureTimer = setInterval(async () => {
+    if (capturePolling || generation !== captureGeneration) return
+    capturePolling = true
     try {
       const res = await api(`/api/v1/admin/notifications/qq/capture-openid/${captureId}`)
+      if (generation !== captureGeneration) return
       captureStatus.value = res
       if (res.status === 'captured' || res.status === 'expired' || res.status === 'failed') {
         clearInterval(captureTimer)
         captureTimer = null
         if (res.status === 'captured') {
-          await loadConfig()
-          setTimeout(() => {
-            captureModal.value = false
-          }, 1800)
+          await loadConfig(true, 'qq')
         }
       }
     } catch (e: any) {
+      if (generation !== captureGeneration) return
       clearInterval(captureTimer)
       captureTimer = null
-    }
+      if (!e?.silent) captureStatus.value = { status: 'failed', error: e.message }
+    } finally { capturePolling = false }
   }, 1500)
 }
 
@@ -177,6 +192,7 @@ const bindModal = ref(false)
 const bindStatus = ref<any>(null)
 let bindTimer: any = null
 let bindTaskId = ''
+let bindPolling = false
 
 function stopBindPolling() {
   if (bindTimer) {
@@ -185,7 +201,7 @@ function stopBindPolling() {
   }
 }
 
-async function startQqBind() {
+const startQqBind = action(async () => {
   try {
     const d = await api('/api/v1/admin/notifications/qq/bind/start', { method: 'POST', body: '{}' })
     bindTaskId = d.task_id
@@ -198,9 +214,12 @@ async function startQqBind() {
     bindModal.value = true
     stopBindPolling()
     bindTimer = setInterval(async () => {
-      if (!bindTaskId) return
+      if (!bindTaskId || bindPolling) return
+      const task = bindTaskId
+      bindPolling = true
       try {
-        const r = await api(`/api/v1/admin/notifications/qq/bind/${bindTaskId}`)
+        const r = await api(`/api/v1/admin/notifications/qq/bind/${task}`)
+        if (task !== bindTaskId) return
         if (r.status === 'bound') {
           bindStatus.value = {
             ...bindStatus.value,
@@ -208,10 +227,7 @@ async function startQqBind() {
             tone: 'green',
           }
           stopBindPolling()
-          await loadConfig()
-          setTimeout(() => {
-            bindModal.value = false
-          }, 1800)
+          await loadConfig(true, 'qq')
         } else if (r.status === 'awaiting_message') {
           stopBindPolling()
           bindModal.value = false
@@ -239,24 +255,22 @@ async function startQqBind() {
           }
         }
       } catch (e: any) {
+        if (task !== bindTaskId) return
         stopBindPolling()
         if (e?.silent) return
         bindStatus.value = { ...bindStatus.value, text: e.message, tone: 'red' }
-      }
+      } finally { bindPolling = false }
     }, 2000)
   } catch (e: any) {
     if (e?.silent) return
     toast.error(e.message)
   }
-}
+})
 
-function closeBindModal() {
-  stopBindPolling()
-  bindModal.value = false
-}
+
 
 // ---- protected test send ----
-async function sendTest(channel: string) {
+const sendTest = action(async (channel: string) => {
   try {
     testResults.value[channel] = { status: 'testing', detail: '正在请求测试发送…' }
     const res = await api('/api/v1/admin/notifications/test', {
@@ -273,9 +287,9 @@ async function sendTest(channel: string) {
     if (e?.silent) return
     testResults.value[channel] = { status: 'failed', detail: e.message }
   }
-}
+})
 
-async function saveSchedule() {
+const saveSchedule = action(async () => {
   const times = String(config.value._briefingTimes || '')
     .split(/[,，\s]+/)
     .filter(Boolean)
@@ -284,18 +298,24 @@ async function saveSchedule() {
     return
   }
   try {
-    await api('/api/v1/admin/notifications/schedule', {
+    const result = await api('/api/v1/admin/notifications/schedule', {
       method: 'PUT',
       body: JSON.stringify({ briefing_times: times }),
     })
-    toast.success('简报时间已保存')
+    config.value._briefingTimes = result.briefing_times?.join(', ') || times.join(', ')
+    toast.success('简报时间已保存，下次调度检查生效；正在执行的任务可能延后应用。')
   } catch (e: any) {
     if (e?.silent) return
     toast.error(e.message)
   }
-}
+}, false)
+
+watch(captureModal, open => { if (!open) { captureGeneration++; if (captureTimer) clearInterval(captureTimer); captureTimer = null } })
+watch(bindModal, open => { if (!open) { stopBindPolling(); bindTaskId = '' } })
 
 onUnmounted(() => {
+  captureGeneration++
+  if (bannerTimer) clearTimeout(bannerTimer)
   if (captureTimer) clearInterval(captureTimer)
   captureTimer = null
   stopBindPolling()
@@ -311,6 +331,7 @@ const toast = useToast()
 
 <template>
   <div class="space-y-4 max-w-[2160px] mx-auto">
+    <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading || actionBusy" @click="loadConfig()">重试</button></div>
     <div class="flex items-center justify-between">
       <p class="text-sm font-sans" style="color: var(--text-muted)">
         逐通道配置、仅诊断、发送测试；最后统一保存投递时间。
@@ -348,14 +369,14 @@ const toast = useToast()
             </h2>
           </div>
           <div class="flex items-center space-x-3">
-            <button
+            <button :disabled="actionBusy || !canManage"
               @click="startQqBind"
               class="px-2.5 py-1 rounded-lg text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
               style="background-color: var(--text-main); color: var(--bg-card)"
             >
               扫码绑定
             </button>
-            <button
+            <button :disabled="actionBusy || !canManage"
               @click="startCapture"
               class="flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
               style="
@@ -368,7 +389,7 @@ const toast = useToast()
               <span>⚡ 自动获取 OpenID</span>
             </button>
             <div class="flex items-center space-x-2">
-              <button
+              <button :disabled="actionBusy"
                 type="button"
                 @click="toggleChannel('qq', !config.qq.enabled)"
                 class="relative inline-flex items-center cursor-pointer focus:outline-none"
@@ -404,7 +425,7 @@ const toast = useToast()
                   >App ID</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input
+                ><input :disabled="actionBusy"
                   :id="fieldId"
                   v-model="config.qq.app_id"
                   class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
@@ -422,7 +443,7 @@ const toast = useToast()
                   >Client Secret</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input
+                ><input :disabled="actionBusy"
                   :id="fieldId"
                   v-model="config.qq._secret"
                   type="password"
@@ -442,7 +463,7 @@ const toast = useToast()
                   >目标用户 OpenID</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input
+                ><input :disabled="actionBusy"
                   :id="fieldId"
                   v-model="config.qq.openid"
                   class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
@@ -455,7 +476,7 @@ const toast = useToast()
           </div>
         </div>
         <div class="flex space-x-2 mt-3">
-          <button
+          <button :disabled="actionBusy"
             @click="diagnose('qq')"
             class="px-3 py-1.5 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
             style="
@@ -466,7 +487,7 @@ const toast = useToast()
           >
             仅诊断
           </button>
-          <button
+          <button :disabled="actionBusy || !canManage"
             @click="sendTest('qq')"
             class="px-3 py-1.5 rounded-lg border text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
             style="
@@ -503,7 +524,7 @@ const toast = useToast()
             </h2>
           </div>
           <div class="flex items-center space-x-2">
-            <button
+            <button :disabled="actionBusy"
               type="button"
               @click="toggleChannel('telegram', !config.telegram.enabled)"
               class="relative inline-flex items-center cursor-pointer focus:outline-none"
@@ -538,7 +559,7 @@ const toast = useToast()
                   >Bot Token</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input
+                ><input :disabled="actionBusy"
                   :id="fieldId"
                   v-model="config.telegram._token"
                   type="password"
@@ -558,7 +579,7 @@ const toast = useToast()
                   >Chat ID</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input
+                ><input :disabled="actionBusy"
                   :id="fieldId"
                   v-model="config.telegram.chat_id"
                   class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
@@ -576,7 +597,7 @@ const toast = useToast()
                   >API Base URL (国内反代)</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input
+                ><input :disabled="actionBusy"
                   :id="fieldId"
                   v-model="config.telegram.api_base"
                   placeholder="https://api.telegram.org"
@@ -590,7 +611,7 @@ const toast = useToast()
           </div>
         </div>
         <div class="flex space-x-2 mt-3">
-          <button
+          <button :disabled="actionBusy"
             @click="diagnose('telegram')"
             class="px-3 py-1.5 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
             style="
@@ -601,7 +622,7 @@ const toast = useToast()
           >
             仅诊断
           </button>
-          <button
+          <button :disabled="actionBusy || !canManage"
             @click="sendTest('telegram')"
             class="px-3 py-1.5 rounded-lg border text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
             style="
@@ -637,7 +658,7 @@ const toast = useToast()
               <h2 class="text-sm font-bold font-sans" style="color: var(--text-main)">企业微信</h2>
             </div>
             <div class="flex items-center space-x-2">
-              <button
+              <button :disabled="actionBusy"
                 type="button"
                 @click="toggleChannel('wechat', !config.wechat.enabled)"
                 class="relative inline-flex items-center cursor-pointer focus:outline-none"
@@ -670,7 +691,7 @@ const toast = useToast()
                 >Webhook URL</span
               ></template
             ><template #default="{ id: fieldId }"
-              ><input
+              ><input :disabled="actionBusy"
                 :id="fieldId"
                 v-model="config.wechat.webhook"
                 class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border mb-3"
@@ -680,7 +701,7 @@ const toast = useToast()
                   color: var(--text-main);
                 " /></template
           ></AppField>
-          <button
+          <button :disabled="actionBusy"
             @click="diagnose('wechat')"
             class="px-3 py-1.5 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
             style="
@@ -691,7 +712,7 @@ const toast = useToast()
           >
             仅诊断
           </button>
-          <button
+          <button :disabled="actionBusy || !canManage"
             @click="sendTest('wechat')"
             class="ml-2 px-3 py-1.5 rounded-lg border text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
             style="
@@ -725,7 +746,7 @@ const toast = useToast()
               </h2>
             </div>
             <div class="flex items-center space-x-2">
-              <button
+              <button :disabled="actionBusy"
                 type="button"
                 @click="toggleChannel('webhook', !config.webhook.enabled)"
                 class="relative inline-flex items-center cursor-pointer focus:outline-none"
@@ -758,7 +779,7 @@ const toast = useToast()
                 >URL (智能兼容钉钉/飞书/Discord)</span
               ></template
             ><template #default="{ id: fieldId }"
-              ><input
+              ><input :disabled="actionBusy"
                 :id="fieldId"
                 v-model="config.webhook.url"
                 class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border mb-3"
@@ -768,7 +789,7 @@ const toast = useToast()
                   color: var(--text-main);
                 " /></template
           ></AppField>
-          <button
+          <button :disabled="actionBusy"
             @click="diagnose('webhook')"
             class="px-3 py-1.5 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
             style="
@@ -779,7 +800,7 @@ const toast = useToast()
           >
             仅诊断
           </button>
-          <button
+          <button :disabled="actionBusy || !canManage"
             @click="sendTest('webhook')"
             class="ml-2 px-3 py-1.5 rounded-lg border text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
             style="
@@ -896,7 +917,7 @@ const toast = useToast()
                 >每日量化简报时间 (北京时间，多个用逗号隔开)</span
               ></template
             ><template #default="{ id: fieldId }"
-              ><input
+              ><input :disabled="actionBusy"
                 :id="fieldId"
                 v-model="config._briefingTimes"
                 placeholder="08:00, 20:00"
@@ -908,14 +929,14 @@ const toast = useToast()
                 " /></template
           ></AppField>
           <div class="flex items-center space-x-3">
-            <button
+            <button :disabled="actionBusy || !canManage"
               @click="saveAll"
               class="px-4 py-2 rounded-lg text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
               style="background-color: var(--text-main); color: var(--bg-card)"
             >
               保存全部通知通道
             </button>
-            <button
+            <button :disabled="actionBusy"
               @click="saveSchedule"
               class="px-4 py-2 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
               style="
@@ -932,7 +953,7 @@ const toast = useToast()
     </template>
 
     <!-- Capture Modal -->
-    <AppDialog
+    <AppDialog :busy="actionBusy"
       v-if="captureModal"
       :open="!!captureModal"
       title="获取消息标识"
@@ -984,22 +1005,12 @@ const toast = useToast()
             OpenID: {{ captureStatus.openid }}
           </div>
         </div>
-        <button
-          @click="captureModal = false"
-          class="px-4 py-2 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
-          style="
-            background-color: var(--bg-card-subtle);
-            border-color: var(--border-medium);
-            color: var(--text-main);
-          "
-        >
-          关闭
-        </button>
+
       </div></AppDialog
     >
 
     <!-- QQ Bind QR Modal -->
-    <AppDialog
+    <AppDialog :busy="actionBusy"
       v-if="bindModal"
       :open="!!bindModal"
       title="连接 QQ 机器人"
@@ -1007,7 +1018,7 @@ const toast = useToast()
       @update:open="
         (open) => {
           if (!open) {
-            closeBindModal()
+            bindModal = false
           }
         }
       "
@@ -1047,7 +1058,7 @@ const toast = useToast()
           {{ bindStatus?.text }}
         </p>
         <div class="flex justify-center space-x-2">
-          <button
+          <button :disabled="actionBusy || !canManage"
             @click="startQqBind"
             class="px-3 py-1.5 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
             style="
@@ -1058,13 +1069,7 @@ const toast = useToast()
           >
             刷新二维码
           </button>
-          <button
-            @click="closeBindModal"
-            class="px-3 py-1.5 rounded-lg text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
-            style="background-color: var(--text-main); color: var(--bg-card)"
-          >
-            关闭
-          </button>
+
         </div>
       </div></AppDialog
     >

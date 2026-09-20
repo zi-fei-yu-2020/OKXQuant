@@ -28,3 +28,11 @@ export function reviewStatusLabel(status?: string): string {
 export function changeProposalLabel(value?: string | null): string {
   return ({NO_CHANGE:'无需变更', ADD:'新增建议', REVISE:'修订建议', UPDATE:'更新建议', DEACTIVATE:'停用建议'} as Record<string,string>)[value || ''] || value || '—'
 }
+
+/** A legacy model-reported win_rate is not evidence of a reconciled net outcome. */
+export function reviewNetOutcome(feedback?: { settled_samples?: unknown; wins?: unknown }, scopeVerified?: boolean) {
+  const count = (value: unknown): number | null => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
+  const samples = count(feedback?.settled_samples), wins = count(feedback?.wins)
+  const valid = scopeVerified === true && samples !== null && samples > 0 && wins !== null && wins <= samples
+  return { samples, wins, rate: valid ? `${Number((wins / samples * 100).toFixed(1))}%` : '—' }
+}

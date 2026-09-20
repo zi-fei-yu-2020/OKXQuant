@@ -30,3 +30,15 @@ def today_lifecycle_stats(rows, date_prefix, reset_time='1970-01-01 00:00:00'):
             'win_rate':round(wins/len(closed)*100,1) if closed else 0.0,
             'net_realized':round(net,8),'realized_gross':round(gross,8),'fees_paid':round(fees,8),
             'funding_paid':round(funding,8),'source':'lifecycle_ledger','settled_rows':closed}
+
+
+def scoped_rows(rows, scope):
+    """Never adopt unowned legacy rows or rows with conflicting account markers."""
+    result = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        markers = [row[key] for key in ("environment_id", "account_source_id") if row.get(key)]
+        if markers and all(isinstance(value, str) and value == scope for value in markers):
+            result.append(row)
+    return result

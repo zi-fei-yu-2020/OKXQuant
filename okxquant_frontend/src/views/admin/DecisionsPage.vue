@@ -21,12 +21,15 @@ const shadow = ref<ScenarioShadowStatus>()
 const audit = ref<WaitAuditState>()
 const cycle = ref<DecisionCycle>()
 const loading = ref(true)
+const loadFailed = ref(false)
 const logs = ref<string[]>([])
 const activeLogTab = ref<'trader' | 'backend' | 'scheduler'>('trader')
 const logContent = ref<string>('')
 const logLoading = ref(false)
+let logRequest = 0
 
 async function loadDecisions() {
+  loadFailed.value = false
   loading.value = true
   try {
     const res = await api('/api/v1/admin/runtime')
@@ -39,6 +42,7 @@ async function loadDecisions() {
     await fetchLogStream('trader')
   } catch (e: any) {
     if (e?.silent) return
+    loadFailed.value = true
     toast.error(e.message)
   } finally {
     loading.value = false
@@ -46,16 +50,18 @@ async function loadDecisions() {
 }
 
 async function fetchLogStream(type: 'trader' | 'backend' | 'scheduler') {
+  const request = ++logRequest
   activeLogTab.value = type
   logLoading.value = true
   try {
     const res = await api(`/api/v1/admin/logs?source=${type}&lines=100`)
+    if (request !== logRequest) return
     logContent.value = readableLog(res.content || res.lines?.join('\n') || '无实时日志')
   } catch (e: any) {
     if (e?.silent) return
     logContent.value = `获取日志失败: ${e.message}`
   } finally {
-    logLoading.value = false
+    if (request === logRequest) logLoading.value = false
   }
 }
 
@@ -66,6 +72,7 @@ onMounted(() => {
 
 <template>
   <div class="space-y-4 max-w-[2160px] mx-auto">
+    <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading" @click="loadDecisions()">重试</button></div>
     <div class="flex items-center justify-between">
       <p class="text-sm font-sans" style="color: var(--text-muted)">
         核对 AI 宏观基调与逐币动作，并审查交易、后台与任务调度三路实时日志流。

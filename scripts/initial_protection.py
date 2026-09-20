@@ -5,6 +5,7 @@ but insufficient/ambiguous snapshots get a second read. A reader error already
 has its own retry budget and must not cause an outer retry storm.
 """
 import time
+import math
 import json
 from scripts import algo_reader, strategy_evidence
 from scripts.protection_policy import oco_coverage, positive
@@ -50,7 +51,15 @@ def verify(env, inst_id, side, size, position, read_positions, *, timeout=6., re
             ok, positions, _ = read_positions(timeout=min(3., remaining))
             if not ok:
                 raise ValueError('current_position_snapshot_unavailable')
-            current = [p for p in positions if p.get('instId') == inst_id and p.get('posSide') == side and abs(float(p.get('pos') or 0)) > 0]
+            current = []
+            for row in positions:
+                if row.get('instId') != inst_id or row.get('posSide') != side:
+                    continue
+                held = float(row['pos'])
+                if not math.isfinite(held):
+                    raise ValueError('current_position_size_invalid')
+                if abs(held) > 0:
+                    current.append(row)
             if not current:
                 last = {'status': 'flat', 'orders': [], 'detail': 'position already flat; no close request needed', 'attempts': attempt}
             elif len(current) != 1 or (positive(current[0].get('pos')) != positive(size) and not (owned and positive(size) <= (positive(current[0].get('pos')) or 0) <= positive(owned['size']))) or any(

@@ -26,7 +26,11 @@ def strategy_status():
     for filename,key in [('memory_candidates.json','memory_candidates'),('research_report.json','research_status')]:
         path=ROOT/'data'/filename
         if path.exists():
-            payload=json.loads(path.read_text(encoding='utf-8'))
+            try: payload=json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, ValueError): continue
+            if not isinstance(payload, dict): continue
+            scopes={payload[k] for k in ('scope','environment_id','account_source_id') if payload.get(k)}
+            if scopes != {env.identity}: continue
             result[key]=payload.get('candidates',[]) if key=='memory_candidates' else payload.get('status','insufficient_evidence')
     from scripts.memory_registry import view
     memory=view(ROOT/'data',env.identity,admin=True)

@@ -44,12 +44,12 @@ def resolve(history,archive,origins,reconciliation=None):
     if verified.get('status')!='verified':return result
     ids=verified.get('opening_order_ids')
     if not isinstance(ids,list) or not ids:return result
-    # A verified exchange opening order without a matching local decision is
-    # still an automatic OKXQuant order, not an external/manual holding.
+    # Exchange fills prove an opening order, not which client submitted it.
+    # Missing local submission/decision evidence must never imply automation.
     if len(ids)==1 and ids[0] not in origins:
-        return {'strategy':'系统自动开仓（决策证据缺失）','strategy_evidence':'automatic_entry_unlinked','source_status':'automatic_unlinked','decision_id':None,'candidate_id':None,'horizon':'unknown','strategy_type':'unknown','opening_order_ids':ids}
+        return {**result, 'opening_order_ids': ids}
     if len(set(ids))!=1:
-        return {'strategy':'多次入场 · '+('多' if side=='long' else '空'),'strategy_evidence':'multiple_opening_orders','source_status':'automatic_unlinked','horizon':'unknown','strategy_type':'unknown'}
+        return {'strategy':'多次入场 · '+('多' if side=='long' else '空'),'strategy_evidence':'multiple_opening_orders','source_status':'external_or_unlinked','horizon':'unknown','strategy_type':'unknown'}
     source=origins.get(ids[0])
     if not source or source['instId']!=history.get('instId') or source['side']!=side:return result
     return {**source,'source_status':'linked','strategy':source['strategy']+' · '+('多' if side=='long' else '空')}

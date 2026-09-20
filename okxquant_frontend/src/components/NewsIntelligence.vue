@@ -35,7 +35,7 @@ function labelCn(label: string) {
   return (
     { bullish: '偏多', bearish: '偏空', mixed: '多空交织', neutral: '中性', unknown: '未知' }[label] ||
     label ||
-    '中性'
+    '未知'
   )
 }
 
@@ -132,10 +132,10 @@ function importanceCn(imp: string) {
         </div>
         <div class="flex items-center justify-between text-[11px] font-mono">
           <span style="color: var(--color-up)"
-            >多 {{ s.bullish_ratio || s.bullish_pct || '--' }}</span
+            >多 {{ s.bullish_ratio ?? s.bullish_pct ?? '--' }}</span
           >
           <span style="color: var(--color-down)"
-            >空 {{ s.bearish_ratio || s.bearish_pct || '--' }}</span
+            >空 {{ s.bearish_ratio ?? s.bearish_pct ?? '--' }}</span
           >
         </div>
         <div

@@ -10,7 +10,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
@@ -22,7 +23,7 @@ from fastapi import Body, FastAPI, File, Header, HTTPException, Request, UploadF
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from okxquant_backend.config import refresh_settings, settings
 from okxquant_backend.okx_client import OKXClient
 from okxquant_backend.okx_trade_service import account_snapshot as okx_account_snapshot, fast_close_confirmed
@@ -30,7 +31,7 @@ from okxquant_backend.okx_setup import diagnose_okx_runtime, install_okx_cli, ch
 from okxquant_backend.account_baseline import load_account_baseline, update_initial_capital
 from okxquant_backend.backup_secrets import credential_status as backup_credential_status, save_credentials as save_backup_credentials
 from okxquant_backend.prompt_views import EVOLUTION_USER_TEMPLATE, TRADING_USER_TEMPLATE, rendered_snapshots
-from okxquant_backend.settings_store import mask, remove_env, update_env
+from okxquant_backend.settings_store import mask, mask_url, remove_env, update_env
 from okxquant_backend.notifications import _env as notification_env, diagnose_channel, test_channel
 from okxquant_backend.audit import recent as recent_audit, record as audit_record
 from okxquant_backend.admin_auth import AdminAuthStore
@@ -105,8 +106,15 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 async def admin_session_context(request: Request, call_next):
     token = REQUEST_SESSION.set(request.headers.get("X-OKXQuant-Session", ""))
     try:
-        response = await call_next(request)
         path = request.url.path
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            if path.startswith('/api/v1/admin'):
+                response = JSONResponse({'detail':'管理操作未能确认完成，请刷新核对状态后再决定是否重试',
+                                         'error_type':type(exc).__name__},status_code=500)
+            else:
+                raise
         # Guarantee admin routes and sensitive account endpoints never get cached by Cloudflare or public CDNs
         if path.startswith("/api/v1/admin") or path.startswith("/admin") or path.startswith("/api/v1/account"):
             response.headers["Cache-Control"] = "private, no-cache, no-store, must-revalidate"
@@ -152,7 +160,27 @@ class OkxOAuthStartRequest(BaseModel):
     site: str = Field(pattern=r"^(global|eea|us|tr)$")
 
 
-class AdminConfigUpdate(BaseModel):
+class EnvironmentUpdateModel(BaseModel):
+    """Validate persisted configuration before any secret or env write occurs."""
+    @model_validator(mode="before")
+    @classmethod
+    def single_line_values(cls, values):
+        if isinstance(values, dict):
+            for key, value in values.items():
+                if isinstance(value, str) and any(c in value for c in ("\r", "\n", "\x00")):
+                    raise ValueError("Configuration values must be single-line strings")
+                if key in {"llm_base_url", "notification_webhook", "webhook_url", "wechat_webhook", "telegram_api_base"} and isinstance(value, str) and value.strip() and "*" not in value:
+                    try:
+                        parsed = urlsplit(value.strip())
+                        _ = parsed.port  # Also validate a malformed/out-of-range port.
+                    except ValueError:
+                        raise ValueError("Invalid HTTP URL") from None
+                    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+                        raise ValueError("Configuration URL must be an HTTP(S) URL without userinfo")
+        return values
+
+
+class AdminConfigUpdate(EnvironmentUpdateModel):
     okx_environment: str | None = Field(default=None, pattern=r"^(demo|live)$")
     okx_live_api_key: str | None = None
     okx_live_secret_key: str | None = None
@@ -281,7 +309,7 @@ class PromptOverrideRequest(BaseModel):
 
 
 class PromptLibraryUpdate(BaseModel):
-    active_style: str = Field(pattern=r"^(stable|aggressive|custom)$")
+    active_style: str = Field(pattern=r"^(stable|small300|custom)$")
     trading_system: str = Field(default="", max_length=12000)
     trading_user: str = Field(default="", max_length=12000)
     evolution_system: str = Field(default="", max_length=12000)
@@ -295,6 +323,7 @@ class PromptProfileCreateRequest(BaseModel):
 
 
 class PromptProfileUpdateRequest(BaseModel):
+    execution_profile: Literal["standard", "small300"] | None = None
     name: str = Field(min_length=1, max_length=60)
     description: str = Field(default="", max_length=240)
     enabled: bool = True
@@ -372,7 +401,7 @@ class BackupVerifyRequest(BaseModel):
     key_env: str = Field(default="", max_length=64)
 
 
-class ChannelToggleRequest(BaseModel):
+class ChannelToggleRequest(EnvironmentUpdateModel):
     enabled: bool
     webhook_url: str | None = None
     wechat_webhook: str | None = None
@@ -392,7 +421,7 @@ class BackupMethodsUpdate(BaseModel):
     sqlite_retention: int = Field(ge=1, le=90)
 
 
-class NotificationConfigUpdate(BaseModel):
+class NotificationConfigUpdate(EnvironmentUpdateModel):
     webhook_enabled: bool = False
     webhook_url: str = ""
     wechat_enabled: bool = False
@@ -407,10 +436,10 @@ class NotificationConfigUpdate(BaseModel):
     qq_openid: str = ""
 
 
-class QQOpenIDCaptureStartRequest(BaseModel):
+class QQOpenIDCaptureStartRequest(EnvironmentUpdateModel):
     app_id: str | None = None
     client_secret: str | None = None
-    timeout: int = 60
+    timeout: int = Field(default=60, ge=10, le=300)
 
 
 class NotificationTestRequest(BaseModel):
@@ -837,7 +866,12 @@ def admin_runtime(x_okxquant_admin_token: str | None = Header(default=None), x_o
         payload["full_decisions"] = raw_decisions
     else:
         payload["full_decisions"] = []
-    payload["llm_runtime"] = get_active_llm_runtime()
+    llm_runtime = get_active_llm_runtime()
+    public_fields = ("model", "name", "provider_name", "provider_id", "base_url", "api_format", "reasoning_effort", "reasoning_type")
+    payload["llm_runtime"] = {key: llm_runtime[key] for key in public_fields if key in llm_runtime}
+    payload["llm_runtime"]["api_key_configured"] = bool(llm_runtime.get("api_key"))
+    # These are past model outputs, not evidence of a newly saved/activated strategy.
+    payload["decision_cache_status"] = "historical_not_activation_evidence"
     return payload
 
 
@@ -869,7 +903,7 @@ def gateway_status(x_okxquant_admin_token: str | None = Header(default=None), li
     return {"version": GATEWAY_VERSION, "running": running, "pid": pid or None,
             "worker_supported": worker_supported,
             "runtime_note": "" if worker_supported else "当前服务运行在 Windows：支持管理与只读连接测试；自动调度与交易 Worker 需要在 WSL/Linux 启动。",
-            "stats": store.stats(), "event_health": store.event_health(), "deliveries": store.recent(limit), "scheduler": scheduler_snapshot(store)}
+            "stats": store.stats(), "event_health": store.event_health(), "deliveries": store.recent(limit), "scheduler": scheduler_snapshot(store), "manual_requests":store.job_requests()}
 
 
 @app.post("/api/v1/admin/gateway/deliveries/{delivery_id}/replay")
@@ -921,7 +955,7 @@ def admin_config(x_okxquant_admin_token: str | None = Header(default=None)) -> d
             "llm_base_url": settings.llm_base_url,
             "llm_model": settings.llm_model,
             "llm_reasoning_effort": settings.llm_reasoning_effort,
-            "notification_webhook": settings.notification_webhook,
+            "notification_webhook": mask_url(settings.notification_webhook),
             "manual_close_enabled": settings.manual_close_enabled,
             "initial_capital": load_account_baseline()["initial_capital"],
             "baseline_configured": load_account_baseline()["baseline_configured"],
@@ -1048,7 +1082,7 @@ def update_admin_config(payload: AdminConfigUpdate, x_okxquant_admin_token: str 
         "LLM_BASE_URL": data.get("llm_base_url"),
         "LLM_MODEL": data.get("llm_model"),
         "LLM_REASONING_EFFORT": data.get("llm_reasoning_effort"),
-        "OKXQUANT_NOTIFICATION_WEBHOOK": data.get("notification_webhook"),
+        "OKXQUANT_NOTIFICATION_WEBHOOK": data.get("notification_webhook") if "*" not in (data.get("notification_webhook") or "") else None,
         "OKXQUANT_MANUAL_CLOSE_ENABLED": "1" if data.get("manual_close_enabled") else "0" if "manual_close_enabled" in data else None,
     }
     update_env(env_values)
@@ -1368,7 +1402,12 @@ def admin_get_interceptor(filename: str, x_okxquant_session: str | None = Header
 def admin_toggle_interceptor(filename: str, payload: InterceptorToggleRequest, x_okxquant_session: str | None = Header(default=None, alias="X-OKXQuant-Session")) -> dict[str, Any]:
     actor = require_superadmin(x_okxquant_session)
     from okxquant_backend.interceptor_manager import toggle_plugin
-    res = toggle_plugin(filename, payload.enabled)
+    try:
+        res = toggle_plugin(filename, payload.enabled)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404,detail="规则文件不存在") from exc
+    except (ValueError,TypeError) as exc:
+        raise HTTPException(status_code=400,detail="规则配置无效："+str(exc)) from exc
     audit_record("interceptor.toggle", "success", {"actor": actor["username"], "filename": filename, "enabled": payload.enabled})
     return res
 
@@ -1413,19 +1452,72 @@ def admin_delete_interceptor(filename: str, x_okxquant_session: str | None = Hea
 def admin_reorder_interceptors(payload: InterceptorReorderRequest, x_okxquant_session: str | None = Header(default=None, alias="X-OKXQuant-Session")) -> dict[str, Any]:
     actor = require_superadmin(x_okxquant_session)
     from okxquant_backend.interceptor_manager import reorder_plugins
-    res = reorder_plugins(payload.pipeline_order)
+    try:
+        res = reorder_plugins(payload.pipeline_order)
+    except (ValueError,TypeError) as exc:
+        raise HTTPException(status_code=400,detail="规则顺序无效："+str(exc)) from exc
     audit_record("interceptor.reorder", "success", {"actor": actor["username"]})
     return {"plugins": res}
 
 
 @app.post("/api/v1/admin/interceptors/test")
 def admin_test_interceptors(payload: InterceptorTestRequest, x_okxquant_session: str | None = Header(default=None, alias="X-OKXQuant-Session")) -> dict[str, Any]:
-    require_admin_header(x_okxquant_session=x_okxquant_session)
+    require_superadmin(x_okxquant_session)
     from okxquant_backend.interceptor_manager import run_sandbox_test
     return run_sandbox_test(payload.scenario)
 
     audit_record("llm.model.delete", "success", {"actor": actor["username"], "provider_id": provider_id, "model_id": model_id})
     return {"deleted": True, "provider_id": provider_id, "model_id": model_id}
+
+
+class ManualReviewRequest(BaseModel):
+    confirmation: str = Field(min_length=1, max_length=80)
+
+
+class LiveEngineAuthorizationRequest(BaseModel):
+    enabled: bool
+    confirmation: str = Field(min_length=1, max_length=80)
+    expected_binding: dict[str, Any] | None = None
+
+
+@app.get('/api/v1/admin/strategy/engine')
+def strategy_engine_status_api(x_okxquant_session: str | None = Header(default=None, alias='X-OKXQuant-Session')):
+    require_admin_header(x_okxquant_session=x_okxquant_session)
+    from scripts.okx_runtime import selected_environment
+    from scripts.strategy_engine_runtime import status
+    return status(selected_environment())
+
+
+@app.post('/api/v1/admin/strategy/engine/live-authorization')
+def strategy_engine_authorize_api(payload: LiveEngineAuthorizationRequest, x_okxquant_session: str | None = Header(default=None, alias='X-OKXQuant-Session')):
+    actor=require_superadmin(x_okxquant_session)
+    expected='ENABLE LIVE SCALP' if payload.enabled else 'DISABLE LIVE SCALP'
+    if payload.confirmation.strip()!=expected:
+        raise HTTPException(status_code=400,detail=f'确认短语必须精确为：{expected}')
+    from scripts.okx_runtime import selected_environment
+    from scripts.strategy_engine_runtime import authorize_live,disable_live
+    env=selected_environment()
+    if not payload.expected_binding:
+        raise HTTPException(status_code=409,detail='请刷新运行范围后，基于当前账户与策略重新确认')
+    try:
+        result=authorize_live(env,actor=actor['username'],expected_binding=payload.expected_binding) if payload.enabled else disable_live(env,expected_binding=payload.expected_binding)
+    except (ValueError,RuntimeError) as exc:
+        raise HTTPException(status_code=409,detail='实盘授权未生效，请刷新账户与策略后重新确认（'+type(exc).__name__+'）') from exc
+    audit_record('strategy.minute.live_authorization','success',{'actor':actor['username'],'account_scope':env.identity,'enabled':payload.enabled})
+    return result
+
+
+@app.post('/api/v1/admin/gateway/jobs/{job_name}/run',status_code=202)
+def request_review_job_api(job_name: str, payload: ManualReviewRequest, x_okxquant_session: str | None = Header(default=None, alias='X-OKXQuant-Session')):
+    actor=require_superadmin(x_okxquant_session)
+    if job_name!='self_improvement':raise HTTPException(status_code=404,detail='不支持手动启动该任务')
+    if payload.confirmation.strip()!='RUN EVOLUTION':
+        raise HTTPException(status_code=400,detail='确认短语必须精确为：RUN EVOLUTION')
+    store=GatewayStore(GATEWAY_DB_PATH)
+    result=store.request_job(job_name,actor=actor['username'])
+    audit_record('review.request','accepted',{'actor':actor['username'],'request_id':result['request_id'],'deduplicated':result['deduplicated']})
+    return {**result,'accepted':True,'status':'queued' if result['status']=='pending' else result['status'],
+            'detail':'复盘已排队；任务完成后更新报告，不会自动发布运行记忆'}
 
 
 @app.get("/api/v1/admin/strategy/status")
@@ -1647,6 +1739,8 @@ def prompt_library(x_okxquant_admin_token: str | None = Header(default=None)) ->
             "evolution_user": apply_module_layout(EVOLUTION_USER_TEMPLATE, profile, "evolution_user", "自进化 User"),
         },
         "snapshots": rendered_snapshots(),
+        "snapshots_status": "historical_not_activation_evidence",
+        "execution_settings": __import__("scripts.execution_profiles", fromlist=["runtime"]).runtime(profile),
         "composition": preview.manifest,
         "template_variables": __import__("scripts.prompt_library", fromlist=["TEMPLATE_VARIABLES_METADATA"]).TEMPLATE_VARIABLES_METADATA,
         "transport": "python-direct",
@@ -1656,14 +1750,17 @@ def prompt_library(x_okxquant_admin_token: str | None = Header(default=None)) ->
 @app.put("/api/v1/admin/prompt-library")
 def update_prompt_library(payload: PromptLibraryUpdate, x_okxquant_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
     refresh_settings()
-    require_admin_header(x_okxquant_admin_token)
-    library = load_library()
-    library["active_style"] = payload.active_style
+    require_superadmin()
+    # Pass the explicit v1 shape: the store merges inside its own write transaction.
+    library = {"active_style": payload.active_style}
     library["custom"] = {
         "id": "custom", "name": "自定义", "description": "管理员自定义风格附加层。", "editable": True,
         "trading_system": payload.trading_system.strip(), "trading_user": payload.trading_user.strip(),
         "evolution_system": payload.evolution_system.strip(), "evolution_user": payload.evolution_user.strip(),
     }
+    validation = validate_profile({**library["custom"], "editor_mode": "advanced"})
+    if not validation.get("valid"):
+        raise HTTPException(status_code=400, detail=validation)
     save_library(library)
     audit_record("prompt.library.update", "success", {"active_style": payload.active_style, "custom_characters": sum(len(getattr(payload, key)) for key in ("trading_system", "trading_user", "evolution_system", "evolution_user"))})
     return {"saved": True, "active_style": payload.active_style, "restart_note": "下一次 Python 交易主脑与自进化进程自动读取选中风格。"}
@@ -1694,10 +1791,12 @@ def create_prompt_profile_api(payload: PromptProfileCreateRequest, x_okxquant_se
 @app.put("/api/v1/admin/prompt-profiles/{profile_id}")
 def update_prompt_profile_api(profile_id: str, payload: PromptProfileUpdateRequest, x_okxquant_session: str | None = Header(default=None, alias="X-OKXQuant-Session")) -> dict[str, Any]:
     actor = require_superadmin(x_okxquant_session)
-    try: profile = update_profile(profile_id, payload.model_dump(exclude={"note"}), payload.note)
+    try: profile = update_profile(profile_id, payload.model_dump(exclude={"note"}, exclude_unset=True, exclude_none=True), payload.note)
     except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
     audit_record("prompt.profile.update", "success", {"actor": actor["username"], "profile_id": profile_id})
-    return {"profile": profile, "validation": validate_profile(profile)}
+    return {"profile": profile, "validation": validate_profile(profile), "saved": True,
+            "activation_changed": False, "decision_generation_triggered": False,
+            "effective_for": "next_fresh_decision_if_active", "existing_positions_protection": "unchanged"}
 
 
 @app.post("/api/v1/admin/prompt-profiles/{profile_id}/activate")
@@ -1707,8 +1806,11 @@ def activate_prompt_profile_api(profile_id: str, x_okxquant_session: str | None 
     except ValueError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
     audit_record("prompt.profile.activate", "success", {"actor": actor["username"], "profile_id": profile_id})
     from scripts.execution_profiles import runtime as execution_runtime
-    return {"active_profile_id": profile_id, "profile": profile, "execution_settings": execution_runtime(),
-            "effective_for": "next_fresh_decision", "existing_positions_resized": False}
+    return {"active_profile_id": profile_id, "profile": profile, "execution_settings": execution_runtime(profile),
+            "effective_for": "next_fresh_decision", "existing_positions_resized": False,
+            "existing_positions_protection": "unchanged", "decision_generation_triggered": False,
+            "decision_cache_status": "not_regenerated",
+            "effect_note": "Active for the next fresh decision; no inference triggered. Historical cache is not activation evidence; existing position protection is unchanged."}
 
 
 @app.delete("/api/v1/admin/prompt-profiles/{profile_id}")
@@ -1723,7 +1825,7 @@ def delete_prompt_profile_api(profile_id: str, x_okxquant_session: str | None = 
 @app.post("/api/v1/admin/prompt-profiles/validate")
 def validate_prompt_profile_api(payload: PromptProfileUpdateRequest, x_okxquant_admin_token: str | None = Header(default=None), x_okxquant_session: str | None = Header(default=None, alias="X-OKXQuant-Session")) -> dict[str, Any]:
     require_admin_header(x_okxquant_admin_token, x_okxquant_session)
-    return validate_profile(payload.model_dump())
+    return validate_profile(payload.model_dump(exclude_none=True))
 
 
 @app.get("/api/v1/admin/prompt-profiles/{profile_id}/history")
@@ -1781,7 +1883,7 @@ def prompt_override(x_okxquant_admin_token: str | None = Header(default=None)) -
 @app.put("/api/v1/admin/prompts")
 def update_prompt_override(payload: PromptOverrideRequest, x_okxquant_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
     refresh_settings()
-    require_admin_header(x_okxquant_admin_token)
+    require_superadmin()
     content = payload.content.strip()
     from scripts.trading_prompt import preference_layers
     _, issues, allowed = preference_layers({}, override=content)
@@ -1833,16 +1935,16 @@ def toggle_channel(channel: str, payload: ChannelToggleRequest, x_okxquant_sessi
     # If the user provided inputs while toggling, save them immediately
     if channel == "wechat" and payload.wechat_webhook is not None:
         val = payload.wechat_webhook.strip()
-        if val:
+        if val and "*" not in val:
             save_secrets({"OKXQUANT_WECHAT_WEBHOOK": val})
             remove_env({"OKXQUANT_WECHAT_WEBHOOK"})
     elif channel == "webhook" and payload.webhook_url is not None:
         val = payload.webhook_url.strip()
-        if val:
+        if val and "*" not in val:
             save_secrets({"OKXQUANT_NOTIFICATION_WEBHOOK": val})
             remove_env({"OKXQUANT_NOTIFICATION_WEBHOOK"})
     elif channel == "telegram":
-        if payload.telegram_bot_token is not None and payload.telegram_bot_token.strip():
+        if payload.telegram_bot_token is not None and payload.telegram_bot_token.strip() and "*" not in payload.telegram_bot_token:
             save_secrets({"OKXQUANT_TELEGRAM_BOT_TOKEN": payload.telegram_bot_token.strip()})
             remove_env({"OKXQUANT_TELEGRAM_BOT_TOKEN"})
         tg_env = {}
@@ -1853,13 +1955,14 @@ def toggle_channel(channel: str, payload: ChannelToggleRequest, x_okxquant_sessi
         if tg_env:
             update_env(tg_env)
     elif channel == "qq":
-        if payload.qq_client_secret is not None and payload.qq_client_secret.strip():
+        if payload.qq_client_secret is not None and payload.qq_client_secret.strip() and "*" not in payload.qq_client_secret:
             save_secrets({"OKXQUANT_QQ_CLIENT_SECRET": payload.qq_client_secret.strip()})
             remove_env({"OKXQUANT_QQ_CLIENT_SECRET"})
         qq_env = {}
         if payload.qq_app_id is not None:
             qq_env["OKXQUANT_QQ_APP_ID"] = payload.qq_app_id.strip()
         if payload.qq_openid is not None:
+            delete_secrets(["OKXQUANT_QQ_OPENID"])
             qq_env["OKXQUANT_QQ_OPENID"] = payload.qq_openid.strip()
         if qq_env:
             update_env(qq_env)
@@ -1896,81 +1999,52 @@ def update_notification_config(payload: NotificationConfigUpdate, x_okxquant_adm
     refresh_settings()
     require_superadmin(x_okxquant_session)
 
-    # Save credentials unconditionally to preserve user configurations
-    secret_values = {}
-    if payload.webhook_url:
-        secret_values["OKXQUANT_NOTIFICATION_WEBHOOK"] = payload.webhook_url.strip()
-    if payload.wechat_webhook:
-        secret_values["OKXQUANT_WECHAT_WEBHOOK"] = payload.wechat_webhook.strip()
-    if payload.telegram_bot_token:
-        secret_values["OKXQUANT_TELEGRAM_BOT_TOKEN"] = payload.telegram_bot_token.strip()
-    if payload.qq_client_secret:
-        secret_values["OKXQUANT_QQ_CLIENT_SECRET"] = payload.qq_client_secret.strip()
-
+    supplied = payload.model_dump(exclude_unset=True, exclude_none=True)
+    current = notification_env()
+    secret_fields = {
+        "webhook_url": "OKXQUANT_NOTIFICATION_WEBHOOK",
+        "wechat_webhook": "OKXQUANT_WECHAT_WEBHOOK",
+        "telegram_bot_token": "OKXQUANT_TELEGRAM_BOT_TOKEN",
+        "qq_client_secret": "OKXQUANT_QQ_CLIENT_SECRET",
+    }
+    secret_values = {key: supplied[field].strip() for field, key in secret_fields.items()
+                     if supplied.get(field) and supplied[field].strip() and "*" not in supplied[field]}
+    env_fields = {
+        "telegram_chat_id": "OKXQUANT_TELEGRAM_CHAT_ID",
+        "telegram_api_base": "OKXQUANT_TELEGRAM_API_BASE",
+        "qq_app_id": "OKXQUANT_QQ_APP_ID",
+        "qq_openid": "OKXQUANT_QQ_OPENID",
+    }
+    env_update = {key: supplied[field].strip() for field, key in env_fields.items() if field in supplied}
+    effective = {**current, **secret_values, **env_update}
+    required = {
+        "webhook": ("OKXQUANT_NOTIFICATION_WEBHOOK",),
+        "wechat": ("OKXQUANT_WECHAT_WEBHOOK",),
+        "telegram": ("OKXQUANT_TELEGRAM_BOT_TOKEN", "OKXQUANT_TELEGRAM_CHAT_ID"),
+        "qq": ("OKXQUANT_QQ_APP_ID", "OKXQUANT_QQ_CLIENT_SECRET", "OKXQUANT_QQ_OPENID"),
+    }
+    warnings = []
+    enabled = {}
+    for channel, fields in required.items():
+        key = f"OKXQUANT_NOTIFY_{channel.upper()}_ENABLED"
+        requested = supplied.get(f"{channel}_enabled", current.get(key, "0") == "1")
+        ready = all(str(effective.get(field) or "").strip() and "*" not in str(effective.get(field)) for field in fields)
+        enabled[channel] = bool(requested and ready)
+        if requested and not ready:
+            warnings.append(f"{channel}: missing credentials or destination; channel not enabled")
+        env_update[key] = "1" if enabled[channel] else "0"
     if secret_values:
         save_secrets(secret_values)
         remove_env(set(secret_values))
-
-    env_update = {
-        "OKXQUANT_TELEGRAM_CHAT_ID": payload.telegram_chat_id.strip(),
-        "OKXQUANT_QQ_APP_ID": payload.qq_app_id.strip(),
-        "OKXQUANT_QQ_OPENID": payload.qq_openid.strip(),
-    }
-    if payload.telegram_api_base is not None:
-        env_update["OKXQUANT_TELEGRAM_API_BASE"] = payload.telegram_api_base.strip()
-
-    # Determine readiness
-    current_env = notification_env()
-    readiness = {
-        "qq": bool(payload.qq_app_id and (payload.qq_client_secret or current_env.get("OKXQUANT_QQ_CLIENT_SECRET")) and payload.qq_openid),
-        "telegram": bool((payload.telegram_bot_token or current_env.get("OKXQUANT_TELEGRAM_BOT_TOKEN")) and payload.telegram_chat_id),
-        "wechat": bool(payload.wechat_webhook or current_env.get("OKXQUANT_WECHAT_WEBHOOK")),
-        "webhook": bool(payload.webhook_url or current_env.get("OKXQUANT_NOTIFICATION_WEBHOOK")),
-    }
-
-    warnings = []
-    # If user checked enabled for an incomplete channel, auto-turn off that specific channel with a helpful warning instead of crashing entire save with 409
-    eff_qq = payload.qq_enabled
-    if payload.qq_enabled and not readiness["qq"]:
-        eff_qq = False
-        warnings.append("QQ 频道因缺少 OpenID 暂未开启（请点击「⚡ 自动获取 OpenID」绑定）")
-
-    eff_tg = payload.telegram_enabled
-    if payload.telegram_enabled and not readiness["telegram"]:
-        eff_tg = False
-        warnings.append("Telegram 频道因缺少 Token 或 Chat ID 暂未开启")
-
-    eff_wx = payload.wechat_enabled
-    if payload.wechat_enabled and not readiness["wechat"]:
-        eff_wx = False
-        warnings.append("企业微信频道因缺少 Webhook 暂未开启")
-
-    eff_wh = payload.webhook_enabled
-    if payload.webhook_enabled and not readiness["webhook"]:
-        eff_wh = False
-        warnings.append("通用 Webhook 因缺少 URL 暂未开启")
-
-    env_update.update({
-        "OKXQUANT_NOTIFY_WEBHOOK_ENABLED": "1" if eff_wh else "0",
-        "OKXQUANT_NOTIFY_WECHAT_ENABLED": "1" if eff_wx else "0",
-        "OKXQUANT_NOTIFY_TELEGRAM_ENABLED": "1" if eff_tg else "0",
-        "OKXQUANT_NOTIFY_QQ_ENABLED": "1" if eff_qq else "0",
-    })
-
+    if "qq_openid" in supplied:
+        # Older gateway versions persisted the same non-secret in two stores;
+        # the encrypted copy would otherwise override this explicit replacement.
+        delete_secrets(["OKXQUANT_QQ_OPENID"])
     update_env(env_update)
     refresh_settings()
-
-    audit_record("notifications.update", "success", {
-        "webhook": eff_wh,
-        "wechat": eff_wx,
-        "telegram": eff_tg,
-        "qq": eff_qq,
-        "warnings": warnings,
-    })
-    msg = "全部通知配置已成功保存"
-    if warnings:
-        msg += f"（提示：{'；'.join(warnings)}）"
-    return {"saved": True, "message": msg, "warnings": warnings}
+    audit_record("notifications.update", "success", {**enabled, "warnings": warnings})
+    return {"saved": True, "message": "Notification configuration saved", "warnings": warnings,
+            "enabled": enabled, "effective_for": "next_notification"}
 
 
 @app.post("/api/v1/admin/notifications/diagnose")
@@ -1987,8 +2061,10 @@ def send_notification_test(payload: NotificationTestRequest, x_okxquant_session:
     if payload.confirmation.strip().upper() != f"SEND TEST {payload.channel.upper()}":
         raise HTTPException(status_code=400, detail=f"确认短语必须为：SEND TEST {payload.channel.upper()}")
     result = test_channel(payload.channel)
-    audit_record("notifications.test", "completed", {"channel": payload.channel, "result": result})
-    return {"channel": payload.channel, "result": result, "sent": True, "meaning": "远端接口已受理不等于用户客户端已读"}
+    accepted = str(result.get(payload.channel, "")).startswith("accepted:")
+    result = {**result, "status": "accepted" if accepted else "failed"}
+    audit_record("notifications.test", "accepted" if accepted else "failed", {"channel": payload.channel, "result": result})
+    return {"channel": payload.channel, "result": result, "attempted": True, "sent": accepted, "accepted": accepted, "meaning": "远端接口已受理不等于用户客户端已读"}
 
 
 @app.post("/api/v1/admin/notifications/qq/capture-openid/start")
@@ -2059,7 +2135,8 @@ def notification_schedule(x_okxquant_admin_token: str | None = Header(default=No
     return {
         **schedule,
         "event_notifications": "开仓、平仓与风险事件实时推送，不受每日简报时间限制",
-        "restart_note": "保存后调度器将在 60 秒内读取新时间，无需重启。",
+        "restart_note": "Schedule reloads on the next scheduler poll; a running job may delay it. No restart required.",
+        "poll_interval_seconds": 5, "may_wait_for_running_job": True,
     }
 
 
@@ -2082,7 +2159,7 @@ def update_notification_schedule(payload: NotificationScheduleUpdate, x_okxquant
     schedule["briefing_times"] = normalized
     save_schedule(schedule)
     audit_record("notifications.schedule", "success", {"briefing_times": normalized, "timezone": "Asia/Shanghai"})
-    return {**schedule, "saved": True, "restart_note": "调度器将在 60 秒内读取新时间。"}
+    return {**schedule, "saved": True, "restart_note": "Next scheduler poll; a running job may delay it.", "poll_interval_seconds": 5, "may_wait_for_running_job": True}
 
 
 @app.get("/api/v1/admin/backups/simple")
@@ -2563,9 +2640,23 @@ def status() -> dict[str, Any]:
             script_state("self_improvement_engine.py"),
             script_state("nightly_backup_and_clean.py"),
         ],
-        "last_decisions": read_json("ai_brain_decisions.json", {}),
-        "position_trackers": read_json("position_trackers.json", {}),
+        "last_decisions": _scoped_cached_payload(read_json("ai_brain_decisions.json", {}), __import__("scripts.okx_runtime",fromlist=["selected_environment"]).selected_environment().identity),
+        "position_trackers": {k:v for k,v in read_json("position_trackers.json", {}).items() if isinstance(v,dict) and (v.get("positionIdentity") or {}).get("scope")==__import__("scripts.okx_runtime",fromlist=["selected_environment"]).selected_environment().identity},
     }
+
+
+def _scoped_cached_payload(payload, scope):
+    if isinstance(payload,list):
+        return [item for item in payload if isinstance(item,dict) and _cache_owner(item)=={scope}]
+    if not isinstance(payload,dict):return {}
+    owner=_cache_owner(payload)
+    if owner:return payload if owner=={scope} else {}
+    # Decision caches are maps of independently scoped instrument envelopes.
+    return {key:value for key,value in payload.items() if isinstance(value,dict) and _cache_owner(value)=={scope}}
+
+
+def _cache_owner(value):
+    return {str(value[k]) for k in ('scope','account_scope','environment_id','account_source_id') if value.get(k)}
 
 
 @app.get("/api/v1/cache/{resource}")
@@ -2589,7 +2680,21 @@ def cache(resource: str, x_okxquant_admin_token: str | None = Header(default=Non
     # Private ledger contains historical financial profit/loss records; require admin auth
     if resource == "ledger":
         require_admin_header(x_okxquant_admin_token, x_okxquant_session)
-    return JSONResponse(read_json(filename, {} if resource != "ledger" else []))
+    payload = read_json(filename, {} if resource != "ledger" else [])
+    if resource == "ledger":
+        from scripts.dashboard_stats import scoped_rows
+        from scripts.okx_runtime import selected_environment
+        payload = scoped_rows(payload, selected_environment().identity)
+    if resource in {'decisions','self-improvement','horizon-stats'}:
+        from scripts.okx_runtime import selected_environment
+        scope=selected_environment().identity
+        if resource=='horizon-stats':
+            from scripts.horizon_stats import rebuild
+            from scripts.dashboard_stats import scoped_rows
+            payload=rebuild(scoped_rows(read_json('trading_ledger.json',[]),scope),scope=scope)
+        else:
+            payload=_scoped_cached_payload(payload,scope)
+    return JSONResponse(payload,headers={'Cache-Control':'no-store'})
 
 
 from okxquant_backend.chart_market import router as chart_market_router

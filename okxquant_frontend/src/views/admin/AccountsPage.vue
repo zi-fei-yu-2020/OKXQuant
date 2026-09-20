@@ -2,6 +2,8 @@
 import { onMounted, reactive, ref, watch } from 'vue'
 import { useToast } from '../../composables/useFeedback'
 import { useApi } from '../../composables/useApi'
+import { useAuthStore } from '../../stores/auth'
+const auth = useAuthStore()
 import AppCard from '../../components/ui/AppCard.vue'
 import AppButton from '../../components/ui/AppButton.vue'
 import AppDialog from '../../components/ui/AppDialog.vue'
@@ -55,7 +57,7 @@ function askInstallCli(){
  confirm.value={title:'安装或更新 OKX CLI',description:'这是运行依赖维护，不会授权账户。仅超级管理员可操作，OAuth原生组件仍需另行检查。',phrase:'INSTALL OKX CLI',path:'',apiPath:'/api/v1/admin/okx/install-cli',method:'POST'}
  phrase.value='';confirmOpen.value=true
 }
-async function perform(fn:()=>Promise<void>){busy.value=true;error.value='';try{await fn()}catch(e:any){if(e?.silent)return;error.value=friendlyConnectionError(e.message || '操作失败')}finally{busy.value=false}}
+async function perform(fn:()=>Promise<void>){if(busy.value||!auth.isSuperadmin)return;busy.value=true;error.value='';try{await fn()}catch(e:any){if(e?.silent)return;error.value=friendlyConnectionError(e.message || '操作失败')}finally{busy.value=false}}
 function clearSecrets(){form.api_key='';form.secret_key='';form.passphrase=''}
 async function create(){await perform(async()=>{
  const body={label:form.label,auth_type:form.auth_type,mode:form.mode,site:form.site,...(form.auth_type==='api_key'?{api_key:form.api_key,secret_key:form.secret_key,passphrase:form.passphrase}:{})}
@@ -74,11 +76,12 @@ async function submitConfirm(){const value=confirm.value;if(!value||phrase.value
  confirmOpen.value=false;await load();notice.value=result.message || '账户用途配置已更新；未自动撤销官方授权。'
 })}
 async function refreshNews(){await perform(async()=>{const result=await api('/api/v1/admin/accounts/news/refresh',{method:'POST'});await load();notice.value=newsConnectionLabel(result.connection_status)})}
-onMounted(()=>perform(load))
+onMounted(()=>{if(auth.isSuperadmin)void perform(load)})
 </script>
 
 <template>
- <div class="space-y-4 min-w-0 max-w-[2160px] mx-auto" data-account-center>
+ <p v-if="!auth.isSuperadmin" class="text-sm" style="color:var(--text-muted)">账户中心仅超级管理员可访问。</p>
+ <div v-else class="space-y-4 min-w-0 max-w-[2160px] mx-auto" data-account-center>
   <header class="flex flex-wrap items-center justify-between gap-3">
    <div class="min-w-0"><h2 class="text-lg font-semibold" style="color:var(--text-main)">账户与资讯连接</h2><p class="mt-1 text-sm" style="color:var(--text-muted)">独立管理模拟盘、实盘与资讯用途。保存授权不自动切换交易；连接失败不自动尝试其他账户。</p></div>
    <div class="flex flex-wrap gap-2"><AppButton :loading="busy" @click="perform(load)">刷新状态</AppButton><AppButton variant="primary" :disabled="busy" @click="clearSecrets();addOpen=true">添加连接</AppButton></div>

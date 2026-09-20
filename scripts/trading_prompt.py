@@ -186,6 +186,15 @@ def preference_layers(profile,override=''):
     return layers,warnings,not blocked
 
 
+def profile_signature(profile):
+    """Hash static effective preferences, not editor-rendered dynamic flat copies."""
+    from scripts.execution_profiles import settings_for
+    layers, warnings, allow = preference_layers(profile)
+    return fingerprint(canonical({'id': profile.get('id'), 'name': profile.get('name'),
+        'preferences': layers, 'execution': settings_for(profile), 'allow_open': allow,
+        'conflicts': [w for w in warnings if w.get('code') == 'preference_conflict']}))
+
+
 _SCALARS = {
     'price':'price','bidPx':'price','askPx':'price','macro_4h':'structure','structure_1h':'structure',
     'adx_1h':'momentum','rsi_1h':'momentum','rsi_15m':'momentum','vwap_bias':'price','vol_ratio':'flow',
@@ -277,6 +286,18 @@ def compose(profile,runtime,packages,*,override='',positions=None,pending=None,r
     wait_constraints={inst:wait_audit.constraints(catalog,(runtime.get('previous_wait_reviews') or {}).get(inst)) for inst,catalog in facts.items()}
     # Serialize duplicated historical evidence once; validation retains the full context.
     rendered_runtime=copy.deepcopy(runtime)
+    # Preferences reference USER data, never expand news/memory into instructions.
+    # Use this inference's profile and packages, not the editor's default context.
+    import os
+    rendered_runtime.update(profile_name=str(profile.get('name') or profile.get('id') or 'UNKNOWN'),
+                            active_instruments=','.join(str(p.get('name') or p['instId']) for p in packages),
+                            timezone='Asia/Shanghai',
+                            strategy_version=os.environ.get('OKXQUANT_VERSION', '0.1.0'))
+    for layer in layers:
+        for name in re.findall(r'\[runtime_data\.([A-Za-z_][A-Za-z0-9_]*)\]', layer['content']):
+            if name not in rendered_runtime:
+                rendered_runtime[name]='UNKNOWN'
+                warnings.append({'code':'runtime_variable_unknown','variable':name})
     for inst,prior in (rendered_runtime.get('previous_wait_reviews') or {}).items():
         if not isinstance(prior,dict):
             continue
@@ -293,7 +314,7 @@ def compose(profile,runtime,packages,*,override='',positions=None,pending=None,r
                     'position_ids':list(position_map),'pending_order_ids':[{'instId':p.get('instId'),'ordId':p.get('ordId')} for p in pending]},
                     ensure_ascii=False,allow_nan=False,separators=(',',':'))+'\n\n【推演与决策任务】\n'+TASK+'\n【输出字段定义】\n'+canonical(output_schema())
     news_snapshot=copy.deepcopy(packages[0].get('news_snapshot') or {}) if packages else {}
-    manifest={'contract_version':VERSION,'profile_id':profile.get('id',''),'profile_hash':fingerprint(canonical(profile)),
+    manifest={'contract_version':VERSION,'profile_id':profile.get('id',''),'profile_hash':profile_signature(profile),
               'layers':['base_system','style_preset','user_preferences','runtime_data','output_validation'],
               'system_hash':fingerprint(system),'user_hash':fingerprint(user),'allow_open':allow,'warnings':warnings,
               'wait_audit_version':wait_audit.VERSION,'fact_counts':{k:len(v) for k,v in facts.items()},

@@ -42,7 +42,11 @@ JOBS = {
 
 def run_script(name: str) -> None:
     script = SCRIPTS / JOBS[name][0]
-    result = subprocess.run([sys.executable, str(script)], cwd=ROOT, text=True, capture_output=True, timeout=600)
+    try:
+        result = subprocess.run([sys.executable, str(script)], cwd=ROOT, text=True, capture_output=True, timeout=600)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logging.error("job=%s unavailable error=%s", name, type(exc).__name__)
+        return
     if result.returncode:
         logging.error("job=%s rc=%s stderr=%s", name, result.returncode, result.stderr[-1000:])
     else:
@@ -52,48 +56,18 @@ def run_script(name: str) -> None:
 def due_daily(now: datetime, schedule_time: str, last_run: datetime | None) -> bool:
     try:
         hour, minute = [int(part) for part in schedule_time.split(":", 1)]
-    except (TypeError, ValueError):
+        scheduled = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    except (AttributeError, TypeError, ValueError):
         return False
-    if (now.hour, now.minute) != (hour, minute):
-        return False
-    return not last_run or last_run.date() != now.date() or (last_run.hour, last_run.minute) != (hour, minute)
+    # Sequential jobs can overrun the exact minute. Catch up once, never every poll.
+    return now >= scheduled and (last_run is None or last_run < scheduled)
 
 
 def main() -> None:
-    lock_path = DATA / ".okxquant_scheduler.lock"
-    with lock_path.open("a+") as lock:
-        try:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise SystemExit("OKXQuant standalone scheduler already running")
-
-        tz = timezone(timedelta(hours=8))
-        last: dict[str, datetime | None] = {key: None for key in JOBS}
-        logging.info("OKXQuant standalone scheduler v0.1.0 started")
-        while True:
-            now = datetime.now(tz).replace(second=0, microsecond=0)
-            current = datetime.now(tz)
-            if not last["trader"] or (current - last["trader"]).total_seconds() >= 15 * 60:
-                run_script("trader")
-                last["trader"] = datetime.now(tz)
-            if not last["factor_library"] or (current - last["factor_library"]).total_seconds() >= 60:
-                run_script("factor_library")
-                last["factor_library"] = datetime.now(tz)
-            if not last["news"] or (current - last["news"]).total_seconds() >= 10 * 60:
-                run_script("news")
-                last["news"] = datetime.now(tz)
-            schedule = load_schedule()
-            briefing_times = schedule.get("briefing_times", ["08:00", "20:00"])
-            if any(due_daily(now, schedule_time, last["daily_briefing"]) for schedule_time in briefing_times):
-                run_script("daily_briefing")
-                last["daily_briefing"] = now
-            if due_daily(now, schedule.get("self_improvement_time", "20:00"), last["self_improvement"]):
-                run_script("self_improvement")
-                last["self_improvement"] = now
-            if due_daily(now, schedule.get("backup_time", "02:00"), last["nightly_backup"]):
-                run_script("nightly_backup")
-                last["nightly_backup"] = now
-            time.sleep(5)
+    """Legacy CLI delegates to the single Gateway owner, never a second clock."""
+    if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
+    from okxquant_gateway.worker import run
+    run()
 
 
 if __name__ == "__main__":

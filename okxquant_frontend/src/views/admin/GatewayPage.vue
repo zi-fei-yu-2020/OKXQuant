@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useApiAction } from '../../composables/useApiAction'
+const { action, actionBusy } = useApiAction(() => loading.value || loadFailed.value)
+
 import AppCard from '../../components/ui/AppCard.vue'
 import LoadingState from '../../components/ui/LoadingState.vue'
 
@@ -13,6 +16,7 @@ import { Zap, RefreshCw, RotateCcw, Server, Clock, AlertTriangle } from 'lucide-
 const { api } = useApi()
 const gw = ref<any>(null)
 const loading = ref(true)
+const loadFailed = ref(false)
 const bannerMsg = useFeedback()
 
 const deliveredCount = computed(
@@ -26,18 +30,20 @@ const overdueCount = computed(
 )
 
 async function load() {
+  loadFailed.value = false
   loading.value = true
   try {
     gw.value = await api('/api/v1/admin/gateway?limit=50')
   } catch (e: any) {
     if (e?.silent) return
+    loadFailed.value = true
     bannerMsg.value = { text: `加载失败：${e.message}`, type: 'err' }
   } finally {
     loading.value = false
   }
 }
 
-async function replayDelivery(id: number) {
+const replayDelivery = action(async (id: number) => {
   const phrase = await prompt(`重放投递 #${id} 需精确输入确认短语：REPLAY ${id}`)
   if (!phrase) return
   try {
@@ -51,7 +57,7 @@ async function replayDelivery(id: number) {
     if (e?.silent) return
     bannerMsg.value = { text: `重放失败：${e.message}`, type: 'err' }
   }
-}
+}, false)
 
 function statusColor(s: string) {
   if (s === 'success' || s === 'delivered' || s === 'ok') return 'text-emerald-400'
@@ -67,6 +73,7 @@ const { prompt } = useDialogs()
 
 <template>
   <div class="space-y-4">
+    <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading || actionBusy" @click="load()">重试</button></div>
     <LoadingState v-if="loading" />
 
     <template v-else-if="gw">
@@ -163,6 +170,15 @@ const { prompt } = useDialogs()
         </AppCard>
       </div>
 
+      <AppCard v-if="gw.manual_requests?.length" class="p-4 space-y-3" data-manual-review-requests>
+        <h2 class="text-sm font-semibold">手动复盘请求</h2>
+        <p class="text-xs" style="color:var(--text-muted)">排队与完成状态来自后台任务记录；完成复盘不代表发布运行记忆。</p>
+        <div class="table-scroll-container overflow-x-auto">
+          <table class="w-full text-xs text-left"><thead><tr><th class="p-2">请求</th><th class="p-2">状态</th><th class="p-2">申请人</th><th class="p-2">创建 / 完成</th></tr></thead>
+          <tbody><tr v-for="request in gw.manual_requests" :key="request.request_id"><td class="p-2 num-tabular">#{{ request.request_id }}</td><td class="p-2">{{ request.status === 'pending' || request.status === 'queued' ? '排队中' : request.status === 'running' ? '运行中' : request.status === 'success' ? '已完成' : request.status === 'failed' ? '失败' : '待核验' }}</td><td class="p-2">{{ request.actor || '—' }}</td><td class="p-2 whitespace-nowrap">{{ request.created_at }} / {{ request.finished_at || '—' }}</td></tr></tbody></table>
+        </div>
+      </AppCard>
+
       <!-- Scheduler Jobs -->
       <AppCard
         v-if="gw.scheduler?.jobs?.length"
@@ -255,7 +271,7 @@ const { prompt } = useDialogs()
               {{ gw.deliveries?.length || 0 }} 记录
             </span>
           </div>
-          <button
+          <button :disabled="actionBusy"
             @click="load"
             class="flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-xs font-sans cursor-pointer transition-all shadow-xs"
             style="
@@ -310,7 +326,7 @@ const { prompt } = useDialogs()
                   {{ d.created_at || d.time || '--' }}
                 </td>
                 <td class="py-2.5 px-4 text-right">
-                  <button
+                  <button :disabled="actionBusy"
                     v-if="d.status === 'dead'"
                     @click="replayDelivery(d.id)"
                     class="flex items-center space-x-1 ml-auto px-2 py-1 rounded-md border text-xs font-sans cursor-pointer transition-colors"

@@ -31,6 +31,7 @@ const router = useRouter()
 const { api } = useApi()
 const runtime = ref<any>(null)
 const loading = ref(true)
+const loadFailed = ref(false)
 const connection = computed(() => overviewConnection(runtime.value))
 
 function duration(s: number | null): string {
@@ -78,6 +79,7 @@ const dataHealthOverall = computed(() => {
 })
 
 async function loadRuntime() {
+  loadFailed.value = false
   loading.value = true
   try {
     // Runtime already includes the configuration summary used on this page.
@@ -87,6 +89,7 @@ async function loadRuntime() {
     }
   } catch (e: any) {
     if (e?.silent) return
+    loadFailed.value = true
     toast.error(e.message)
   } finally {
     loading.value = false
@@ -117,6 +120,7 @@ const quickNav = [
 
 <template>
   <div class="space-y-4 max-w-[2160px] mx-auto">
+    <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading" @click="loadRuntime()">重试</button></div>
     <AppCard v-if="runtime?.runtime_controls" class="p-4 text-sm leading-relaxed" data-runtime-controls>
       <strong style="color:var(--text-main)">{{ runtime.runtime_controls.automatic_trader ? '自动决策调度已启用' : '新的自动决策周期已暂停' }}</strong>
       <p style="color:var(--text-muted)">

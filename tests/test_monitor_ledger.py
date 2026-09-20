@@ -70,10 +70,10 @@ class MonitorTests(unittest.TestCase):
         self.patch = patch.object(monitor, 'DATA', Path(self.tmp.name))
         self.patch.start()
         self.addCleanup(self.patch.stop)
-        self.env = SimpleNamespace(identity='demo-test', mode='demo')
+        self.env = SimpleNamespace(identity='okx:demo:demo-test', mode='demo')
         self.target = dict(instId='SOL-USDT-SWAP', posId='123', posSide='long', cTime='1788676101000')
         self.row = dict(id='holding_SOL', instId='SOL-USDT-SWAP', pos_id='123', side='long',
-                        open_time=monitor.bj(self.target['cTime']), status='holding', pnl=3, environment_id='demo-test')
+                        open_time=monitor.bj(self.target['cTime']), status='holding', pnl=3, environment_id='okx:demo:demo-test')
 
     def test_confirmed_event_projects_without_estimated_pnl(self):
         monitor.note_confirmed_close(self.env, self.target, [], 'okxquantclose1788688602')

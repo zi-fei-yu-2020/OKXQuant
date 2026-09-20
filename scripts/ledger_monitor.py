@@ -88,7 +88,12 @@ def project_rows(rows,scope,*,positions=None):
         if row.get('status') in {'holding','closed_pending'}:
             event=event_for(row,events,scope)
             key=(row.get('instId',str(row.get('inst',''))+'-USDT-SWAP'),'long' if row.get('side') in {'多','long'} else 'short')
-            absent=positions is not None and row.get('environment_id')==scope and key not in current
+            from scripts.ledger_accounting import matches_lifecycle
+            live = [p for p in positions or [] if abs(float(p.get('pos') or 0)) > 0]
+            exact_identity = row.get('pos_id') and row.get('open_time')
+            present = (any(matches_lifecycle(row, p, scope) for p in live)
+                       if exact_identity else key in current)
+            absent=positions is not None and row.get('environment_id')==scope and not present
             if event or absent:
                 row.update(status='closed_pending',settlement_status='pending',pnl=None,net_pnl=None,gross_pnl=None,
                     roi=None,roi_pct=None,fee=None,open_fee=None,close_fee=None,close_px=None,sz=0,

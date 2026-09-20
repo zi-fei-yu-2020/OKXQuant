@@ -2,7 +2,7 @@
 import AppDialog from './ui/AppDialog.vue'
 
 import { ref } from 'vue'
-import { Code, BookOpen, ExternalLink, Copy, Check, X } from 'lucide-vue-next'
+import { Code, BookOpen, ExternalLink, Copy, Check } from 'lucide-vue-next'
 
 defineProps<{
   visible: boolean
@@ -86,25 +86,13 @@ async function copyToClipboard(text: string, targetName: string) {
               </h3>
             </div>
           </div>
-          <button
-            @click="emit('close')"
-            class="w-7 h-7 rounded-lg border transition-colors cursor-pointer flex items-center justify-center"
-            style="
-              background-color: var(--bg-card-subtle);
-              border-color: var(--border-subtle);
-              color: var(--text-faint);
-            "
-            title="关闭"
-          >
-            <X class="w-4 h-4" />
-          </button>
         </div>
 
         <!-- Description -->
         <p class="text-xs font-sans leading-relaxed" style="color: var(--text-muted)">
           面向 OKX 永续合约的 LLM
-          原生高频量化交易系统。集成高阶微积分物理动能推演、多模型委员会协同决策、100% 交易所云端
-          OCO 止盈止损防线、智能 Maker 挂单与每日 20:00 闭环自进化认知复盘。
+          辅助量化交易监控系统。提供市场信号、多模型决策审计、订单与保护状态查询，以及策略复盘。
+          任务时间与风控参数以当前配置为准；展示不保证保护已生效，也不保证盈利。
         </p>
 
         <!-- Links Grid -->

@@ -1,160 +1,37 @@
 <script setup lang="ts">
-import { useClipboard } from '../composables/useClipboard'
-const { copyText } = useClipboard()
+// Kept at the existing import path; this is now a header action, not a floating toolbar.
+import { computed, ref, onUnmounted } from 'vue'
+import { Terminal, Copy } from 'lucide-vue-next'
 import AppDialog from './ui/AppDialog.vue'
-
-import { ref } from 'vue'
+import AppButton from './ui/AppButton.vue'
 import { useDashboardStore } from '../stores/dashboard'
-import { RefreshCw, Terminal, X, Copy } from 'lucide-vue-next'
-
+import { useClipboard } from '../composables/useClipboard'
 const store = useDashboardStore()
-const isRotating = ref(false)
-const promptModalOpen = ref(false)
-const promptCopied = ref(false)
-
-function manualRefresh() {
-  if (isRotating.value) return
-  isRotating.value = true
-  store.fetchDashboard(false).finally(() => {
-    setTimeout(() => {
-      isRotating.value = false
-    }, 600)
-  })
-}
-
+const { copyText } = useClipboard()
+const promptModalOpen = ref(false), promptCopied = ref(false)
+const prompt = computed(() => store.data?.ai_last_prompt?.trim() ? store.data.ai_last_prompt : '')
+let copiedTimer: ReturnType<typeof setTimeout> | undefined
 async function copyPrompt() {
-  const text = store.data?.ai_last_prompt || ''
-  if (!text) return
-  if (!(await copyText(text))) return
+  if (!prompt.value || !(await copyText(prompt.value))) return
   promptCopied.value = true
-  setTimeout(() => {
-    promptCopied.value = false
-  }, 1500)
+  clearTimeout(copiedTimer)
+  copiedTimer = setTimeout(() => { promptCopied.value = false }, 1500)
 }
+onUnmounted(() => clearTimeout(copiedTimer))
 </script>
-
 <template>
-  <!-- Global Floating Actions (bottom-right: refresh + realtime prompt) -->
-  <div
-    class="fixed bottom-24 right-4 lg:bottom-6 lg:right-6 z-40 flex flex-col items-end space-y-2"
-  >
-    <!-- Floating Refresh -->
-    <button
-      @click="manualRefresh"
-      title="立即刷新全量数据"
-      class="w-10 h-10 rounded-full shadow-lg border transition transform hover:-translate-y-0.5 active:scale-95 backdrop-blur-md cursor-pointer flex items-center justify-center"
-      style="
-        background-color: var(--bg-card);
-        border-color: var(--border-medium);
-        color: var(--text-main);
-      "
-    >
-      <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': isRotating || store.isRefreshing }" />
-    </button>
-
-    <!-- Realtime Prompt Floating Button -->
-    <button
-      @click="promptModalOpen = true"
-      title="点击展开实时 AI 大脑提示词"
-      class="flex items-center space-x-2 px-3.5 py-2 sm:px-4 sm:py-2.5 rounded-full shadow-lg border transition transform hover:-translate-y-0.5 active:scale-95 backdrop-blur-md cursor-pointer"
-      style="
-        background-color: var(--bg-card);
-        border-color: var(--border-medium);
-        color: var(--text-main);
-      "
-    >
-      <div
-        class="w-5 h-5 rounded-full flex items-center justify-center font-bold"
-        style="background-color: var(--color-brand-bg); color: var(--color-brand)"
-      >
-        <Terminal class="w-3 h-3" />
+  <button class="ui-button ui-button--secondary ui-button--sm" aria-label="查看实时提示词（最近保存记录）" aria-haspopup="dialog" data-header-prompt @click="promptModalOpen = true">
+    <Terminal class="size-4" aria-hidden="true" /><span class="hidden sm:inline">实时提示词</span>
+  </button>
+  <AppDialog v-model:open="promptModalOpen" title="最近保存的决策提示词" size="xl" description="只读审计记录；不代表当前正在执行的决策。">
+    <div class="space-y-3 min-w-0" data-prompt-audit>
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <p class="text-xs leading-relaxed flex-1 min-w-0" style="color:var(--text-muted)">
+          {{ !prompt ? '暂无已保存提示词。待决策任务写入记录后可在此查阅。' : store.error || store.isStale ? '监控数据更新延迟，以下保留最近取得的提示词记录。' : '展示后端最近保存的原文；接口未提供该记录的独立时间与轮次，无法核验它属于本轮。' }}
+        </p>
+        <AppButton v-if="prompt" size="sm" @click="copyPrompt"><Copy class="size-4" aria-hidden="true" />{{ promptCopied ? '已复制' : '复制全文' }}</AppButton>
       </div>
-      <span class="text-xs font-mono font-bold tracking-wide">实时提示词</span>
-      <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-    </button>
-  </div>
-
-  <!-- Realtime Prompt Audit Modal -->
-  <AppDialog
-    v-if="promptModalOpen"
-    :open="!!promptModalOpen"
-    title="本轮决策提示词"
-    size="xl"
-    @update:open="
-      (open) => {
-        if (!open) {
-          promptModalOpen = false
-        }
-      }
-    "
-    ><div
-      class="dialog-content flex flex-col overflow-hidden font-mono"
-      style="background-color: var(--bg-card); border-color: var(--border-subtle)"
-    >
-      <!-- Modal Header -->
-      <div
-        class="px-5 py-3.5 border-b flex items-center justify-between shrink-0"
-        style="background-color: var(--bg-card-subtle); border-color: var(--border-subtle)"
-      >
-        <div class="flex items-center space-x-2.5">
-          <div
-            class="w-7 h-7 rounded-lg border flex items-center justify-center"
-            style="
-              background-color: var(--bg-card);
-              border-color: var(--border-medium);
-              color: var(--text-main);
-            "
-          >
-            <Terminal class="w-4 h-4" />
-          </div>
-          <div>
-            <h3 class="text-sm font-bold" style="color: var(--text-main)">
-              实时 AI 大脑提示词审计
-            </h3>
-            <p class="text-[10px]" style="color: var(--text-faint)">
-              当前轮次真实发往大模型网关的完整 System + User Prompt 原文
-            </p>
-          </div>
-        </div>
-        <div class="flex items-center space-x-2">
-          <button
-            @click="copyPrompt"
-            class="flex items-center space-x-1 px-3 py-1.5 rounded-lg border text-xs cursor-pointer transition-colors"
-            style="
-              background-color: var(--bg-card);
-              border-color: var(--border-subtle);
-              color: var(--text-muted);
-            "
-          >
-            <Copy class="w-3.5 h-3.5" />
-            <span>{{ promptCopied ? '已复制 ✓' : '复制全文' }}</span>
-          </button>
-          <button
-            @click="promptModalOpen = false"
-            class="p-1.5 rounded-lg border transition-colors cursor-pointer"
-            style="
-              background-color: var(--bg-card);
-              border-color: var(--border-subtle);
-              color: var(--text-faint);
-            "
-          >
-            <X class="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-
-      <!-- Modal Body -->
-      <div class="flex-1 overflow-y-auto p-5" style="background-color: var(--bg-card)">
-        <pre
-          class="text-xs font-mono whitespace-pre-wrap leading-relaxed select-text p-4 rounded-xl border"
-          style="
-            background-color: var(--bg-card-subtle);
-            border-color: var(--border-subtle);
-            color: var(--text-main);
-          "
-          >{{ store.data?.ai_last_prompt || '等待下一次 15 分钟交易周期写入实发提示词...' }}</pre
-        >
-      </div>
-    </div></AppDialog
-  >
+      <pre v-if="prompt" tabindex="0" aria-label="最近保存的提示词原文" class="text-xs font-mono whitespace-pre-wrap break-words leading-relaxed select-text p-4 rounded-lg border max-h-[65vh] overflow-auto" style="background:var(--bg-card-subtle);border-color:var(--border-subtle);color:var(--text-main)">{{ prompt }}</pre>
+    </div>
+  </AppDialog>
 </template>

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useApiAction } from '../../composables/useApiAction'
+const { action, actionBusy, canManage } = useApiAction(() => loading.value || loadFailed.value)
+
 import AppField from '../../components/ui/AppField.vue'
 import AppCard from '../../components/ui/AppCard.vue'
 import LoadingState from '../../components/ui/LoadingState.vue'
@@ -10,6 +13,8 @@ import { useFeedback } from '../../composables/useFeedback'
 import { useDialogs } from '../../composables/useDialogs'
 
 import { ref, computed, onMounted } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
+import { executionBinding, executionSummary, newProfilePackage, type ExecutionProfile } from '../../api/adminPrompt'
 import { useApi } from '../../composables/useApi'
 import { useAuthStore } from '../../stores/auth'
 import {
@@ -29,7 +34,6 @@ import {
   Upload,
   FileUp,
   Sparkles,
-  X,
   BookOpen,
   Layers,
 } from 'lucide-vue-next'
@@ -39,6 +43,7 @@ const auth = useAuthStore()
 
 const lib = ref<any>(null)
 const loading = ref(true)
+const loadFailed = ref(false)
 const bannerMsg = useFeedback()
 
 const selectedProfileId = ref<string>('')
@@ -47,6 +52,20 @@ const workingModules = ref<any[]>([])
 const dirty = ref(false)
 const historyVisible = ref(false)
 const historyList = ref<any[]>([])
+const createVisible = ref(false)
+const newProfileName = ref('我的策略')
+const newExecutionProfile = ref<ExecutionProfile>('standard')
+const selectedExecution = ref<ExecutionProfile>('standard')
+const bindingDirty = computed(() => selectedExecution.value !== executionBinding(selectedProfile.value))
+const executionSettings = computed(() => (lib.value?.profiles || []).find((p: any) => p.execution_settings?.id === selectedExecution.value)?.execution_settings)
+const hasDraft = computed(() => dirty.value || bindingDirty.value)
+const historyLoading = ref(false)
+const historyError = ref('')
+const engineStatus = ref<{ engine_version: string; environment: string; enabled: boolean; authorized: boolean; status: string } | null>(null)
+const engineLoading = ref(false)
+const engineError = ref('')
+let engineGeneration = 0
+const engineStatusText = computed(() => ({ ready: '已就绪（不代表已成交）', disabled: '未启用', confirmation_required: '需要单独确认', binding_changed: '绑定已变化，请重新确认' }[engineStatus.value?.status || ''] || '状态待核验'))
 
 // Import Modal State
 const importVisible = ref(false)
@@ -92,7 +111,9 @@ function compileLocal(): string {
     .join('\n\n')
 }
 
-async function loadLib() {
+async function loadLib(preserveDraft = false) {
+  loadFailed.value = false
+  const hadProfile = !!selectedProfile.value
   loading.value = true
   try {
     lib.value = await api('/api/v1/admin/prompt-library')
@@ -102,9 +123,11 @@ async function loadLib() {
     ) {
       selectedProfileId.value = lib.value.active_profile_id || lib.value.profiles?.[0]?.id || ''
     }
-    loadWorkingModules()
+    if (!preserveDraft || !hadProfile) loadWorkingModules()
+    void loadEngineStatus()
   } catch (e: any) {
     if (e?.silent) return
+    loadFailed.value = true
     bannerMsg.value = { text: `加载失败：${e.message}`, type: 'err' }
   } finally {
     loading.value = false
@@ -118,16 +141,19 @@ function loadWorkingModules() {
     locked: false, // 全量解锁，支持自由修改
   }))
   dirty.value = false
+  selectedExecution.value = executionBinding(selectedProfile.value)
 }
 
 async function selectProfile(id: string) {
-  if (dirty.value && !(await confirm('当前修改尚未保存，切换方案将丢失修改。继续？'))) return
+  if (id === selectedProfileId.value) return
+  if (hasDraft.value && !(await confirm('当前修改尚未保存，切换方案将丢失修改。继续？'))) return
   selectedProfileId.value = id
   loadWorkingModules()
 }
 
 async function switchPipeline(id: any) {
-  if (dirty.value && !(await confirm('当前模块修改尚未保存，切换管线将丢失修改。继续？'))) return
+  if (id === activePipeline.value) return
+  if (hasDraft.value && !(await confirm('当前修改尚未保存，切换管线将丢失修改。继续？'))) return
   activePipeline.value = id
   loadWorkingModules()
 }
@@ -161,9 +187,9 @@ function insertVarIntoActiveModule(key: string) {
   bannerMsg.value = { text: `✅ 已插入变量插槽 ${tag} 到模块「${m.title}」`, type: 'ok' }
 }
 
-async function saveProfile() {
+const saveProfile = action(async () => {
   try {
-    const pipelinesMap: Record<string, any[]> = {}
+    const pipelinesMap: Record<string, any[]> = JSON.parse(JSON.stringify(selectedProfile.value.pipeline_views || selectedProfile.value.pipelines || {}))
     for (const p of pipelines) {
       pipelinesMap[p.id] =
         p.id === activePipeline.value
@@ -177,39 +203,43 @@ async function saveProfile() {
       body: JSON.stringify({
         name: selectedProfile.value.name,
         description: selectedProfile.value.description || '',
-        enabled: true,
+        enabled: selectedProfile.value.enabled !== false,
         editor_mode: 'modules',
         pipelines: pipelinesMap,
       }),
     })
     bannerMsg.value = {
-      text: `✅ 方案「${selectedProfile.value.name}」· ${pipelines.find((p) => p.id === activePipeline.value)?.label} 模块布局已保存，下一轮推演自动生效`,
+      text: selectedProfileId.value === lib.value.active_profile_id ? '提示词已保存，下一次新决策生效；旧仓保护保持。' : '提示词已保存，设为当前策略后用于下一次新决策。',
       type: 'ok',
     }
     dirty.value = false
+    const pendingExecution = selectedExecution.value
     await loadLib()
+    selectedExecution.value = pendingExecution
   } catch (e: any) {
     if (e?.silent) return
     bannerMsg.value = { text: `保存失败：${e.message}`, type: 'err' }
   }
-}
+})
 
-async function activateProfile() {
-  if (selectedProfile.value?.execution_settings?.id === 'small300' && !(await confirm('启用300U小资金预设：下一轮新决策使用最多300U风险基数、单笔0.5%风险、单标的30U保证金、总90U、最多2个标的和最高3倍实际杠杆。已有仓位不自动缩小；超限或首次非空仓将阻止新增风险。继续？'))) return
+const activateProfile = action(async () => {
+  if (hasDraft.value) { bannerMsg.value = { text: '请先保存提示词和执行模式，再设为当前策略。', type: 'warn' }; return }
+  if (!(await confirm(`设为当前策略？基础上限：${executionSummary(selectedProfile.value?.execution_settings)}。实际按当前环境的短线 / 波段模式执行，不代表实盘与模拟盘一致。下一次新决策生效，不触发立即推演；旧仓保护保持。`))) return
   try {
     await api(
       `/api/v1/admin/prompt-profiles/${encodeURIComponent(selectedProfileId.value)}/activate`,
       { method: 'POST', body: '{}' },
     )
-    bannerMsg.value = { text: `已激活方案「${selectedProfile.value?.name}」`, type: 'ok' }
+    bannerMsg.value = { text: `已激活「${selectedProfile.value?.name}」，下一次新决策生效；旧仓保护保持。`, type: 'ok' }
     await loadLib()
   } catch (e: any) {
     if (e?.silent) return
     bannerMsg.value = { text: `激活失败：${e.message}`, type: 'err' }
   }
-}
+})
 
-async function duplicateProfile() {
+const duplicateProfile = action(async () => {
+  if (hasDraft.value && !(await confirm('复制已保存版本并切换方案？当前未保存修改会丢失。'))) return
   const name = await prompt('新方案名称：', `${selectedProfile.value?.name || ''} 副本`)
   if (!name) return
   try {
@@ -224,27 +254,78 @@ async function duplicateProfile() {
     if (e?.silent) return
     bannerMsg.value = { text: `复制失败：${e.message}`, type: 'err' }
   }
+})
+
+const createProfile = action(async () => {
+  if (!newProfileName.value.trim() || newProfileName.value.trim().length > 60) {
+    bannerMsg.value = { text: '请输入 1–60 字的策略名称', type: 'err' }; return
+  }
+  if (hasDraft.value && !(await confirm('操作后将切换方案，当前未保存修改会丢失。继续？'))) return
+  try {
+    // The existing atomic import endpoint binds execution in the same write as creation.
+    const source = await api('/api/v1/admin/prompt-profiles/stable/export')
+    const res = await api('/api/v1/admin/prompt-profiles/import', {
+      method: 'POST',
+      body: JSON.stringify({ payload: newProfilePackage(source, newProfileName.value, newExecutionProfile.value), name_override: newProfileName.value.trim() }),
+    })
+    selectedProfileId.value = res.profile.id
+    createVisible.value = false
+    await loadLib()
+    bannerMsg.value = { text: `已新建「${res.profile.name}」并绑定执行模式，尚未激活。`, type: 'ok' }
+  } catch (e: any) {
+    if (!e?.silent) bannerMsg.value = { text: `保存失败：${e.message}`, type: 'err' }
+  }
+})
+
+const saveExecutionProfile = action(async () => {
+  if (!selectedProfile.value || !bindingDirty.value) return
+  if (!(await confirm(`保存执行模式？基础上限：${executionSummary(executionSettings.value)}。实际按当前环境的短线 / 波段模式执行，不代表实盘与模拟盘一致。不改写提示词；当前策略从下一次新决策生效，旧仓保护保持。`))) return
+  try {
+    await api(`/api/v1/admin/prompt-profiles/${encodeURIComponent(selectedProfileId.value)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name: selectedProfile.value.name, execution_profile: selectedExecution.value }),
+    })
+    // Keep unsaved prompt modules while updating the independent execution binding.
+    const settings = executionSettings.value
+    selectedProfile.value.execution_profile = selectedExecution.value
+    selectedProfile.value.execution_settings = settings
+    await loadLib(true)
+    bannerMsg.value = { text: selectedProfileId.value === lib.value.active_profile_id ? '执行模式已保存，下一次新决策生效；旧仓保护保持。' : '执行模式已保存，激活此策略后生效；提示词未改写。', type: 'ok' }
+  } catch (e: any) {
+    if (!e?.silent) bannerMsg.value = { text: `保存失败：${e.message}`, type: 'err' }
+  }
+})
+
+async function loadEngineStatus() {
+  if (!auth.isSuperadmin) return
+  const generation = ++engineGeneration
+  engineLoading.value = true
+  engineError.value = ''
+  try {
+    const result = await api('/api/v1/admin/strategy/engine')
+    if (generation === engineGeneration) engineStatus.value = result
+  } catch (e: any) {
+    if (generation !== engineGeneration) return
+    engineStatus.value = null
+    if (!e?.silent) engineError.value = e.message
+  } finally { if (generation === engineGeneration) engineLoading.value = false }
 }
 
-async function createProfile() {
-  const name = await prompt('新方案名称：', '我的策略')
-  if (!name) return
+const authorizeLiveEngine = action(async (enabled: boolean) => {
+  if (engineLoading.value || engineStatus.value?.environment !== 'live') return
+  const expectedBinding = { ...engineStatus.value }
+  const expected = enabled ? 'ENABLE LIVE SCALP' : 'DISABLE LIVE SCALP'
+  const phrase = await prompt(`${enabled ? '授权' : '撤销授权'}当前实盘账户的分钟策略。授权绑定当前账户、策略与风控，变更后需重新确认；不切换账户，不立即提交订单，不改变模拟盘或旧仓保护。实盘可能产生真实损益。请输入：${expected}`)
+  if (!phrase) return
+  if (phrase.trim() !== expected) { bannerMsg.value = { text: `确认词必须为：${expected}`, type: 'warn' }; return }
   try {
-    const res = await api('/api/v1/admin/prompt-profiles', {
-      method: 'POST',
-      body: JSON.stringify({ name, description: '', source_id: 'stable' }),
-    })
-    bannerMsg.value = {
-      text: `已创建可编辑方案「${res.profile.name}」，现在可以自由增删改模块`,
-      type: 'ok',
-    }
-    selectedProfileId.value = res.profile.id
-    await loadLib()
+    await api('/api/v1/admin/strategy/engine/live-authorization', { method: 'POST', body: JSON.stringify({ enabled, confirmation: expected, expected_binding: expectedBinding }) })
+    await loadEngineStatus()
+    bannerMsg.value = { text: '实盘分钟策略授权设置已保存；未切换账户或立即提交订单，请核对运行状态。', type: 'ok' }
   } catch (e: any) {
-    if (e?.silent) return
-    bannerMsg.value = { text: `创建失败：${e.message}`, type: 'err' }
+    if (!e?.silent) bannerMsg.value = { text: `授权更新失败：${e.message}`, type: 'err' }
   }
-}
+})
 
 function addModule() {
   workingModules.value.push({
@@ -282,7 +363,7 @@ function duplicateModule(idx: number) {
   dirty.value = true
 }
 
-async function deleteProfile() {
+const deleteProfile = action(async () => {
   if (!(await confirm(`确定删除方案「${selectedProfile.value?.name}」？`))) return
   try {
     await api(`/api/v1/admin/prompt-profiles/${encodeURIComponent(selectedProfileId.value)}`, {
@@ -294,10 +375,13 @@ async function deleteProfile() {
     if (e?.silent) return
     bannerMsg.value = { text: `删除失败：${e.message}`, type: 'err' }
   }
-}
+})
 
 async function showHistory() {
   historyVisible.value = true
+  historyLoading.value = true
+  historyError.value = ''
+  historyList.value = []
   try {
     const res = await api(
       `/api/v1/admin/prompt-profiles/${encodeURIComponent(selectedProfileId.value)}/history`,
@@ -305,12 +389,15 @@ async function showHistory() {
     historyList.value = res.history || []
   } catch (e: any) {
     if (e?.silent) return
+    historyError.value = e.message
     bannerMsg.value = { text: `历史加载失败：${e.message}`, type: 'err' }
+  } finally {
+    historyLoading.value = false
   }
 }
 
-async function rollback(revId: string) {
-  if (!(await confirm('回滚将覆盖当前方案内容，确定？'))) return
+const rollback = action(async (revId: string) => {
+  if (!(await confirm('回滚将覆盖已保存方案及当前草稿，包括历史执行模式绑定。当前策略从下一次新决策生效；旧仓保护保持。继续？'))) return
   try {
     await api(
       `/api/v1/admin/prompt-profiles/${encodeURIComponent(selectedProfileId.value)}/rollback`,
@@ -326,7 +413,7 @@ async function rollback(revId: string) {
     if (e?.silent) return
     bannerMsg.value = { text: `回滚失败：${e.message}`, type: 'err' }
   }
-}
+})
 
 // 导出策略方案为 JSON
 async function exportProfile() {
@@ -356,6 +443,8 @@ async function exportProfile() {
 function handleFileSelect(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0]
   if (!file) return
+  importRawJson.value = ''
+  importFileError.value = ''
   const reader = new FileReader()
   reader.onload = (e) => {
     try {
@@ -370,11 +459,13 @@ function handleFileSelect(event: Event) {
       importFileError.value = '文件内容不是合法的 JSON 格式'
     }
   }
+  reader.onerror = () => { importFileError.value = '读取文件失败，请重新选择文件' }
   reader.readAsText(file)
 }
 
 // 提交导入
-async function submitImport() {
+const submitImport = action(async () => {
+  if (hasDraft.value && !(await confirm('操作后将切换方案，当前未保存修改会丢失。继续？'))) return
   importFileError.value = ''
   if (!importRawJson.value.trim()) {
     importFileError.value = '请先选择 JSON 策略文件或粘贴 JSON 内容'
@@ -399,30 +490,44 @@ async function submitImport() {
     if (e?.silent) return
     importFileError.value = `导入失败：${e.message}`
   }
-}
+})
 
-function copyPreview() {
-  navigator.clipboard.writeText(compiledPreview.value)
-  bannerMsg.value = { text: '编译后实发 Prompt 已复制', type: 'ok' }
+async function copyPreview() {
+  try {
+    await navigator.clipboard.writeText(compiledPreview.value)
+    bannerMsg.value = { text: '提示词预览已复制', type: 'ok' }
+  } catch {
+    bannerMsg.value = { text: '复制失败，请手动选择预览文本复制。', type: 'err' }
+  }
 }
+onBeforeRouteLeave(async () => !hasDraft.value || await confirm('当前修改未保存，离开页面将丢失修改。继续？'))
 
-onMounted(loadLib)
+onMounted(() => { void loadLib(); void loadEngineStatus() })
 
 const { confirm, prompt } = useDialogs()
 </script>
 
 <template>
   <div class="space-y-4 font-sans text-sm">
+    <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading || actionBusy" @click="loadLib(hasDraft)">重试</button></div>
+    <AppDialog :busy="actionBusy" v-model:open="createVisible" title="新建策略" size="sm">
+      <div class="space-y-4">
+        <AppField label="策略名称" v-slot="field"><input :disabled="actionBusy" :id="field.id" v-model="newProfileName" maxlength="60" class="ui-input w-full" /></AppField>
+        <AppField label="执行模式" v-slot="field"><select :disabled="actionBusy" :id="field.id" v-model="newExecutionProfile" class="ui-input w-full"><option value="standard">标准风控</option><option value="small300">300U 风险预算</option></select></AppField>
+        <p class="text-sm" style="color:var(--text-muted)">基于稳健模板新建，明确绑定执行模式，不改写模板规则。新建后不会自动激活。</p>
+      </div>
+      <template #footer><button :disabled="actionBusy || !canManage" class="ui-button ui-button--primary" @click="createProfile">新建策略</button></template>
+    </AppDialog>
     <!-- Header Summary & Plaza Gateway -->
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-1">
       <div class="flex items-center space-x-2">
         <Sparkles class="w-4 h-4 text-blue-400 shrink-0" />
         <p class="text-sm text-[var(--text-muted)] font-sans">
-          核心交易消息管线自由编排，支持标准语义变量插槽。右侧实时对照推演实发效果与源码。
+          编排交易提示词模块，右侧预览本地拼接结果；实时变量在下一次新决策时填入。
         </p>
       </div>
       <div class="flex items-center space-x-1.5 shrink-0">
-        <button
+        <button :disabled="actionBusy"
           @click="showVarRibbon = !showVarRibbon"
           class="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg border text-sm font-sans transition-all cursor-pointer shadow-xs"
           :style="
@@ -444,7 +549,7 @@ const { confirm, prompt } = useDialogs()
           <Layers class="w-3.5 h-3.5" />
           <span>{{ showVarRibbon ? '收起变量条' : '插入变量' }}</span>
         </button>
-        <button
+        <button :disabled="actionBusy"
           @click="variableGuideVisible = true"
           class="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg border text-sm font-sans transition-all cursor-pointer shadow-xs"
           style="
@@ -457,7 +562,8 @@ const { confirm, prompt } = useDialogs()
           <BookOpen class="w-3.5 h-3.5" />
           <span>变量字典</span>
         </button>
-        <button
+        <button :disabled="actionBusy"
+          v-if="auth.isSuperadmin"
           @click="importVisible = true"
           class="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg border text-sm font-sans transition-all cursor-pointer shadow-xs"
           style="
@@ -470,7 +576,7 @@ const { confirm, prompt } = useDialogs()
           <Upload class="w-3.5 h-3.5" />
           <span>导入方案</span>
         </button>
-        <button
+        <button :disabled="actionBusy"
           @click="exportProfile"
           class="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg border text-sm font-sans transition-all cursor-pointer shadow-xs"
           style="
@@ -499,7 +605,7 @@ const { confirm, prompt } = useDialogs()
         <Layers class="w-3.5 h-3.5" style="color: var(--color-brand)" />
         <span>快捷变量插槽:</span>
       </div>
-      <button
+      <button :disabled="actionBusy"
         v-for="v in templateVariables"
         :key="v.key"
         @click="insertVarIntoActiveModule(v.key)"
@@ -518,6 +624,25 @@ const { confirm, prompt } = useDialogs()
     </AppCard>
 
     <!-- Alert / Banner Message -->
+
+    <AppCard class="rounded-xl border p-4 space-y-2" style="border-color:var(--border-subtle);background:var(--bg-card)">
+      <h2 class="text-sm font-bold">分钟策略运行范围</h2>
+      <p v-if="!auth.isSuperadmin" class="text-sm" style="color:var(--text-muted)">仅超级管理员可查看和调整运行授权。</p>
+      <template v-else>
+        <p v-if="engineLoading" class="text-sm">正在读取运行范围…</p>
+        <div v-else-if="engineError" class="flex items-center gap-3 text-sm" role="alert"><span>运行范围加载失败：{{ engineError }}</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="actionBusy" @click="loadEngineStatus">重试</button></div>
+        <template v-else-if="engineStatus">
+          <p v-if="engineStatus.environment === 'demo'" class="text-sm">模拟盘{{ engineStatus.enabled ? '已启用' : '未启用' }}；实盘需切换账户后单独确认。{{ engineStatusText }}</p>
+          <p v-else-if="engineStatus.environment === 'live'" class="text-sm">当前实盘 · {{ engineStatusText }} · {{ engineStatus.authorized ? '已有授权记录' : '尚未授权' }}</p>
+          <p v-else class="text-sm">环境尚未核验，不能操作实盘授权。</p>
+          <p class="text-xs" style="color:var(--text-muted)">引擎 {{ engineStatus.engine_version || '待核验' }}。授权绑定当前账户、策略与风控；实盘绑定变更后需重新确认。就绪不代表已成交，不改变模拟盘或旧仓保护。</p>
+          <div v-if="engineStatus.environment === 'live'" class="flex flex-wrap gap-2">
+            <button class="ui-button ui-button--secondary ui-button--sm" :disabled="actionBusy || engineLoading" @click="authorizeLiveEngine(true)">确认实盘授权</button>
+            <button v-if="engineStatus.authorized" class="ui-button ui-button--secondary ui-button--sm" :disabled="actionBusy || engineLoading" @click="authorizeLiveEngine(false)">撤销实盘授权</button>
+          </div>
+        </template>
+      </template>
+    </AppCard>
 
     <!-- Loading State -->
     <LoadingState v-if="loading" />
@@ -539,9 +664,9 @@ const { confirm, prompt } = useDialogs()
           <span class="text-xs font-bold uppercase tracking-wider" style="color: var(--text-faint)"
             >策略方案列表</span
           >
-          <button
+          <button :disabled="actionBusy"
             v-if="auth.isSuperadmin"
-            @click="createProfile"
+            @click="createVisible = true"
             class="flex items-center space-x-1 px-2 py-1 rounded-lg text-xs font-bold cursor-pointer shadow-xs transition-colors"
             style="background-color: var(--text-main); color: var(--bg-card)"
           >
@@ -550,7 +675,7 @@ const { confirm, prompt } = useDialogs()
           </button>
         </div>
         <div class="space-y-1.5 max-h-[calc(100vh-220px)] overflow-y-auto pr-0.5">
-          <button
+          <button :disabled="actionBusy"
             v-for="p in lib.profiles"
             :key="p.id"
             @click="selectProfile(p.id)"
@@ -592,11 +717,16 @@ const { confirm, prompt } = useDialogs()
         class="rounded-xl border p-4 min-w-0 shadow-xs space-y-3 transition-colors flex flex-col"
         style="background-color: var(--bg-card); border-color: var(--border-subtle)"
       >
-        <section v-if="selectedProfile?.execution_settings?.id === 'small300'" class="rounded-lg border p-3 text-sm space-y-2" style="border-color:var(--color-brand-border);background:var(--color-brand-bg)" data-small300-preset>
-          <strong>300U 小资金 · 执行风控绑定</strong>
-          <p>最多300U风险基数 · 单笔风险0.5%（最多1.5U） · 单标的保证金30U · 总保证金90U · 最多2个标的 · 实际杠杆≤3倍</p>
-          <p class="text-xs">{{ selectedProfileId === lib.active_profile_id ? '已启用：下一轮新决策和最终网关强制使用此预算。' : '当前仅预览，点击“设为当前策略”后才生效。' }} 已有仓位不自动调整；首次资金基线需空仓，最小合约不满足预算则不下单。超额实际杠杆会被拒绝，不静默放大风险。</p>
-          <p class="text-xs">切回其他方案恢复该方案原有风控配置；此预设的损益基线不因切换而清零。</p>
+        <section class="rounded-lg border p-3 text-sm space-y-2" style="border-color:var(--color-brand-border);background:var(--color-brand-bg)" data-execution-binding>
+          <AppField label="执行模式（与提示词独立）" v-slot="field">
+            <select :id="field.id" v-model="selectedExecution" class="ui-input w-full" :disabled="(!auth.isSuperadmin || selectedProfileId === 'small300') || actionBusy">
+              <option value="standard">标准风控</option><option value="small300">300U 风险预算</option>
+            </select>
+          </AppField>
+          <p>基础上限：{{ executionSummary(executionSettings) }}</p>
+          <p class="text-xs">执行模式只绑定基础风控预算，不改写提示词。实际额度按当前环境的短线 / 波段模式执行，不代表实盘与模拟盘一致；交易周期以实际新决策及执行结果为准。下一次新决策生效，不立即触发推演；旧仓保护保持。</p>
+          <p v-if="selectedProfileId === 'small300'" class="text-xs">内置 300U 方案固定绑定此模式；需切换模式请复制副本。</p>
+          <button v-if="auth.isSuperadmin" class="ui-button ui-button--secondary ui-button--sm" :disabled="(!bindingDirty) || actionBusy || !canManage" @click="saveExecutionProfile">保存执行模式</button>
         </section>
         <!-- Pipeline Navigation Tabs -->
         <div
@@ -604,7 +734,7 @@ const { confirm, prompt } = useDialogs()
           style="border-color: var(--border-subtle)"
         >
           <div class="flex space-x-1.5">
-            <button
+            <button :disabled="actionBusy"
               v-for="p in pipelines"
               :key="p.id"
               @click="switchPipeline(p.id)"
@@ -653,7 +783,7 @@ const { confirm, prompt } = useDialogs()
                 </span>
                 <button
                   @click.stop="moveModule(idx, -1)"
-                  :disabled="idx === 0"
+                  :disabled="(idx === 0) || actionBusy"
                   class="p-1 rounded disabled:opacity-20 cursor-pointer transition-colors"
                   style="color: var(--text-muted)"
                   title="上移模块"
@@ -662,14 +792,14 @@ const { confirm, prompt } = useDialogs()
                 </button>
                 <button
                   @click.stop="moveModule(idx, 1)"
-                  :disabled="idx === workingModules.length - 1"
+                  :disabled="(idx === workingModules.length - 1) || actionBusy"
                   class="p-1 rounded disabled:opacity-20 cursor-pointer transition-colors"
                   style="color: var(--text-muted)"
                   title="下移模块"
                 >
                   <ArrowDown class="w-3.5 h-3.5" />
                 </button>
-                <input aria-label="模块标题"
+                <input :disabled="actionBusy" aria-label="模块标题"
                   v-model="m.title"
                   class="bg-transparent border-b border-transparent focus:border-blue-500 text-sm font-bold font-sans outline-none flex-1 min-w-[120px] transition-colors"
                   style="color: var(--text-main)"
@@ -680,7 +810,7 @@ const { confirm, prompt } = useDialogs()
 
               <!-- Controls: Copy, Delete, Toggle -->
               <div class="flex items-center space-x-1.5 shrink-0">
-                <button
+                <button :disabled="actionBusy"
                   @click.stop="duplicateModule(idx)"
                   class="p-1.5 rounded-lg cursor-pointer transition-colors"
                   style="color: var(--text-muted)"
@@ -688,14 +818,14 @@ const { confirm, prompt } = useDialogs()
                 >
                   <Copy class="w-3.5 h-3.5" />
                 </button>
-                <button
+                <button :disabled="actionBusy"
                   @click.stop="removeModule(idx)"
                   class="p-1.5 rounded-lg text-rose-400 hover:opacity-80 cursor-pointer transition-opacity"
                   title="删除模块"
                 >
                   <Trash2 class="w-3.5 h-3.5" />
                 </button>
-                <button
+                <button :disabled="actionBusy"
                   @click.stop="toggleModule(m)"
                   class="cursor-pointer transition-colors p-1"
                   :class="m.enabled ? 'text-emerald-500' : 'text-[var(--text-muted)]'"
@@ -708,7 +838,7 @@ const { confirm, prompt } = useDialogs()
             </div>
 
             <!-- Content Area (100% Editable) -->
-            <textarea aria-label="模块提示词内容"
+            <textarea :disabled="actionBusy" aria-label="模块提示词内容"
               v-model="m.content"
               @focus="activeEditingIdx = idx"
               rows="5"
@@ -724,7 +854,7 @@ const { confirm, prompt } = useDialogs()
           </div>
 
           <!-- Add Module Button -->
-          <button
+          <button :disabled="actionBusy"
             @click="addModule"
             class="w-full py-2.5 rounded-xl border border-dashed text-sm cursor-pointer flex items-center justify-center space-x-1.5 transition-all shadow-xs"
             style="
@@ -746,7 +876,7 @@ const { confirm, prompt } = useDialogs()
           <div class="flex flex-wrap items-center gap-2">
             <button
               @click="saveProfile"
-              :disabled="!dirty"
+              :disabled="(!dirty || !auth.isSuperadmin) || actionBusy || !canManage"
               class="btn-primary-text flex items-center space-x-1.5 px-4 py-2 rounded-lg font-bold transition-all shadow-xs"
               :class="
                 dirty
@@ -758,7 +888,7 @@ const { confirm, prompt } = useDialogs()
               <Save class="w-4 h-4" style="color: #ffffff" />
               <span style="color: #ffffff">保存当前方案{{ dirty ? ' *' : '' }}</span>
             </button>
-            <button
+            <button :disabled="actionBusy || !canManage"
               v-if="selectedProfileId !== lib.active_profile_id && auth.isSuperadmin"
               @click="activateProfile"
               class="btn-primary-text flex items-center space-x-1.5 px-3.5 py-2 rounded-lg font-bold cursor-pointer hover:bg-emerald-600 transition-all shadow-xs"
@@ -770,7 +900,7 @@ const { confirm, prompt } = useDialogs()
           </div>
 
           <div class="flex flex-wrap items-center gap-2">
-            <button
+            <button :disabled="actionBusy || !canManage"
               v-if="auth.isSuperadmin"
               @click="duplicateProfile"
               class="flex items-center space-x-1 px-3 py-2 rounded-lg border text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
@@ -783,7 +913,7 @@ const { confirm, prompt } = useDialogs()
               <Copy class="w-3.5 h-3.5" />
               <span>复制副本</span>
             </button>
-            <button
+            <button :disabled="actionBusy"
               @click="showHistory"
               class="flex items-center space-x-1 px-3 py-2 rounded-lg border text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
               style="
@@ -795,7 +925,7 @@ const { confirm, prompt } = useDialogs()
               <History class="w-3.5 h-3.5" />
               <span>历史版本</span>
             </button>
-            <button
+            <button :disabled="actionBusy || !canManage"
               v-if="selectedProfileId !== lib.active_profile_id && auth.isSuperadmin"
               @click="deleteProfile"
               class="flex items-center space-x-1 px-3 py-2 rounded-lg border text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
@@ -827,7 +957,7 @@ const { confirm, prompt } = useDialogs()
               class="text-sm font-bold uppercase tracking-wider font-sans"
               style="color: var(--text-main)"
             >
-              实时渲染对照
+              提示词拼接预览
             </h3>
           </div>
           <div class="flex items-center space-x-1.5">
@@ -836,7 +966,7 @@ const { confirm, prompt } = useDialogs()
               class="flex p-0.5 rounded-lg border"
               style="background-color: var(--bg-card-subtle); border-color: var(--border-subtle)"
             >
-              <button
+              <button :disabled="actionBusy"
                 @click="previewMode = 'rendered'"
                 class="px-2 py-0.5 rounded text-xs font-bold cursor-pointer transition-all"
                 :style="
@@ -845,9 +975,9 @@ const { confirm, prompt } = useDialogs()
                     : { color: 'var(--text-muted)' }
                 "
               >
-                实发效果
+                拼接正文
               </button>
-              <button
+              <button :disabled="actionBusy"
                 @click="previewMode = 'template'"
                 class="px-2 py-0.5 rounded text-xs font-bold cursor-pointer transition-all"
                 :style="
@@ -856,10 +986,10 @@ const { confirm, prompt } = useDialogs()
                     : { color: 'var(--text-muted)' }
                 "
               >
-                模板源码
+                模块与插槽
               </button>
             </div>
-            <button
+            <button :disabled="actionBusy"
               @click="copyPreview"
               class="px-2 py-1 rounded-lg border text-xs font-sans cursor-pointer transition-all shadow-xs"
               style="
@@ -878,7 +1008,7 @@ const { confirm, prompt } = useDialogs()
         >
           <span>{{
             previewMode === 'rendered'
-              ? '已代入当前真实盘口与自进化心法'
+              ? '未填入实时行情，不代表历史实发内容'
               : '显示模块包含的原始模版语法与插槽'
           }}</span>
           <span class="num-tabular font-bold" style="color: var(--color-brand)"
@@ -898,7 +1028,7 @@ const { confirm, prompt } = useDialogs()
     </div>
 
     <!-- Template Variables Guide Modal -->
-    <AppDialog
+    <AppDialog :busy="actionBusy"
       v-if="variableGuideVisible"
       :open="!!variableGuideVisible"
       title="提示词变量参考"
@@ -938,13 +1068,7 @@ const { confirm, prompt } = useDialogs()
               </p>
             </div>
           </div>
-          <button
-            @click="variableGuideVisible = false"
-            class="cursor-pointer p-1"
-            style="color: var(--text-muted)"
-          >
-            <X class="w-4 h-4" />
-          </button>
+
         </div>
 
         <div class="space-y-3">
@@ -978,7 +1102,7 @@ const { confirm, prompt } = useDialogs()
                   &#123;&#123;{{ v.key }}&#125;&#125;
                 </code>
               </div>
-              <button
+              <button :disabled="actionBusy"
                 @click="() => {
                   insertVarIntoActiveModule(v.key)
                   variableGuideVisible = false
@@ -1004,24 +1128,12 @@ const { confirm, prompt } = useDialogs()
           </div>
         </div>
 
-        <div class="flex justify-end pt-3 border-t" style="border-color: var(--border-subtle)">
-          <button
-            @click="variableGuideVisible = false"
-            class="px-5 py-2 rounded-xl border text-sm cursor-pointer shadow-xs"
-            style="
-              background-color: var(--bg-card-subtle);
-              border-color: var(--border-medium);
-              color: var(--text-muted);
-            "
-          >
-            关闭字典
-          </button>
-        </div>
+
       </div></AppDialog
     >
 
     <!-- Import Modal -->
-    <AppDialog
+    <AppDialog :busy="actionBusy"
       v-if="importVisible"
       :open="!!importVisible"
       title="导入策略方案"
@@ -1059,13 +1171,7 @@ const { confirm, prompt } = useDialogs()
               </p>
             </div>
           </div>
-          <button
-            @click="importVisible = false"
-            class="cursor-pointer p-1"
-            style="color: var(--text-muted)"
-          >
-            <X class="w-4 h-4" />
-          </button>
+
         </div>
 
         <div
@@ -1095,14 +1201,14 @@ const { confirm, prompt } = useDialogs()
             >
               <FileUp class="w-4 h-4" />
               <span>选择策略文件 (.json)</span>
-              <input type="file" accept=".json" class="hidden" @change="handleFileSelect" />
+              <input :disabled="actionBusy" type="file" accept=".json" class="hidden" @change="handleFileSelect" />
             </label>
           </div>
         </div>
 
         <div>
           <AppField class="w-full min-w-0"><template #label><span class="block text-sm font-bold mb-1.5" style="color: var(--text-main)"
-            >方式二：或直接粘贴策略 JSON 文本</span></template><template #default="{ id: fieldId }"><textarea :id="fieldId"
+            >方式二：或直接粘贴策略 JSON 文本</span></template><template #default="{ id: fieldId }"><textarea :disabled="actionBusy" :id="fieldId"
             v-model="importRawJson"
             rows="6"
             class="w-full border rounded-xl px-3 py-2 text-sm outline-none resize-y font-sans transition-colors"
@@ -1117,7 +1223,7 @@ const { confirm, prompt } = useDialogs()
 
         <div>
           <AppField class="w-full min-w-0"><template #label><span class="block text-sm font-bold mb-1.5" style="color: var(--text-main)"
-            >自定义导入方案名称（可选）</span></template><template #default="{ id: fieldId }"><input :id="fieldId"
+            >自定义导入方案名称（可选）</span></template><template #default="{ id: fieldId }"><input :disabled="actionBusy" :id="fieldId"
             v-model="importNameOverride"
             type="text"
             class="w-full border rounded-xl px-3 py-2 text-sm outline-none transition-colors"
@@ -1134,18 +1240,8 @@ const { confirm, prompt } = useDialogs()
           class="flex items-center justify-end space-x-2 pt-3 border-t"
           style="border-color: var(--border-subtle)"
         >
-          <button
-            @click="importVisible = false"
-            class="px-4 py-2 rounded-xl border text-sm cursor-pointer shadow-xs"
-            style="
-              background-color: var(--bg-card-subtle);
-              border-color: var(--border-medium);
-              color: var(--text-muted);
-            "
-          >
-            取消
-          </button>
-          <button
+
+          <button :disabled="actionBusy || !canManage"
             @click="submitImport"
             class="px-5 py-2 rounded-xl font-bold text-sm cursor-pointer transition-all shadow-xs"
             style="background-color: var(--text-main); color: var(--bg-card)"
@@ -1157,7 +1253,7 @@ const { confirm, prompt } = useDialogs()
     >
 
     <!-- History Modal -->
-    <AppDialog
+    <AppDialog :busy="actionBusy"
       v-if="historyVisible"
       :open="!!historyVisible"
       title="方案版本历史"
@@ -1180,16 +1276,12 @@ const { confirm, prompt } = useDialogs()
           <h3 class="text-sm font-bold" style="color: var(--text-main)">
             版本历史 · {{ selectedProfile?.name }}
           </h3>
-          <button
-            @click="historyVisible = false"
-            class="cursor-pointer text-sm p-1"
-            style="color: var(--text-muted)"
-          >
-            <X class="w-4 h-4" />
-          </button>
+
         </div>
+        <LoadingState v-if="historyLoading" />
+        <button :disabled="actionBusy" v-if="historyError" class="ui-button ui-button--secondary" @click="showHistory">加载失败，重试</button>
         <div
-          v-if="historyList.length === 0"
+          v-if="!historyLoading && !historyError && historyList.length === 0"
           class="text-sm py-8 text-center"
           style="color: var(--text-muted)"
         >
@@ -1209,7 +1301,8 @@ const { confirm, prompt } = useDialogs()
               {{ h.created_at || h.time }} · {{ h.actor || 'system' }}
             </div>
           </div>
-          <button
+          <button :disabled="actionBusy || !canManage"
+            v-if="auth.isSuperadmin"
             @click="rollback(h.id || h.revision_id)"
             class="flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-xs cursor-pointer transition-all shadow-xs"
             style="

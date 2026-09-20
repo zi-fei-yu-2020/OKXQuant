@@ -16,6 +16,8 @@ META={'instId':'TEST-USDT-SWAP','ctType':'linear','settleCcy':'USDT','state':'li
 
 class StrategyRiskTests(unittest.TestCase):
     def setUp(self):
+        authorization = patch("scripts.decision_authorization.validate_management")
+        authorization.start(); self.addCleanup(authorization.stop)
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         for module,name,value in [(evidence,'DB_PATH',Path(self.temp.name)/'evidence.db'),(trade_lock,'PATH',Path(self.temp.name)/'writer.lock')]:
             p=patch.object(module,name,value);p.start();self.addCleanup(p.stop)

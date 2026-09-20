@@ -62,7 +62,7 @@ function fmt4(v: any): string {
 
 const allProtected = computed(
   () =>
-    store.positions.length > 0 &&
+    !store.error && !store.isStale && store.positions.length > 0 &&
     store.positions.every(
       (p: any) =>
         p.protectionStatus === 'fully_protected' || Number(p.protectionCoveragePct || 0) >= 100,
@@ -181,9 +181,9 @@ const allProtected = computed(
           <ShieldCheck v-if="allProtected" class="w-3.5 h-3.5" />
           <ShieldAlert v-else class="w-3.5 h-3.5" />
           <span class="hidden md:inline">{{
-            allProtected ? '100% 交易所云端 OCO 止损' : '部分仓位未设止损'
+            allProtected ? '快照显示止损覆盖完整' : '止损覆盖待核验'
           }}</span>
-          <span class="md:hidden">{{ allProtected ? '100% OCO' : '未全覆盖' }}</span>
+          <span class="md:hidden">{{ allProtected ? '快照覆盖完整' : '覆盖待核验' }}</span>
         </div>
       </div>
     </div>
@@ -192,7 +192,7 @@ const allProtected = computed(
     <div v-if="activeTab === 'positions'">
       <EmptyState
         v-if="filteredPositions.length === 0"
-        :title="store.positions.length ? '没有匹配的记录' : '暂无持仓'"
+        :title="!store.data || store.error || store.isStale ? '持仓状态待更新' : store.positions.length ? '没有匹配的记录' : '暂无持仓'"
         description="账户连接就绪后，持仓与风险保护信息会显示在这里。"
       />
 
@@ -333,8 +333,8 @@ const allProtected = computed(
     <div v-else>
       <EmptyState
         v-if="filteredOrders.length === 0"
-        :title="store.pendingOrders.length ? '没有匹配的记录' : '暂无挂单'"
-        description="尚无在途委托，已提交的限价单会在这里持续更新。"
+        :title="!store.data || store.error || store.isStale ? '挂单状态待更新' : store.pendingOrders.length ? '没有匹配的记录' : '暂无挂单'"
+        description="显示最近取得的在途委托快照；连接异常时，空列表不代表交易所没有挂单。"
       />
 
       <div v-else class="overflow-x-auto">

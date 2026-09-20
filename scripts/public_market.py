@@ -7,7 +7,7 @@ HTTP failures, no stale-on-error and no cached trading decisions.
 """
 from __future__ import annotations
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, copy_context
 from functools import wraps
 import hashlib
 import json
@@ -325,7 +325,7 @@ def _selected():
         from . import okx_runtime
     except ImportError:
         import okx_runtime
-    return okx_runtime._FROZEN_ENVIRONMENT or okx_runtime.selected_environment()
+    return okx_runtime.current_environment()
 
 
 def account_scope(selected=None):
@@ -398,25 +398,46 @@ def smart_money_overview(ccys):
         raise
 
 
-_SIGNAL_AS_OF = None
+_SIGNAL_AS_OF = ContextVar("public_market_signal_as_of", default=None)
 
 def begin_signal_frame(as_of=None):
-    global _SIGNAL_AS_OF
-    _SIGNAL_AS_OF = float(time.time() if as_of is None else as_of)
-    return _SIGNAL_AS_OF
+    value = float(time.time() if as_of is None else as_of)
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError("Invalid signal frame timestamp")
+    _SIGNAL_AS_OF.set(value)
+    return value
 
 def signal_as_of():
-    return _SIGNAL_AS_OF if _SIGNAL_AS_OF is not None else time.time()
+    value = _SIGNAL_AS_OF.get()
+    return value if value is not None else time.time()
+
+def bind_signal_frame(function):
+    """Capture on the submitting thread, then inherit the frame in pool workers.
+
+    Usage: executor.map(market.bind_signal_frame(fetch), instruments).
+    A fresh Context copy per invocation permits concurrent/repeated calls and
+    restores the worker context even if a collection raises. Call this BEFORE
+    submitting work, never from inside the worker lambda.
+    """
+    context = copy_context()
+    if context.get(_SIGNAL_AS_OF) is None:
+        context.run(begin_signal_frame)
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        return context.copy().run(function, *args, **kwargs)
+    return wrapped
+
 
 def signal_json(url, timeout=10.0):
     from scripts.signal_data import closed_candles
+    as_of_ms = int(signal_as_of()*1000)
     value = get_json(url, timeout)
     parsed=urlsplit(url)
     if not parsed.path.endswith('/candles'): return value
     params=dict(parse_qsl(parsed.query))
     return {**value, 'data': closed_candles(value['data'],params.get('bar','1m'),
-        as_of_ms=int(signal_as_of()*1000),limit=int(params.get('limit','100'))),
-        'as_of_ms':int(signal_as_of()*1000),'candle_contract':'closed-v1'}
+        as_of_ms=as_of_ms,limit=int(params.get('limit','100'))),
+        'as_of_ms':as_of_ms,'candle_contract':'closed-v1'}
 
 def signal_candles(inst_id, bar, limit):
     return signal_json(BASE_URL + '/api/v5/market/candles?' + urlencode({'instId':inst_id,'bar':bar,'limit':limit}))['data']

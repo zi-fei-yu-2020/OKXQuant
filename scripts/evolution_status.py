@@ -20,7 +20,9 @@ def public_status(data_dir=None):
     attempt = read('self_improvement_status.json', {})
     memory = read('ai_trading_memory.json', {})
     # Reports created before the active demo reset belong to the archived cycle.
-    reset_time = str(read('account_initial_state.json', {}).get('reset_time') or '')[:19]
+    from scripts.memory_registry import scope_of
+    from okxquant_backend.account_baseline import load_account_baseline
+    reset_time = str(load_account_baseline(scope=scope_of(), path=root/'account_initial_state.json').get('reset_time') or '')[:19]
     report_time = str(report.get('completed_at') or report.get('timestamp') or '')[:19]
     if reset_time and report_time and report_time < reset_time:
         report = {}

@@ -6,6 +6,7 @@ import hashlib
 import json
 import time
 from collections import Counter
+from contextlib import closing
 from scripts import entry_candidates as legacy
 from scripts.risk_policy import Policy
 
@@ -27,11 +28,12 @@ def observed_target(hours, side, entry, trigger_ms):
     pivots = []
     for a, b, c in zip(rows, rows[1:], rows[2:]):
         if (b[field]-a[field])*sign > 0 and (b[field]-c[field])*sign > 0 and (b[field]-entry)*sign > 0:
-            pivots.append(b)
+            pivots.append((b,c['close_ms']))
     if pivots:
-        point = min(pivots, key=lambda b: abs(b[field]-entry))
+        point, confirmed_at = min(pivots, key=lambda item: abs(item[0][field]-entry))
         return {'price':point[field], 'basis':'nearest_confirmed_hourly_pivot',
-                'close_ms':point['close_ms'], 'timeframe':'1H', 'extrapolated':False}
+                'close_ms':point['close_ms'], 'confirmed_close_ms':confirmed_at,
+                'timeframe':'1H', 'extrapolated':False}
     if len(rows) < 12:
         return None
     point = (max if side == 'long' else min)(rows[-12:], key=lambda b:b[field])
@@ -150,7 +152,7 @@ def advance(previous, observations, as_of):
     current={o['id']:dict(o) for o in observations}
     for old in previous:
         item=current.get(old['id'])
-        if item and old['state'] in TERMINAL:
+        if old['state'] in TERMINAL:
             current[old['id']]=dict(old)  # A dead signal cannot resurrect.
         elif not item:
             item=dict(old)
@@ -198,7 +200,7 @@ def public_status(scope):
     from scripts.strategy_evidence import DB_PATH
     try:
         if not DB_PATH.exists():return {'mode':'shadow','status':'pending','items':[]}
-        with sqlite3.connect(DB_PATH.resolve().as_uri()+'?mode=ro',uri=True,timeout=.2) as db:
+        with closing(sqlite3.connect(DB_PATH.resolve().as_uri()+'?mode=ro',uri=True,timeout=.2)) as db:
             if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='opportunity_shadow'").fetchone():
                 return {'mode':'shadow','status':'pending','items':[]}
             row=db.execute('SELECT payload FROM opportunity_shadow WHERE scope=?',(scope,)).fetchone()

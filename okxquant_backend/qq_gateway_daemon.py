@@ -112,15 +112,18 @@ def _send_ack(access_token: str, openid: str, content: str) -> bool:
         return False
 
 
-def _save_openid(app_id: str, openid: str) -> None:
-    from okxquant_gateway.secrets import save_secrets
+def _save_openid(app_id: str, openid: str) -> bool:
+    from okxquant_gateway.secrets import delete_secrets
     from okxquant_backend.settings_store import update_env
     from okxquant_backend.audit import record as audit_record
 
-    save_secrets({"OKXQUANT_QQ_OPENID": openid})
-    update_env({"OKXQUANT_QQ_APP_ID": app_id, "OKXQUANT_QQ_OPENID": openid})
+    if _get_credentials()[0] != app_id:
+        return False
+    delete_secrets(["OKXQUANT_QQ_OPENID"])
+    update_env({"OKXQUANT_QQ_OPENID": openid})
     audit_record("qq.openid.captured", "success", {"app_id": app_id, "openid": openid})
     log(f"🎉 成功持久化 OpenID: {openid}")
+    return True
 
 
 async def _run_session():
@@ -182,6 +185,8 @@ async def _run_session():
                 next_heartbeat = time.time() + heartbeat_interval
 
                 while RUNNING:
+                    if _get_credentials()[:2] != (app_id, secret):
+                        break  # Reconnect with saved credentials on the next loop.
                     timeout = max(0.5, min(next_heartbeat - time.time(), 5.0))
                     try:
                         msg_raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
@@ -209,7 +214,8 @@ async def _run_session():
                                 _, _, current_openid = _get_credentials()
                                 # Auto-capture if empty or user explicitly requests /bind or 绑定
                                 if not current_openid or content in ("/bind", "绑定", "bind", "重置绑定"):
-                                    _save_openid(app_id, str(openid).strip())
+                                    if not _save_openid(app_id, str(openid).strip()):
+                                        break
                                     _send_ack(
                                         token,
                                         str(openid).strip(),

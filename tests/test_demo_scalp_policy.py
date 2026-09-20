@@ -52,7 +52,7 @@ class DemoPolicyTests(unittest.TestCase):
                 self.assertEqual(method,'POST');exchange_leverage[0]=float(params['lever']);return [{'lever':params['lever']}]
             self.assertEqual(method,'GET')
             if path.endswith('/positions') or path.endswith('/orders-pending'):return []
-            if path.endswith('/balance'):return [{'totalEq':'5000','uTime':str(int(now*1000)),'details':[{'ccy':'USDT','availEq':'5000'}]}]
+            if path.endswith('/balance'):return [{'totalEq':'5000','uTime':str(int(now*1000)),'details':[{'ccy':'USDT','eq':'5000','availEq':'5000'}]}]
             if path.endswith('/leverage-info'):return [{'posSide':'long','lever':str(exchange_leverage[0])}]
             self.fail(path)
         def public(url,**kwargs):

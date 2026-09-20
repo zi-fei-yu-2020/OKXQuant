@@ -34,7 +34,8 @@ def project(decisions,history,*,validation=None,validation_at=0,now=None):
             'source':chosen[3] if chosen else 'none','age_seconds':max(0,int(now-at)) if at else None,
             'status':'ready' if chosen else 'empty','message':''}
     if chosen and now-at>1800:result.update(status='stale',message='上次分析已过期，不能作为当前交易依据')
-    status=(validation or {}).get('status')
+    validation = validation if isinstance(validation, dict) else {}
+    status=validation.get('status')
     if epoch(validation_at)>at and status in {'pending','blocked','unavailable','composition_rejected','rejected'}:
         result['status']='running' if status=='pending' else 'blocked' if status=='blocked' else 'failed'
         result['message']=('新一轮分析中' if status=='pending' else str((validation or {}).get('reason') or '本轮未产生可用模型结果'))+('；展示上次分析' if chosen else '')
@@ -50,7 +51,8 @@ def fields(data_dir,decisions=None,history=None,now=None,state=None):
         except (OSError,ValueError):return default
     status_path=root/'trading_output_validation.json'
     status=read(status_path.name,{})
-    status_at=status_path.stat().st_mtime if status_path.exists() else 0
+    try: status_at=status_path.stat().st_mtime
+    except OSError: status_at=0
     if not status:
         state=read('trading_state.json',{}) if state is None else state
         actions=state.get('executed_actions',[]) if isinstance(state,dict) else []

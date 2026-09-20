@@ -55,7 +55,7 @@ def load_policy():
         raw['per_trade_equity_pct'] = min(float(raw.get('per_trade_equity_pct', .02)), .02)
     return Policy(**raw)
 
-def ledger_daily_drawdown(policy=None, *, now=None, rows=None, initial_capital=None, reset_time=None):
+def ledger_daily_drawdown(policy=None, *, now=None, rows=None, initial_capital=None, reset_time=None, scope=None):
     """Return the lifecycle-ledger daily loss gate used by every opening path."""
     import json
     from datetime import datetime, timezone, timedelta
@@ -63,9 +63,18 @@ def ledger_daily_drawdown(policy=None, *, now=None, rows=None, initial_capital=N
     policy=policy or Policy()
     root=Path(__file__).resolve().parents[1]
     try:
+        # Runtime reads always bind to the selected account. Explicit injected
+        # rows remain usable as a pure accounting calculation when scope omitted.
+        if rows is None and scope is None:
+            from scripts.okx_runtime import selected_environment
+            scope = selected_environment().identity
         if initial_capital is None or reset_time is None:
             from okxquant_backend.account_baseline import load_account_baseline
-            baseline=load_account_baseline()
+            baseline=load_account_baseline(scope=scope)
+            if initial_capital is None and not baseline.get('baseline_configured'):
+                return {'blocked':False,'drawdown':0.,'net_pnl':0.,'reason':'baseline_unavailable'}
+            if scope and baseline.get('account_scope') and baseline['account_scope'] != scope:
+                return {'blocked':False,'drawdown':0.,'net_pnl':0.,'reason':'baseline_scope_mismatch'}
             initial=float(baseline.get('initial_capital') or 0) if initial_capital is None else float(initial_capital)
             reset=str(baseline.get('reset_time') or '1970-01-01 00:00:00') if reset_time is None else str(reset_time)
         else:
@@ -75,6 +84,9 @@ def ledger_daily_drawdown(policy=None, *, now=None, rows=None, initial_capital=N
         day=now_dt.strftime('%Y-%m-%d')
         if rows is None:
             rows=json.loads((root/'data'/'trading_ledger.json').read_text(encoding='utf-8'))
+        if scope is not None:
+            from scripts.dashboard_stats import scoped_rows
+            rows = scoped_rows(rows, scope)
         net=sum(number(r.get('net_pnl',r.get('pnl',0))) for r in rows if isinstance(r,dict) and r.get('status')=='closed' and str(r.get('close_time') or '')[:10]==day and str(r.get('close_time') or '')>=reset)
         drawdown=max(0.,-net/initial)
         return {'blocked':drawdown>=policy.daily_drawdown_pct,'drawdown':drawdown,'net_pnl':net,'threshold':policy.daily_drawdown_pct,'day':day,'reason':'lifecycle_ledger_daily_loss'}
@@ -157,9 +169,13 @@ def exposure(positions, pending, algos, metadata, policy=None):
         if inst.split('-')[0].upper() in {'BTC','ETH','SOL','DOGE'}: result['correlated']+=risk
     for p in pending:
         if str(p.get('reduceOnly','false')).lower() in {'true','1'}: continue
+        size=max(0,number(p.get('sz'))-number(p.get('accFillSz') or 0))
+        # Fully filled entries have no remaining reservation. Their filled
+        # exposure is accounted for by positions, not by stale pending metadata.
+        if not size:continue
         side=p.get('posSide'); inst=p['instId']; ct,*_=linear_metadata(metadata[inst])
         if side not in {'long','short'}: raise RiskRejected('Unknown pending direction')
-        size=max(0,number(p.get('sz'))-number(p.get('accFillSz') or 0)); entry=number(p.get('px'),positive=True)
+        entry=number(p.get('px'),positive=True)
         attachments=p.get('attachAlgoOrds') or [p]
         stops=[number(a.get('slTriggerPx') or 0) for a in attachments if number(a.get('slTriggerPx') or 0)>0]
         if not stops: raise RiskRejected('Pending order stop unavailable; reserve unknown risk by blocking')

@@ -45,8 +45,8 @@ def append(scope, kind, payload, event_id=None):
     digest = hashlib.sha256(clean.encode()).hexdigest()
     identity = event_id or uuid.uuid4().hex
     with connection() as db:
-        old = db.execute('SELECT digest FROM events WHERE id=?',(identity,)).fetchone()
-        if old and old[0] != digest: raise ValueError('Evidence identity collision')
+        old = db.execute('SELECT scope,kind,digest FROM events WHERE id=?',(identity,)).fetchone()
+        if old and old != (scope,kind,digest): raise ValueError('Evidence identity collision')
         db.execute('INSERT OR IGNORE INTO events VALUES (?,?,?,?,?,?)',(identity,scope,kind,time.time(),clean,digest))
     return identity
 
@@ -57,8 +57,8 @@ def append_batch(scope, kind, items):
         clean=canonical(_scrub(payload));prepared.append((identity,clean,hashlib.sha256(clean.encode()).hexdigest()))
     with connection() as db:
         for identity,clean,digest in prepared:
-            old=db.execute('SELECT digest FROM events WHERE id=?',(identity,)).fetchone()
-            if old and old[0]!=digest:raise ValueError('Evidence identity collision')
+            old=db.execute('SELECT scope,kind,digest FROM events WHERE id=?',(identity,)).fetchone()
+            if old and old!=(scope,kind,digest):raise ValueError('Evidence identity collision')
             db.execute('INSERT OR IGNORE INTO events VALUES (?,?,?,?,?,?)',(identity,scope,kind,time.time(),clean,digest))
 
 
@@ -106,7 +106,7 @@ def finish_intent(identity, state, result=None):
 
 def unresolved(scope):
     with connection() as db:
-        rows = db.execute("SELECT id,payload,at,state FROM intents WHERE scope=? AND state IN ('unknown','acknowledged') ORDER BY at",(scope,)).fetchall()
+        rows = db.execute("SELECT id,payload,at,state FROM intents WHERE scope=? AND state IN ('unknown','acknowledged','pending') ORDER BY at",(scope,)).fetchall()
     result=[]
     for key,payload,created_at,state in rows:
         item=json.loads(payload)

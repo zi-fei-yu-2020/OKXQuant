@@ -125,9 +125,18 @@ class BackupTargetTests(unittest.TestCase):
     def test_sqlite_success_cannot_clean_failed_file_archive(self):
         job=backup_store._default_job(); job["id"]="test"; job["scope"]=[]; job["pre_backup_sync"]=False; job["targets"]=[{"id":"remote","type":"s3","enabled":True}]; job["sqlite"]={"enabled":True,"retention":1}
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp); archive=root/"archive.tar.gz"; archive.write_bytes(b"x")
-            manifest_dir=root/"manifests"
-            with patch.object(backup_runtime,"ROOT",root), patch.object(backup_runtime,"create_archive",return_value=(archive,[])), patch.object(backup_runtime,"verify_archive",return_value={"members":0,"roots":[]}), patch.object(backup_runtime,"calculate_sha256",return_value="hash"), patch.object(backup_runtime,"deliver_target",return_value={"success":False,"error":"remote failed"}), patch.object(backup_runtime,"sqlite_hot_backups",return_value=[root/"db.sqlite"]), patch.object(backup_runtime,"MANIFEST_DIR",manifest_dir):
+            root = Path(tmp)
+            backups = root / "backups"
+            staging = backups / "staging"
+            staging.mkdir(parents=True)
+            archive = staging / "archive.tar.gz"
+            archive.write_bytes(b"x")
+            manifest_dir = backups / "manifests"
+            sqlite_dir = backups / "sqlite"
+            sqlite_snapshot = sqlite_dir / job["id"] / "db.sqlite"
+            sqlite_snapshot.parent.mkdir(parents=True)
+            sqlite_snapshot.write_bytes(b"synthetic successful SQLite backup")
+            with patch.object(backup_runtime,"ROOT",root), patch.object(backup_runtime,"BACKUPS",backups), patch.object(backup_runtime,"SQLITE_DIR",sqlite_dir), patch.object(backup_runtime,"create_archive",return_value=(archive,[])), patch.object(backup_runtime,"verify_archive",return_value={"members":0,"roots":[]}), patch.object(backup_runtime,"calculate_sha256",return_value="hash"), patch.object(backup_runtime,"deliver_target",return_value={"success":False,"error":"remote failed"}), patch.object(backup_runtime,"sqlite_hot_backups",return_value=[sqlite_snapshot]), patch.object(backup_runtime,"MANIFEST_DIR",manifest_dir):
                 result=backup_runtime.run_backup_job(job)
             self.assertEqual(result["status"], "partial")
             self.assertTrue(archive.exists())

@@ -61,8 +61,17 @@ def resolve(tracker, runtime_reader):
                     'execution_signature': current['signature']}
         if not _valid_snapshot(snapshot):
             raise ValueError('Unknown or unverifiable execution preset')
-        tracker['exitPolicy'] = snapshot
-        status = {'version': VERSION, 'preset_id': snapshot['preset_id'], 'source': 'active_profile'}
+        # A profile switch applies to new positions, not an existing lifecycle.
+        # Keep reading runtime for health reporting, but never rebind a verified
+        # tracker (including after JSON restart recovery).
+        previous = tracker.get('exitPolicy')
+        active_preset_id = snapshot['preset_id']
+        if _valid_snapshot(previous):
+            snapshot = previous
+        else:
+            tracker['exitPolicy'] = snapshot
+        status = {'version': VERSION, 'preset_id': snapshot['preset_id'], 'source': 'active_profile',
+                  'binding': 'position_lifecycle', 'active_preset_id': active_preset_id}
     except Exception as exc:
         previous = tracker.get('exitPolicy')
         known = _valid_snapshot(previous)

@@ -105,13 +105,17 @@ def _mirror_row(t):
     )
 
 
-def _write_rows(rows):
+def _write_rows(rows, *, superseded=()):
     init_database()
     # sqlite3's transaction context commits/rolls back but does not close.
     # Closing is the outer context so it also runs on execute/commit failures.
     with closing(get_db()) as conn, conn:
         cursor = conn.cursor()
         inserted = 0
+        # Remove only explicit, reconciled lifecycle aliases, never arbitrary rows
+        # absent from a partial ledger. Roll back alias removal if any insert fails.
+        for identity in superseded:
+            cursor.execute('DELETE FROM trades WHERE bill_id=?', (identity,))
         for row in rows:
             cursor.execute("""
             INSERT OR REPLACE INTO trades
@@ -139,7 +143,17 @@ def sync_json_to_sqlite(ledger_path=None):
     if not isinstance(trades, list):
         raise ValueError("Ledger JSON must be an array of objects")
     rows = [_mirror_row(t) for t in trades]
-    return _write_rows(rows)
+    superseded = set()
+    current_ids = {row[0] for row in rows}
+    for trade in trades:
+        aliases = trade.get('superseded_ledger_ids', [])
+        if not isinstance(aliases, list) or any(not isinstance(x, str) or not x for x in aliases):
+            raise ValueError('Invalid reconciled ledger aliases')
+        if aliases and (trade.get('status') != 'closed' or not trade.get('environment_id')
+                        or not trade.get('pos_id') or not trade.get('position_created_at')):
+            raise ValueError('Ledger aliases require a settled scoped lifecycle')
+        superseded.update(aliases)
+    return _write_rows(rows, superseded=superseded-current_ids)
 
 
 def record_trade_sqlite(trade_data: dict):

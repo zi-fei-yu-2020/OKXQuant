@@ -96,7 +96,7 @@ def install_okx_cli() -> dict[str, Any]:
 
 def _run(command: list[str], timeout: int = 12, env: Mapping[str, str] | None = None) -> dict[str, Any]:
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, env=dict(env or os.environ))
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, env=dict(os.environ if env is None else env))
     except FileNotFoundError:
         return {"ok": False, "returncode": 127, "stdout": "", "stderr": f"{command[0]} not found"}
     except Exception as exc:
@@ -179,8 +179,10 @@ def start_oauth_device_login(site: str, *, env: Mapping[str, str] | None = None)
     verification_uri = str(payload.get("verificationUri") or payload.get("verification_uri") or "")
     user_code = str(payload.get("userCode") or payload.get("user_code") or "")
     expires_in = int(payload.get("expiresIn") or payload.get("expires_in") or 0)
-    if not verification_uri or not user_code or expires_in <= 0:
+    if not verification_uri or not user_code or not 0 < expires_in <= 1800:
         raise RuntimeError("OKX OAuth 未返回有效授权链接或授权码")
+    from .net_security import validate_oauth_verification_uri
+    verification_uri = validate_oauth_verification_uri(verification_uri)
     return {"status": "pending", "site": site, "verification_uri": verification_uri, "user_code": user_code, "expires_in": expires_in}
 
 

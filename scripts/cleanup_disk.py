@@ -13,6 +13,8 @@ import shutil
 import glob
 import subprocess
 import datetime
+import time
+from pathlib import Path
 
 WORKSPACE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOGS_DIR = os.path.join(WORKSPACE_DIR, "logs")
@@ -21,7 +23,7 @@ BACKUP_COUNT = 3
 MIN_SAFE_DISK_GB = 3.0
 
 def get_disk_status():
-    total, used, free = shutil.disk_usage("/")
+    total, used, free = shutil.disk_usage(WORKSPACE_DIR)
     total_gb = total / (1024 ** 3)
     used_gb = used / (1024 ** 3)
     free_gb = free / (1024 ** 3)
@@ -36,20 +38,26 @@ def get_disk_status():
 
 def clean_logs():
     cleaned_files = []
-    if not os.path.exists(LOGS_DIR):
+    if os.path.islink(LOGS_DIR) or not os.path.exists(LOGS_DIR):
         return cleaned_files
 
     for file_path in glob.glob(os.path.join(LOGS_DIR, "*.log")):
         try:
+            if os.path.islink(file_path):
+                continue
             size_mb = os.path.getsize(file_path) / (1024 * 1024)
             if size_mb > MAX_LOG_SIZE_MB:
                 # Rotate
                 for i in range(BACKUP_COUNT - 1, 0, -1):
                     sfn = f"{file_path}.{i}"
                     dfn = f"{file_path}.{i+1}"
+                    if os.path.islink(sfn) or os.path.islink(dfn) or os.path.isdir(dfn):
+                        raise ValueError("Unsafe log rotation target")
                     if os.path.exists(sfn):
                         shutil.move(sfn, dfn)
                 # move current to .1
+                if os.path.islink(f"{file_path}.1") or os.path.isdir(f"{file_path}.1"):
+                    raise ValueError("Unsafe log rotation target")
                 shutil.move(file_path, f"{file_path}.1")
                 # create fresh empty log
                 open(file_path, 'w').close()
@@ -71,19 +79,17 @@ def clean_logs():
 
 def clean_system_caches():
     actions = []
-    # 1. Clean npm cache
-    try:
-        subprocess.run("npm cache clean --force", shell=True, capture_output=True, timeout=10)
-        actions.append("npm cache cleaned")
-    except Exception:
-        pass
-
-    # 2. Clean temporary files in /tmp older than 2 days
-    try:
-        subprocess.run("find /tmp -type f -mtime +2 -delete 2>/dev/null", shell=True, capture_output=True, timeout=10)
-        actions.append("old /tmp files cleared")
-    except Exception:
-        pass
+    # Only this application owns this directory. Never sweep host /tmp or
+    # a shared npm cache, even when the service happens to run as root.
+    temporary = Path(WORKSPACE_DIR) / "backups" / "tmp"
+    if temporary.is_symlink() or (temporary.parent).is_symlink():
+        return actions
+    if temporary.is_dir():
+        cutoff = time.time() - 2 * 86400
+        for path in temporary.iterdir():
+            if not path.is_symlink() and path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink()
+                actions.append("removed application temporary file")
 
     return actions
 

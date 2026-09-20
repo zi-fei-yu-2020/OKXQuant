@@ -140,10 +140,9 @@ def oauth_start(identity):
     try:
         payload=transport.auth_command(identity,'login',site)
         uri=str(payload.get('verificationUri') or payload.get('verification_uri') or '')
-        from urllib.parse import urlsplit
-        parsed=urlsplit(uri);host=parsed.hostname or ''
-        if parsed.scheme!='https' or parsed.port not in (None,443) or parsed.username or parsed.password or not (host in {'okx.com','okx.us','okx.com.tr'} or host.endswith(('.okx.com','.okx.us','.okx.com.tr'))):
-            raise AccountChangeError('官方授权地址无法核验')
+        from .net_security import validate_oauth_verification_uri
+        try: uri=validate_oauth_verification_uri(uri)
+        except ValueError: raise AccountChangeError('官方授权地址无法核验') from None
         code=str(payload.get('userCode') or payload.get('user_code') or '')
         expires=int(payload.get('expiresIn') or payload.get('expires_in') or 0)
         if not code or not 0<expires<=1800: raise AccountChangeError('授权码响应不完整')
@@ -249,9 +248,11 @@ def _unresolved():
 
 def _archive_runtime(keep_financial=False):
     # Fixed file allowlist; history is moved into an audit archive, never deleted.
+    from .account_baseline import preserve_account_baseline
+    preserve_account_baseline()
     target=DATA/'account-switch-archive'/uuid.uuid4().hex
     names=('ai_brain_decisions.json','trading_state.json','trading_ledger.json','position_trackers.json',
-           'account_initial_state.json','web_data.json','state_snapshot.json','ledger_sync_status.json')
+           'web_data.json','state_snapshot.json','ledger_sync_status.json')
     if keep_financial: names=tuple(n for n in names if n not in {'trading_ledger.json','account_initial_state.json'})
     for name in names:
         source=DATA/name

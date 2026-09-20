@@ -245,7 +245,7 @@ function horizonLabel(v: unknown, t?: any): string {
                     color: t.side === '多' ? 'var(--color-up)' : 'var(--color-down)',
                   }"
                 >
-                  {{ t.side }} {{ t.lever || '3x' }}
+                  {{ t.side }} {{ t.lever || '杠杆未记录' }}
                 </span>
               </td>
               <td class="py-3 px-3">
@@ -356,7 +356,6 @@ function horizonLabel(v: unknown, t?: any): string {
         <p v-if="feeAccounting(feeTrade).verified" style="color:var(--text-muted)">按本账户成交量及官方总手续费核对，负值为扣费、正值为返佣；不改写官方净盈亏。</p>
         <p v-else style="color:var(--text-muted)">成交证据尚不完整或不一致，不按比例猜测费用。</p>
       </div>
-      <template #footer><AppButton @click="feeDialogOpen=false">关闭</AppButton></template>
     </AppDialog>
   </div>
 </template>

@@ -1,13 +1,18 @@
 [Unit]
-Description=OKXQuant Standalone Scheduler
+Description=OKXQuant Legacy Scheduler Name (shared Gateway owner)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
+User=okxquant
+Group=okxquant
+Environment=HOME=/home/okxquant
+Environment=PATH=/opt/OKXQuant/.venv/bin:/usr/local/bin:/usr/bin:/bin
+UMask=0077
 WorkingDirectory=/opt/OKXQuant
 EnvironmentFile=/opt/OKXQuant/.env
-ExecStart=/usr/bin/env python3 -m okxquant_backend.scheduler
+ExecStart=/opt/OKXQuant/.venv/bin/python -m okxquant_gateway.worker
 Restart=always
 RestartSec=15
 NoNewPrivileges=true

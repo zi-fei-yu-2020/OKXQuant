@@ -1,4 +1,6 @@
-"""Explicit DEMO sampling policy; do not apply this to live or the legacy AI engine."""
+"""Unchanged minute sampling parameters; LIVE requires explicit bound consent.
+The legacy descriptor is retained for candidate compatibility, not a profit claim.
+"""
 from dataclasses import replace
 
 VERSION = 'demo-scalp-cost-policy-v1'
@@ -17,6 +19,8 @@ def parameters(base):
 
 def execution_policy(base, env):
     if env.mode != 'demo':
-        from scripts.risk_policy import RiskRejected
-        raise RiskRejected('DEMO sampling policy cannot authorize live orders')
+        from scripts.strategy_engine_runtime import enabled
+        if env.mode != 'live' or not enabled(env):
+            from scripts.risk_policy import RiskRejected
+            raise RiskRejected('Minute sampling policy requires explicit current LIVE consent')
     return replace(base, minimum_net_rr=MINIMUM_NET_RR)

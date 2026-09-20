@@ -12,12 +12,12 @@ from calculus_engine import calculate_multi_timeframe
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", default="data/snapshots.json", help="JSON candle map or snapshot file")
-    parser.add_argument("--output", default="data/calculus_snapshot.json")
+    parser.add_argument("--output", default="data/calculus_replay_report.json", help="Offline report; does not replace the live calculus snapshot")
     args = parser.parse_args()
     with open(args.input, encoding="utf-8") as f:
         data = json.load(f)
     instruments = data.get("instruments", data) if isinstance(data, dict) else data
-    result = {"engine": "causal-calculus-v1", "instruments": [], "skipped": []}
+    result = {"engine": "causal-calculus-v1", "mode": "offline_replay", "order_authorized": False, "instruments": [], "skipped": []}
     if isinstance(instruments, list) and instruments and isinstance(instruments[0], dict) and "total_eq" in instruments[0]:
         result["skipped"].append({"reason": "account_equity_snapshots_are_not_ohlc_candles", "input": args.input})
         instruments = []
