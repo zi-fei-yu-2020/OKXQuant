@@ -5,10 +5,12 @@ Thresholds are experimental engineering rules, not calibrated trading probabilit
 from copy import deepcopy
 import math
 
-VERSION='scalp-management-v3'
+VERSION='scalp-management-v4'
 CONTEXT_VERSIONS={'scalp-management-v2',VERSION}
 RISK_REDUCTION_R=.75
 FOLLOW_THROUGH_R=1.2
+ALIGNED_ACTIVATION_R=.8
+COUNTERTREND_ACTIVATION_R=.6
 SETUPS={'scalp_breakout_1m','scalp_pullback_1m','scalp_reversal_1m'}
 
 def number(x):
@@ -60,7 +62,7 @@ def evaluate(tracker,factor,*,entry,current,side,now,policy,tick):
     cost_model=from_policy(entry,entry,policy)
     costs=cost_model['taker_taker_total']
     buffer=max(tick*2,atr*.2)
-    activation=max(costs+buffer, risk*(.6 if ctx.get('alignment')=='countertrend' else .8))
+    activation=max(costs+buffer, risk*(COUNTERTREND_ACTIVATION_R if ctx.get('alignment')=='countertrend' else ALIGNED_ACTIVATION_R))
     stage='FOLLOW_THROUGH' if peak>=risk*.5 else 'INITIAL_CONFIRMATION'
     protection={'active':False,'kinetic_exit':False,'reason':'net_cost_not_covered','activation':activation}
     # Net-cost coverage is required to call an exit profitable, not to begin
@@ -92,7 +94,7 @@ def evaluate(tracker,factor,*,entry,current,side,now,policy,tick):
             stage=('PROFIT_LOCK' if tier==2 else 'COST_PROTECTED') if covers_cost else 'RISK_REDUCED'
     result={'version':VERSION,'enabled':True,'state':stage,'exit':False,'reason':'structure_pending',
             'setup':setup,'alignment':ctx.get('alignment'),'peak_gain':peak,
-            'initial_risk':risk,'risk_reduction_activation_r':RISK_REDUCTION_R,'profit_r':gain/risk,
+            'initial_risk':risk,'risk_reduction_activation_r':RISK_REDUCTION_R,'activation_target_r':COUNTERTREND_ACTIVATION_R if ctx.get('alignment')=='countertrend' else ALIGNED_ACTIVATION_R,'activation_target_r':COUNTERTREND_ACTIVATION_R if ctx.get('alignment')=='countertrend' else ALIGNED_ACTIVATION_R,'profit_r':gain/risk,
             'peak_r':peak/risk,'entry_atr':atr,'cost_distance':costs,'cost_model':cost_model,'protection':protection}
     if protection.get('active'):result['protected_stop']=protection['stop']
     elif old.get('protected_stop'):result['protected_stop']=old['protected_stop']

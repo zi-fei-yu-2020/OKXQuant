@@ -3,13 +3,13 @@ The legacy descriptor is retained for candidate compatibility, not a profit clai
 """
 from dataclasses import replace
 
-VERSION = 'demo-scalp-cost-policy-v1'
+VERSION = 'demo-scalp-cost-policy-v2'
 MINIMUM_NET_RR = 1.2
 
 
 def descriptor():
     return {'version': VERSION, 'minimum_net_rr': MINIMUM_NET_RR,
-            'purpose': 'demo_forward_sampling_not_validated_profitability'}
+            'purpose': 'demo_forward_sampling_fee_aware_payoff_v2_not_validated_profitability'}
 
 
 def parameters(base):

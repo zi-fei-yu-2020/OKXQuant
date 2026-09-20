@@ -153,7 +153,7 @@ class ProgressiveRiskTests(unittest.TestCase):
         self.assertEqual(r['closed_evidence'],[{'close_ms':660000,'close':99.5},{'close_ms':720000,'close':99.4}])
     def test_v2_entry_context_is_retained_but_eval_is_versioned_v3(self):
         t=tracker();t['entry_context']['version']='scalp-management-v2'
-        r=evaluate(t);self.assertTrue(r['enabled']);self.assertEqual(r['version'],'scalp-management-v3')
+        r=evaluate(t);self.assertTrue(r['enabled']);self.assertEqual(r['version'],'scalp-management-v4')
         self.assertEqual(t['entry_context']['version'],'scalp-management-v2')
 
 class RealManagerTests(unittest.TestCase):
