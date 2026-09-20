@@ -4,8 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useTheme } from '../composables/useTheme'
 import { adminPages } from '../config/navigation'
+import { APP_LOGO_SRC, APP_VERSION } from '../config/branding'
 import {
-  Activity,
   ArrowUpRight,
   ChevronRight,
   LogOut,
@@ -41,9 +41,9 @@ function logout() {
     <a class="skip-link" href="#workspace-content">跳到页面内容</a>
     <aside class="workspace-sidebar">
       <RouterLink to="/admin/overview" class="workspace-brand"
-        ><span class="brand-mark"><Activity class="size-5" aria-hidden="true" /></span
+        ><span class="brand-mark"><img :src="APP_LOGO_SRC" alt="" aria-hidden="true" class="brand-mark__image" width="34" height="34" /></span
         ><span>OKXQuant<span class="workspace-brand__sub">工作台</span></span
-        ><span class="workspace-version">7.3</span></RouterLink
+        ><span class="workspace-version">{{ APP_VERSION }}</span></RouterLink
       >
       <SidebarNav />
       <div class="workspace-sidebar__footer">

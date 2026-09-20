@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { APP_LOGO_SRC } from '../../config/branding'
 import { useAuthStore } from '../../stores/auth'
 import { useTheme } from '../../composables/useTheme'
 import {
@@ -40,7 +41,7 @@ async function handleLogin() {
   <div class="login-page">
     <header class="login-topbar">
       <RouterLink to="/" class="terminal-brand"
-        ><span class="brand-mark"><Activity class="size-5" /></span
+        ><span class="brand-mark"><img :src="APP_LOGO_SRC" alt="" aria-hidden="true" class="brand-mark__image" width="34" height="34" /></span
         ><span>OKXQuant</span></RouterLink
       ><button
         class="ui-icon-button"
