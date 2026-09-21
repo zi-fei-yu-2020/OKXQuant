@@ -664,59 +664,153 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
         except Exception:
             pass
 
+    maker_first = horizon == 'scalp'
+    # Use the current top-of-book only for a small favorable maker adjustment.
+    # If the book is unavailable or too far away, keep the original price so
+    # Maker-first never becomes an entry suppression gate.
+    maker_px = effective_px
+    if maker_first:
+        try:
+            book = market.get_json(market.BASE_URL + '/api/v5/market/books?instId=' + inst_id + '&sz=1', timeout=4, simulated=env.simulated)
+            snapshot = (book.get('data') or [None])[0] if isinstance(book, dict) else None
+            bids = snapshot.get('bids') if isinstance(snapshot, dict) else None
+            asks = snapshot.get('asks') if isinstance(snapshot, dict) else None
+            best_bid = float(bids[0][0]) if isinstance(bids, list) and bids and isinstance(bids[0], (list, tuple)) else None
+            best_ask = float(asks[0][0]) if isinstance(asks, list) and asks and isinstance(asks[0], (list, tuple)) else None
+            candidate = best_bid if pos_side == 'long' else best_ask
+            if candidate is None or candidate <= 0 or abs(candidate - float(effective_px)) / float(effective_px) > 0.0005:
+                maker_first = False
+            else:
+                maker_px = candidate
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, IndexError, AssertionError):
+            maker_first = False
     try:
         plan, client_id = entry_gateway.prepare(market._selected(), inst_id=inst_id, side=pos_side,
-            entry=effective_px, stop=effective_sl, take_profit=effective_tp, requested_size=size,
-            budget=risk_budget_usdt, decision_id=decision_id, decision_at=decision_at, horizon=horizon)
+            entry=maker_px if maker_first else effective_px, stop=effective_sl, take_profit=effective_tp, requested_size=size,
+            budget=risk_budget_usdt, decision_id=decision_id, decision_at=decision_at, horizon=horizon, execution_mode='maker_first' if maker_first else 'limit')
     except Exception as exc:
         reason = f"Final risk preflight rejected: {type(exc).__name__}: {exc}"
         strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': None, 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'preflight_rejected', 'details': {'error_type': type(exc).__name__, 'message': str(exc)[:500]}, 'at': time.time()})
         return False, reason
+    plan['entry_execution_mode']='maker_first' if maker_first else 'limit_fallback_only'
+    plan['maker_price']=maker_px if maker_first else None
+    plan['fallback_allowed']=bool(maker_first)
     LAST_ENTRY_PLAN.clear(); LAST_ENTRY_PLAN.update(plan)
     save_horizon_intent(inst_id, pos_side, horizon, decision_id, strategy_mode=plan.get('strategy_mode'), setup=plan.get('setup'), entry_context=plan.get('entry_context'))
     size = plan['size']
     effective_px, effective_sl, effective_tp = plan['entry'], plan['stop'], plan['take_profit']
-    command = okx_private_command(
-        f"okx swap place --instId {inst_id} --tdMode cross --side {side} --clOrdId {client_id} "
-        f"--posSide {pos_side} --ordType limit --px {effective_px} --sz {size} "
-        f"--tpTriggerPx {effective_tp} --tpOrdPx=-1 --slTriggerPx {effective_sl} --slOrdPx=-1 --json"
-    )
-    from scripts.decision_authorization import entry_dispatch_guard
-    dispatch_started = False
-    try:
-        with entry_dispatch_guard(env, plan):
-            dispatch_started = True
-            result = run_cmd_result(command, timeout=20)
-    except Exception as exc:
-        if not dispatch_started:
-            strategy_evidence.finish_intent(client_id, 'not_submitted', {'reason':type(exc).__name__})
-            strategy_evidence.best_effort(env.identity,'entry_rejection',{'instrument':inst_id,'decision_id':decision_id,
-                'client_id':client_id,'reason':'authorization_changed_before_dispatch','details':{'error_type':type(exc).__name__}})
-            return False, 'Opening authorization changed before dispatch; no order sent'
-        # Dispatch may already have happened. Preserve the committed intent and
-        # sanitize the exception rather than aborting the cycle or replaying it.
-        result = {'ok': False, 'error_type': type(exc).__name__}
     from scripts.entry_diagnostics import submission_diagnostics, accepted_order_id
-    failure_details = submission_diagnostics(result, env) if not result['ok'] else None
-    strategy_evidence.best_effort(market._selected().identity, 'entry_submission',
-        {'client_id': client_id, 'plan': plan, 'transport_ok': result['ok'],
-         'response': result.get('data') if result['ok'] else None, 'failure': failure_details})
-    if not result["ok"]:
-        strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': plan.get('candidate_id'), 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'submission_unknown', 'client_id': client_id, 'details': failure_details, 'at': time.time()})
-        return False, "Entry outcome unknown; durable reservation retained for read-only reconciliation"
-    order_id = accepted_order_id(result.get('data'), client_id, inst_id)
-    if not order_id:
-        strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': plan.get('candidate_id'), 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'unverified_order_receipt', 'client_id': client_id, 'details': submission_diagnostics(result, env), 'at': time.time()})
-        return False, "Entry receipt unverified; durable reservation retained for read-only reconciliation"
-    try:
-        strategy_evidence.finish_intent(client_id, 'acknowledged', {'order_id': str(order_id), 'size': size})
-    except Exception as exc:
-        strategy_evidence.best_effort(env.identity, 'entry_ack_persistence_failed',
-            {'client_id': client_id, 'order_id': str(order_id), 'error_type': type(exc).__name__,
-             'reservation_retained': True})
-        return False, "Entry acknowledged but journal update failed; read-only reconciliation required, no resend"
-    return True, str(order_id)
+    from scripts.decision_authorization import entry_dispatch_guard
+    from scripts.maker_fallback import explicit_exchange_rejection, wait_once, status_row, cancel
 
+    def dispatch_attempt(attempt_plan, attempt_client_id, order_type):
+        attempt_size = attempt_plan['size']
+        attempt_px, attempt_sl, attempt_tp = attempt_plan['entry'], attempt_plan['stop'], attempt_plan['take_profit']
+        attempt_command = okx_private_command(
+            f"okx swap place --instId {inst_id} --tdMode cross --side {side} --clOrdId {attempt_client_id} "
+            f"--posSide {pos_side} --ordType {order_type} --px {attempt_px} --sz {attempt_size} "
+            f"--tpTriggerPx {attempt_tp} --tpOrdPx=-1 --slTriggerPx {attempt_sl} --slOrdPx=-1 --json"
+        )
+        dispatch_started = False
+        try:
+            with entry_dispatch_guard(env, attempt_plan):
+                dispatch_started = True
+                attempt_result = run_cmd_result(attempt_command, timeout=20)
+        except Exception as exc:
+            if not dispatch_started:
+                strategy_evidence.finish_intent(attempt_client_id, 'not_submitted', {'reason': type(exc).__name__, 'order_type': order_type})
+                strategy_evidence.best_effort(env.identity, 'entry_rejection', {
+                    'instrument': inst_id, 'decision_id': decision_id, 'client_id': attempt_client_id,
+                    'reason': 'authorization_changed_before_dispatch',
+                    'details': {'error_type': type(exc).__name__, 'order_type': order_type}, 'at': time.time()})
+                return {'status': 'blocked', 'detail': 'Opening authorization changed before dispatch; no order sent'}
+            attempt_result = {'ok': False, 'error_type': type(exc).__name__}
+        failure = submission_diagnostics(attempt_result, env) if not attempt_result.get('ok') else None
+        strategy_evidence.best_effort(market._selected().identity, 'entry_submission', {
+            'client_id': attempt_client_id, 'plan': attempt_plan, 'transport_ok': attempt_result.get('ok') is True,
+            'order_type': order_type, 'response': attempt_result.get('data') if attempt_result.get('ok') else None,
+            'failure': failure})
+        if not attempt_result.get('ok'):
+            if maker_first and order_type == 'post_only' and explicit_exchange_rejection(attempt_result, failure or {}):
+                strategy_evidence.finish_intent(attempt_client_id, 'not_submitted', {'maker_rejected': True, 'details': failure})
+                strategy_evidence.best_effort(env.identity, 'maker_fallback', {
+                    'instrument': inst_id, 'decision_id': decision_id, 'client_id': attempt_client_id,
+                    'stage': 'maker_explicit_rejection', 'details': failure, 'fallback_allowed': True})
+                return {'status': 'fallback_allowed', 'detail': 'Maker rejected explicitly', 'failure': failure}
+            strategy_evidence.best_effort(env.identity, 'entry_rejection', {
+                'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': attempt_plan.get('candidate_id'),
+                'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'submission_unknown',
+                'client_id': attempt_client_id, 'details': failure, 'at': time.time()})
+            return {'status': 'unknown', 'detail': 'Entry outcome unknown; durable reservation retained for read-only reconciliation'}
+        order_ref = accepted_order_id(attempt_result.get('data'), attempt_client_id, inst_id)
+        if not order_ref:
+            strategy_evidence.best_effort(env.identity, 'entry_rejection', {
+                'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': attempt_plan.get('candidate_id'),
+                'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'unverified_order_receipt',
+                'client_id': attempt_client_id, 'details': submission_diagnostics(attempt_result, env), 'at': time.time()})
+            return {'status': 'unknown', 'detail': 'Entry receipt unverified; durable reservation retained for read-only reconciliation'}
+        try:
+            strategy_evidence.finish_intent(attempt_client_id, 'acknowledged', {
+                'order_id': str(order_ref), 'size': attempt_size, 'order_type': order_type})
+        except Exception as exc:
+            strategy_evidence.best_effort(env.identity, 'entry_ack_persistence_failed', {
+                'client_id': attempt_client_id, 'order_id': str(order_ref), 'error_type': type(exc).__name__,
+                'reservation_retained': True})
+            return {'status': 'unknown', 'detail': 'Entry acknowledged but journal update failed; read-only reconciliation required'}
+        return {'status': 'accepted', 'order_id': str(order_ref), 'size': attempt_size}
+
+    attempt = dispatch_attempt(plan, client_id, 'post_only' if maker_first else 'limit')
+    if attempt['status'] == 'accepted' and maker_first:
+        try:
+            wait_once()
+            from okxquant_backend.okx_trade_service import _request
+            row = status_row(_request, env, inst_id, attempt['order_id'])
+            state = str(row.get('state') or '')
+            if state in {'filled', 'partially_filled'}:
+                strategy_evidence.best_effort(env.identity, 'maker_fallback', {
+                    'instrument': inst_id, 'decision_id': decision_id, 'client_id': client_id,
+                    'order_id': attempt['order_id'], 'stage': state, 'fallback': False})
+                return True, attempt['order_id']
+            if state == 'live':
+                cancel(_request, env, inst_id, attempt['order_id'])
+                after_cancel = status_row(_request, env, inst_id, attempt['order_id'])
+                if str(after_cancel.get('state') or '') not in {'canceled', 'mmp_canceled'}:
+                    raise RuntimeError('Maker order did not reach canceled state')
+            elif state not in {'canceled', 'mmp_canceled'}:
+                raise RuntimeError('Unknown Maker order state')
+            strategy_evidence.finish_intent(client_id, 'canceled', {
+                'order_id': attempt['order_id'], 'maker_first': True, 'fallback': True})
+            strategy_evidence.best_effort(env.identity, 'maker_fallback', {
+                'instrument': inst_id, 'decision_id': decision_id, 'client_id': client_id,
+                'order_id': attempt['order_id'], 'stage': 'maker_canceled', 'fallback': True})
+            attempt['status'] = 'fallback_allowed'
+        except Exception as exc:
+            strategy_evidence.best_effort(env.identity, 'maker_fallback', {
+                'instrument': inst_id, 'decision_id': decision_id, 'client_id': client_id,
+                'order_id': attempt.get('order_id'), 'stage': 'maker_unknown',
+                'error_type': type(exc).__name__, 'fallback': False})
+            return False, 'Maker order status/cancel unknown; no fallback resend'
+    if attempt['status'] not in {'fallback_allowed'}:
+        return (attempt['status'] == 'accepted', attempt.get('order_id') or attempt.get('detail', 'Entry rejected'))
+
+    # Re-run final preflight and create a new durable intent for exactly one fallback.
+    try:
+        plan, fallback_client_id = entry_gateway.prepare(env, inst_id=inst_id, side=pos_side,
+            entry=effective_px, stop=effective_sl, take_profit=effective_tp, requested_size=size,
+            budget=risk_budget_usdt, decision_id=decision_id, decision_at=decision_at, horizon=horizon, execution_mode='bounded_fallback')
+        plan['entry_execution_mode']='bounded_fallback'
+        plan['fallback_allowed']=False
+        LAST_ENTRY_PLAN.clear(); LAST_ENTRY_PLAN.update(plan)
+        fallback = dispatch_attempt(plan, fallback_client_id, 'limit')
+        strategy_evidence.best_effort(env.identity, 'maker_fallback', {
+            'instrument': inst_id, 'decision_id': decision_id, 'client_id': fallback_client_id,
+            'stage': 'fallback_result', 'fallback': True, 'status': fallback['status']})
+        return (fallback['status'] == 'accepted', fallback.get('order_id') or fallback.get('detail', 'Fallback entry not confirmed'))
+    except Exception as exc:
+        strategy_evidence.best_effort(env.identity, 'maker_fallback', {
+            'instrument': inst_id, 'decision_id': decision_id, 'stage': 'fallback_unknown',
+            'error_type': type(exc).__name__, 'fallback': True})
+        return False, 'Maker canceled; fallback outcome unknown, reconciliation required'
 
 def _float_or_zero(value: Any) -> float:
     try:

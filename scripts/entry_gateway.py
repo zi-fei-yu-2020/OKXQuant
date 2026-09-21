@@ -153,13 +153,13 @@ def equity_guard(env, balance, policy):
     return state
 
 
-def prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, budget, decision_id, decision_at, horizon='swing'):
+def prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, budget, decision_id, decision_at, horizon='swing', execution_mode='limit'):
     from scripts.trade_lock import writer
     with writer(account=env.identity, inst_id=inst_id, side=side):
-        return _prepare(env, inst_id=inst_id, side=side, entry=entry, stop=stop, take_profit=take_profit, requested_size=requested_size, budget=budget, decision_id=decision_id, decision_at=decision_at, horizon=horizon)
+        return _prepare(env, inst_id=inst_id, side=side, entry=entry, stop=stop, take_profit=take_profit, requested_size=requested_size, budget=budget, decision_id=decision_id, decision_at=decision_at, horizon=horizon, execution_mode=execution_mode)
 
 
-def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, budget, decision_id, decision_at, horizon='swing'):
+def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, budget, decision_id, decision_at, horizon='swing', execution_mode='limit'):
     from okxquant_backend.account_connections import assert_current
     assert_current(env)
     if not env.configured: raise risk.RiskRejected('Final risk preflight requires current account static credentials')
@@ -291,7 +291,12 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
             frozen=validate_live_quote(record.get('features',{}),decision['candidate_id'],current,vars(policy))
             tick=risk.number(metadata[inst_id].get('tickSz'),positive=True)
             for key,actual in [('entry_price',entry),('stop_loss_price',stop),('take_profit_price',take_profit)]:
-                if abs(risk.number(actual)-frozen[key])>tick+1e-9:
+                delta=abs(risk.number(actual)-frozen[key])
+                if key == 'entry_price' and execution_mode == 'maker_first':
+                    favorable=(side == 'long' and actual <= frozen[key]) or (side == 'short' and actual >= frozen[key])
+                    if favorable and delta <= max(tick*4, abs(frozen[key])*.0005):
+                        continue
+                if delta>tick+1e-9:
                     raise ValueError('program_geometry_changed_beyond_tick_rounding')
         except (ValueError,TypeError,KeyError) as exc:
             raise risk.RiskRejected('Final program plan check rejected: '+str(exc)) from None
@@ -343,6 +348,7 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     if minute_engine:
         slot=int(record['as_of_ms'])//900000
         plan['entry_engine']='demo_scalp_v2'
+        plan['entry_execution_mode']=execution_mode
         plan['correlation_slot']=slot
         cluster={'BTC','ETH','SOL','DOGE','SUI','XRP'}
         with evidence.connection() as db:
@@ -377,5 +383,6 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
         current_binding=engine_status(env)
         if not current_binding.get('enabled') or any(frozen_binding.get(k)!=current_binding.get(k) for k in (*BINDING_FIELDS,'record_id')):
             raise risk.RiskRejected('Minute engine authorization changed before submission')
+    plan['entry_execution_mode']=execution_mode
     client_id=evidence.begin_intent(env.identity,decision_id,inst_id,plan)
     return plan,client_id
