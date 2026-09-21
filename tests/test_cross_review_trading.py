@@ -183,6 +183,7 @@ class ReleaseBlockingRegressions(IsolatedTradingCase):
             self.assertFalse(engine.status(self.env)['enabled'])
         with patch.object(trader.market,'_selected',return_value=self.env), \
              patch.object(trader.support,'opening_status',return_value={'can_open':True}), \
+             patch.object(trader.market,'get_json',return_value={}), \
              patch.object(trader.entry_gateway,'prepare',side_effect=prepare), \
              patch.object(trader,'save_horizon_intent',side_effect=revoke), \
              patch.object(trader,'okx_private_command',side_effect=lambda command:command), \
