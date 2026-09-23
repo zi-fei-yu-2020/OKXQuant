@@ -250,6 +250,9 @@ class ProfileBindingTests(unittest.TestCase):
         self.assertNotEqual(changed['signature'], before['signature'])
         self.assertEqual(changed['profile_id'], before['profile_id'])
 
+    def test_small300_uses_the_same_daily_three_percent_circuit(self):
+        self.assertEqual(profiles.SMALL_300['daily_drawdown_pct'], .03)
+
     def test_builtin_small300_and_unknown_binding_contract_are_preserved(self):
         self.assertEqual(profiles.settings_for({'id': 'small300', 'execution_profile': 'standard'})['id'], 'small300')
         with patch.dict(os.environ, {'OKXQUANT_CAPITAL_MODE': 'small300'}):
@@ -326,7 +329,7 @@ class RiskInvariantTests(unittest.TestCase):
                 self.assertEqual(effective.per_trade_equity_pct, expected_risk)
                 self.assertEqual(effective.max_leverage, expected_leverage)
                 self.assertEqual(effective.single_asset_margin_usdt, 150)
-                self.assertEqual(effective.daily_drawdown_pct, .08)
+                self.assertEqual(effective.daily_drawdown_pct, .03)
         # These are ceilings, not forced leverage/order-size targets.
         live = replace(demo, mode='live')
         self.assertEqual(leverage.mode_policy(base, 'scalp', live).max_leverage, 6)

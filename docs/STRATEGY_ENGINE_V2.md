@@ -39,8 +39,8 @@
 | portfolio_stop_pct | 0.03 | 组合预计止损风险上限 |
 | direction_stop_pct | 0.02 | 单方向风险上限 |
 | group_stop_pct | 0.02 | 分组风险上限 |
-| daily_drawdown_pct | 0.03 | 北京时间当日观测权益回撤门禁 |
-| peak_drawdown_pct | 0.08 | 经外部资金流调整的历史观测高水位回撤门禁 |
+| daily_drawdown_pct | 0.03 | 北京时间当日观测权益回撤门禁；达到阈值停止新开仓，跨日重置 |
+| peak_drawdown_pct | 0.08 | 历史高水位回撤观测/诊断阈值；不跨日拦截开仓 |
 | single_asset_margin_usdt | 600 | 单币已有及新增保证金合计上限 |
 | available_margin_fraction | 0.8 | 不用尽全部可用保证金 |
 | minimum_net_rr | 2 | 成本缓冲后的最低 R:R |

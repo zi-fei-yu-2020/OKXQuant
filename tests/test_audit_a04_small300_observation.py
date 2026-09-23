@@ -1,6 +1,7 @@
 """Authorized A01 handoff: observe only existing small300 allocations in guard."""
 import copy
 import tempfile
+import time
 import unittest
 from contextlib import ExitStack, nullcontext
 from pathlib import Path
@@ -71,9 +72,10 @@ class ExistingSmall300ObservationTests(unittest.TestCase):
         self.assertEqual(pool._state(self.scope)['drawdown'], result['drawdown'])
 
     def test_repeated_balance_does_not_duplicate_observation_evidence(self):
-        self.seed(); self.observe(330, 1001)
+        at=time.time()
+        self.seed(); self.observe(330, at)
         count = len(evidence.export_events(self.scope, 'capital_pool_observation'))
-        self.observe(330, 1001)
+        self.observe(330, at)
         self.assertEqual(len(evidence.export_events(self.scope, 'capital_pool_observation')), count)
 
     def test_account_and_environment_switch_cannot_copy_a_baseline(self):

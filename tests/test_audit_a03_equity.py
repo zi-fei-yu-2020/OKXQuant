@@ -80,9 +80,23 @@ class EquityCurrencyTests(unittest.TestCase):
         with self.assertRaisesRegex(risk.RiskRejected,'Contradictory'):
             self.guard(299,270,AT)
 
+    def test_same_timestamp_peak_only_block_is_recomputed_for_current_beijing_day(self):
+        old=risk.update_equity_state(None,equity=900,at=AT,cash_flow=0,complete=True,policy=self.policy)
+        old.update(equity_currency='USDT',peak=1200.,peak_drawdown=.25,blocked=True)
+        self.save(old)
+        with patch.object(risk,'beijing_day',return_value='2026-09-23'):
+            state=self.guard(900,900,AT)
+        self.assertFalse(state['blocked'])
+        self.assertEqual(state['daily_drawdown'],0)
+        self.assertAlmostEqual(state['peak_drawdown'],.25)
+        self.assertEqual(state['day'],'2026-09-23')
+        self.assertFalse(self.state()['blocked'])
+
     def test_same_timestamp_legacy_migration_preserves_history_and_ratios(self):
         old=self.legacy()
-        state=self.guard(900,950,AT)
+        observed_day=risk.beijing_day(AT)
+        with patch.object(risk,'beijing_day',return_value=observed_day):
+            state=self.guard(900,950,AT)
         self.assertEqual(state['equity'],900)
         self.assertAlmostEqual(state['peak_drawdown'],old['peak_drawdown'])
         self.assertAlmostEqual(state['daily_drawdown'],old['daily_drawdown'])
@@ -125,15 +139,26 @@ class EquityCurrencyTests(unittest.TestCase):
         self.assertFalse(state['currency_migration']['interval_unattributed'])
         self.assertEqual(state['currency_migration']['method'],'same_timestamp_pool_observation')
 
-    def test_unit_migration_does_not_clear_an_existing_block(self):
+    def test_unit_migration_clears_legacy_peak_only_block_but_preserves_peak_telemetry(self):
         old=self.legacy()
+        old['peak']=1200.
+        old['peak_drawdown']=.25
         old['blocked']=True
         self.save(old)
-        with self.assertRaisesRegex(risk.RiskRejected,'circuit breaker'):
-            self.guard(900,810,AT+1)
-        state=self.state()
-        self.assertTrue(state['blocked'])
+        state=self.guard(900,810,AT+1)
+        self.assertFalse(state['blocked'])
+        self.assertAlmostEqual(state['daily_drawdown'],old['daily_drawdown'])
+        self.assertGreater(state['peak_drawdown'],risk.Policy().peak_drawdown_pct)
         self.assertEqual(state['currency_migration']['legacy_state'],old)
+
+    def test_daily_loss_still_blocks_above_three_percent(self):
+        policy=risk.Policy(daily_drawdown_pct=.03,peak_drawdown_pct=.08)
+        old=risk.update_equity_state(None,equity=1000,at=AT-1,cash_flow=0,complete=True,policy=policy)
+        old['equity_currency']='USDT'
+        self.save(old)
+        with self.assertRaisesRegex(risk.RiskRejected,'Daily equity drawdown circuit breaker'):
+            gateway.equity_guard(self.env,balance(960,960,AT),policy)
+        self.assertTrue(self.state()['blocked'])
 
     def test_backwards_timestamp_never_overwrites_legacy_history(self):
         old=self.legacy()

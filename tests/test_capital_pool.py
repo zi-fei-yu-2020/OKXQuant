@@ -79,9 +79,21 @@ class PoolMathTests(unittest.TestCase):
         for changed in (config(budget_usdt=400),config(allocation_id='reset-attempt')):
             with self.assertRaises(RiskRejected):pool.advance(self.first(),changed,self.scope,observation(4990,101),flat=True,policy=self.policy)
 
+    def test_same_timestamp_day_roll_clears_peak_only_gate_without_resetting_pool_nav(self):
+        first=self.first()
+        first['drawdown'].update(day='2026-09-22',daily_drawdown=0.,peak=first['pool_nav']/.9,peak_drawdown=.10,blocked=True)
+        with patch.object(pool,'beijing_day',return_value='2026-09-23'):
+            current=pool.advance(first,self.cfg,self.scope,observation(),flat=False,policy=self.policy)
+        self.assertEqual(current['pool_nav'],first['pool_nav'])
+        self.assertFalse(current['drawdown']['blocked'])
+        self.assertEqual(current['drawdown']['daily_drawdown'],0)
+        self.assertAlmostEqual(current['drawdown']['peak_drawdown'],.10)
+        self.assertEqual(current['drawdown']['day'],'2026-09-23')
+
     def test_same_timestamp_is_idempotent_but_contradictions_fail(self):
         first=self.first()
-        self.assertIs(pool.advance(first,self.cfg,self.scope,observation(),flat=False,policy=self.policy),first)
+        with patch.object(pool,'beijing_day',return_value=first['drawdown']['day']):
+            self.assertIs(pool.advance(first,self.cfg,self.scope,observation(),flat=False,policy=self.policy),first)
         with self.assertRaises(RiskRejected):pool.advance(first,self.cfg,self.scope,observation(4999,100),flat=False,policy=self.policy)
         with self.assertRaises(RiskRejected):pool.advance(first,self.cfg,self.scope,observation(at=99),flat=False,policy=self.policy)
 

@@ -187,10 +187,36 @@ def exposure(positions, pending, algos, metadata, policy=None):
     result['group']=result['total']
     return result
 
+def beijing_day(at=None):
+    # Risk accounting follows the configured Asia/Shanghai trading day.
+    import time
+    stamp=time.time() if at is None else number(at,positive=True)
+    return datetime.fromtimestamp(stamp,timezone(timedelta(hours=8))).date().isoformat()
+
+
+def refresh_equity_state(previous, *, equity, at, day=None, policy=None):
+    """Re-evaluate an unchanged confirmed balance and roll its daily anchor."""
+    policy=policy or Policy(); equity=number(equity,positive=True); at=number(at,positive=True)
+    old=previous or {}
+    if old and at<number(old['at'],positive=True): raise RiskRejected('Equity observation did not advance')
+    if old and at==number(old['at'],positive=True) and abs(equity-number(old['equity'],positive=True))>1e-8:
+        raise RiskRejected('Contradictory equity timestamp')
+    day=day or beijing_day(at)
+    anchor=equity if old.get('day')!=day else number(old.get('day_anchor',equity),positive=True)
+    peak=max(equity,number(old.get('peak',equity),positive=True))
+    daily=max(0.,(anchor-equity)/anchor)
+    peak_drawdown=max(0.,(peak-equity)/peak)
+    return {**old,'external_flow_origin':number(old.get('external_flow_origin',old.get('at',at)),positive=True),
+            'external_flow_total':number(old.get('external_flow_total',0)),'day':day,'at':at,'equity':equity,
+            'day_anchor':anchor,'peak':peak,'daily_drawdown':daily,'peak_drawdown':peak_drawdown,
+            'blocked':daily>=policy.daily_drawdown_pct,
+            'baseline':old.get('baseline','observed_equity_not_reconstructed_history')}
+
+
 def update_equity_state(previous, *, equity, at, cash_flow, complete, policy=None):
     policy=policy or Policy(); equity=number(equity,positive=True); at=number(at,positive=True)
     if not complete: raise RiskRejected('External cash-flow reconciliation incomplete')
-    day=datetime.fromtimestamp(at,timezone(timedelta(hours=8))).date().isoformat()
+    day=beijing_day(at)
     old=previous or {}; flow=number(cash_flow)
     if old and at<=old['at']: raise RiskRejected('Equity observation did not advance')
     # Add external flows to historical anchors, not to performance.
@@ -199,5 +225,5 @@ def update_equity_state(previous, *, equity, at, cash_flow, complete, policy=Non
     if anchor<=0 or peak<=0: raise RiskRejected('Invalid adjusted equity anchor')
     daily=max(0,(anchor-equity)/anchor); drawdown=max(0,(peak-equity)/peak)
     return {'external_flow_origin':number(old.get('external_flow_origin',old.get('at',at)),positive=True),'external_flow_total':number(old.get('external_flow_total',0))+flow,'day':day,'at':at,'equity':equity,'day_anchor':anchor,'peak':peak,'daily_drawdown':daily,
-            'peak_drawdown':drawdown,'blocked':daily>=policy.daily_drawdown_pct or drawdown>=policy.peak_drawdown_pct,
+            'peak_drawdown':drawdown,'blocked':daily>=policy.daily_drawdown_pct,
             'baseline':'observed_equity_not_reconstructed_history'}

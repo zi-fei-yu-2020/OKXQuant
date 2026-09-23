@@ -452,7 +452,9 @@ def is_circuit_breaker_active():
     except Exception as exc:
         return True, f'日内亏损风控数据读取失败，安全暂停开仓: {type(exc).__name__}'
 
-    # 4. Daily/peak loss gate uses the authoritative reconciled equity state.
+    # 4. Daily account-equity gate uses the authoritative reconciled observation.
+    # Ignore a legacy peak-only block and a prior Beijing day's daily block;
+    # final entry preflight refreshes today's equity before any exchange write.
     try:
         from scripts import strategy_evidence
         from scripts.okx_runtime import selected_environment
@@ -461,8 +463,11 @@ def is_circuit_breaker_active():
             row = db.execute('SELECT payload FROM equity_state WHERE scope=?', (env.identity,)).fetchone()
         if row:
             state = json.loads(row[0])
-            if state.get('blocked'):
-                return True, f"权威权益状态触发亏损熔断: daily={float(state.get('daily_drawdown', 0)):.2%}, peak={float(state.get('peak_drawdown', 0)):.2%}"
+            today = risk_policy.beijing_day()
+            daily = float(state.get('daily_drawdown', 0) or 0)
+            threshold = risk_policy.load_policy().daily_drawdown_pct
+            if state.get('day') == today and daily >= threshold:
+                return True, f"当日权益回撤触发熔断: daily={daily:.2%}, threshold={threshold:.2%}"
     except Exception as e:
         return True, f"权威权益风控数据读取失败，安全暂停开仓: {e}"
 

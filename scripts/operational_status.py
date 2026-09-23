@@ -36,19 +36,9 @@ def risk_snapshot(data_dir=None, *, env=None, now=None):
     env=env or selected_environment();now=time.time() if now is None else now
     day=datetime.fromtimestamp(now,timezone(timedelta(hours=8))).strftime('%Y-%m-%d')
     policy=load_policy();root=Path(data_dir) if data_dir is not None else Path(__file__).resolve().parents[1]/'data'
-    breaker_active=False
-    breaker_reason=''
-    try:
-        state=json.loads((root/'trading_state.json').read_text(encoding='utf8'))
-        breaker=state.get('circuit_breaker') if isinstance(state,dict) else {}
-        if isinstance(breaker,dict) and breaker.get('active') is True:
-            breaker_active=True
-            breaker_reason=str(breaker.get('reason') or '日内亏损熔断已触发')
-    except (OSError,ValueError,TypeError):
-        pass
     result={'account_scope':env.identity,'unresolved_entries':None,'daily_drawdown':None,
-            'daily_threshold':policy.daily_drawdown_pct,'daily_blocked':True if breaker_active else None,'observed_at':None,
-            'status':'circuit_breaker' if breaker_active else 'unavailable','reason':breaker_reason,
+            'daily_threshold':policy.daily_drawdown_pct,'daily_blocked':None,'observed_at':None,
+            'status':'unavailable','reason':'',
             'basis':'execution_evidence_not_dashboard_initial_capital'}
     db_path=root/'strategy_evidence.db'
     if not db_path.exists():return result
@@ -68,17 +58,16 @@ def risk_snapshot(data_dir=None, *, env=None, now=None):
         observations=[o for o in observations if o.get('day')==day and isinstance(o.get('at'),(float,int)) and 0<=now-o['at']<=180]
         values=[float(o['daily_drawdown']) for o in observations if isinstance(o.get('daily_drawdown'),(float,int)) and math.isfinite(float(o['daily_drawdown']))]
         if not values:
-            # Preserve an authoritative breaker state even when its numeric
-            # equity observation is older than the 180-second display window.
+            # Do not mislabel a stale historical/peak breaker as today's daily loss.
             return result
         # Same optional ledger gate as the entry gateway; no network or writes.
         ledger=ledger_daily_drawdown(policy,scope=env.identity)
         if ledger.get('day')==day and ledger.get('reason')=='lifecycle_ledger_daily_loss':values.append(ledger['drawdown'])
         drawdown=max(values)
-        result.update(status='circuit_breaker' if breaker_active else 'observed',
-                      reason=breaker_reason if breaker_active else '',
-                      daily_drawdown=drawdown,
-                      daily_blocked=True if breaker_active else drawdown>=policy.daily_drawdown_pct,
+        daily_blocked=drawdown>=policy.daily_drawdown_pct
+        result.update(status='circuit_breaker' if daily_blocked else 'observed',
+                      reason=(f'\u5f53\u65e5\u6743\u76ca\u56de\u64a4\u8fbe\u5230\u9608\u503c: {drawdown:.2%} / {policy.daily_drawdown_pct:.2%}' if daily_blocked else ''),
+                      daily_drawdown=drawdown,daily_blocked=daily_blocked,
                       observed_at=max(o['at'] for o in observations))
         return result
     except (sqlite3.Error,ValueError,TypeError,KeyError):return result

@@ -116,5 +116,5 @@ class ReplayLeverageTests(unittest.TestCase):
         rows[19].update(open=90,high=90,low=85,close=90)
         policy=Policy(daily_drawdown_pct=.001)
         result=BacktestEngine(policy=policy).run(rows,[signal('17',entry_price=100,stop_loss_price=95,take_profit_price=115),signal('20')])
-        self.assertGreater(result.rejection_reasons.get('Observed daily/peak drawdown gate',0),0)
+        self.assertGreater(result.rejection_reasons.get('Observed daily drawdown gate',0),0)
         self.assertGreater(result.total_trades,0)

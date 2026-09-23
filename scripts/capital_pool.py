@@ -14,7 +14,7 @@ import re
 import sqlite3
 import time
 from scripts import strategy_evidence as evidence
-from scripts.risk_policy import Policy, RiskRejected, number, update_equity_state, linear_metadata
+from scripts.risk_policy import Policy, RiskRejected, number, update_equity_state, refresh_equity_state, beijing_day, linear_metadata
 
 CONFIG_FILE=Path(__file__).resolve().parents[1]/'data'/'capital_pool.json'
 VERSION='capital-pool-v1'
@@ -125,9 +125,15 @@ def advance(previous,config,scope,observation,*,flat,policy):
         if previous.get('external_flow_origin')!=origin:raise RiskRejected('External-flow continuity changed; allocation reconciliation required')
         if previous['allocation_fingerprint']!=config.allocation_fingerprint:raise RiskRejected('Allocation changed; reviewed reallocation required, no automatic loss reset')
         if at<previous['at']:raise RiskRejected('Capital pool observation moved backwards')
-        if at==previous['at']:
-            if abs(equity-previous['account_equity'])>1e-8 or abs(flow-previous['external_flow_total'])>1e-8:raise RiskRejected('Contradictory capital pool observation')
-            return previous
+        same_observation=at==previous['at']
+        if same_observation and (abs(equity-previous['account_equity'])>1e-8 or abs(flow-previous['external_flow_total'])>1e-8):
+            raise RiskRejected('Contradictory capital pool observation')
+        if same_observation:
+            old_drawdown=previous.get('drawdown') or {}
+            old_daily=number(old_drawdown.get('daily_drawdown',0))
+            expected_block=old_drawdown.get('day')==beijing_day() and old_daily>=policy.daily_drawdown_pct
+            if old_drawdown.get('day')==beijing_day() and old_drawdown.get('blocked') is expected_block:
+                return previous
         initial=previous['initial_budget'];baseline=previous['baseline_adjusted_equity']
     else:
         if not flat:raise RiskRejected('Capital pool initialization requires no positions or pending entries')
@@ -136,6 +142,8 @@ def advance(previous,config,scope,observation,*,flat,policy):
     risk_equity=max(0.,min(config.budget_usdt,nav,equity))
     if nav<=0:
         drawdown={**((previous or {}).get('drawdown') or {}),'blocked':True,'reason':'Capital pool depleted'}
+    elif previous and same_observation:
+        drawdown=refresh_equity_state(previous.get('drawdown') or {},equity=nav,at=at,day=beijing_day(),policy=policy)
     else:
         drawdown=update_equity_state((previous or {}).get('drawdown'),equity=nav,at=at,cash_flow=0,complete=True,policy=policy)
     return {'scope':scope,'version':VERSION,'currency':'USDT','environment':config.environment,'allocation_id':config.allocation_id,'allocation_fingerprint':config.allocation_fingerprint,

@@ -108,13 +108,14 @@ def equity_guard(env, balance, policy):
     if previous:
         if at==previous['at']:
             if abs(equity-previous['equity'])>1e-8: raise risk.RiskRejected('Contradictory equity timestamp')
-            previous.setdefault('external_flow_total',0.)
-            previous.setdefault('external_flow_origin',previous['at'])
-            if migrating:
-                _save_equity(env,previous)
-            capital_pool.observe_existing(env,previous,policy,balance=balance)
-            if previous['blocked']: raise risk.RiskRejected('Equity drawdown circuit breaker active')
-            return previous
+            state=risk.refresh_equity_state(previous,equity=equity,at=at,day=risk.beijing_day(),policy=policy)
+            state.setdefault('external_flow_total',0.)
+            state.setdefault('external_flow_origin',state['at'])
+            if migrating: state['equity_currency']='USDT'
+            if state != previous or migrating: _save_equity(env,state)
+            capital_pool.observe_existing(env,state,policy,balance=balance)
+            if state['blocked']: raise risk.RiskRejected('Daily equity drawdown circuit breaker active')
+            return state
         after=None; seen=set()
         for _ in range(10):
             params={'limit':'100'}
@@ -146,10 +147,9 @@ def equity_guard(env, balance, policy):
         state['currency_migration']=previous['currency_migration']
     if migrating:
         state['currency_migration']['external_flow_delta_usdt']=flow
-        state['blocked']=state['blocked'] or bool(previous.get('blocked'))
     _save_equity(env,state)
     capital_pool.observe_existing(env,state,policy,balance=balance)
-    if state['blocked']: raise risk.RiskRejected('Equity drawdown circuit breaker active; protection remains enabled')
+    if state['blocked']: raise risk.RiskRejected('Daily equity drawdown circuit breaker active; protection remains enabled')
     return state
 
 

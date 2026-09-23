@@ -29,6 +29,18 @@ class OperationalProjectionAudit(unittest.TestCase):
             self.assertIsNone(s.risk_snapshot(d,env=env,now=now+181)['daily_blocked'])
             db.close()
 
+    def test_peak_only_breaker_does_not_show_as_daily_circuit(self):
+        env=SimpleNamespace(mode='demo',identity='demo-a');now=time.time();day=datetime.fromtimestamp(now,timezone(timedelta(hours=8))).strftime('%Y-%m-%d')
+        with tempfile.TemporaryDirectory() as d,patch('scripts.risk_policy.load_policy',return_value=Policy()),patch('scripts.execution_profiles.runtime',return_value={'execution':{'id':'standard'}}),patch('scripts.risk_policy.ledger_daily_drawdown',return_value={'reason':'baseline_unavailable'}):
+            db=sqlite3.connect(Path(d)/'strategy_evidence.db')
+            db.executescript('CREATE TABLE intents(scope TEXT,state TEXT);CREATE TABLE equity_state(scope TEXT,payload TEXT);CREATE TABLE capital_pool_state(scope TEXT,payload TEXT);')
+            db.execute('INSERT INTO equity_state VALUES (?,?)',('demo-a',json.dumps({'day':day,'at':now,'daily_drawdown':0.,'peak_drawdown':.0815,'blocked':True})))
+            db.commit();db.close()
+            result=s.risk_snapshot(d,env=env,now=now)
+            self.assertFalse(result['daily_blocked'])
+            self.assertEqual(result['daily_drawdown'],0.)
+            self.assertEqual(result['status'],'observed')
+
     def test_monitoring_cache_is_not_reused_by_shared_http_cache(self):
         import asyncio
         from dashboard import app as dash

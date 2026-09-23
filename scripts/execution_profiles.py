@@ -10,7 +10,7 @@ SMALL_300 = {
     'id':'small300', 'label':'300U 小资金 · 风险预算型', 'equity_cap_usdt':300.0,
     'per_trade_equity_pct':0.02, 'single_asset_margin_usdt':150.0,
     'total_margin_usdt':270.0, 'max_active_instruments':2, 'max_same_direction_positions':1,
-    'max_leverage':6.0, 'daily_drawdown_pct':0.08, 'portfolio_stop_pct':0.06,
+    'max_leverage':6.0, 'daily_drawdown_pct':0.03, 'portfolio_stop_pct':0.06,
     'direction_stop_pct':0.04, 'group_stop_pct':0.04, 'peak_drawdown_pct':0.15,
     'minimum_net_rr':2.2,
 }

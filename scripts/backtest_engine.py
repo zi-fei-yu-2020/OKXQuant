@@ -159,7 +159,7 @@ class BacktestEngine:
             'protective TP/SL are market exits (taker fee and adverse slippage), matching attached -1 orders',
             'open positions marked, not force-closed at end; shared cash/risk budget',
             'known model costs deducted from economic NAV; trade-level win rate/PF exclude this shared overhead',
-            'observed marked-equity daily/peak drawdown gates block new submissions; existing exits remain active',
+            'observed marked-equity daily drawdown gate blocks new submissions for the Beijing day; existing exits remain active',
             'no liquidation simulator; not approval for live trading']
         if not series or any(len(rows)<20 for rows in series.values()): return summary
         # Require aligned timestamps for a portfolio: never substitute BTC or forward-fill missing assets.
@@ -272,7 +272,7 @@ class BacktestEngine:
                 if action=='WAIT':continue
                 summary.entry_evaluations+=1
                 if equity_state['blocked']:
-                    filtered+=1;reject('Observed daily/peak drawdown gate');continue
+                    filtered+=1;reject('Observed daily drawdown gate');continue
                 conf=number(sig.get('confidence',0));conf=conf/100 if sig.get('confidence_scale')=='percent' or conf>1 else conf
                 if conf<self.min_confidence_gate or action not in {'BUY','SELL','BUY_LONG','SELL_SHORT'}:
                     filtered+=1;reject('Invalid action or research admission score');continue
