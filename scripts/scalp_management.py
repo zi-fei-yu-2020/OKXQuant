@@ -5,8 +5,8 @@ Thresholds are experimental engineering rules, not calibrated trading probabilit
 from copy import deepcopy
 import math
 
-VERSION='scalp-management-v4'
-CONTEXT_VERSIONS={'scalp-management-v2',VERSION}
+VERSION='scalp-management-v5'
+CONTEXT_VERSIONS={'scalp-management-v2','scalp-management-v4',VERSION}
 RISK_REDUCTION_R=.75
 FOLLOW_THROUGH_R=1.2
 ALIGNED_ACTIVATION_R=.8
@@ -62,14 +62,16 @@ def evaluate(tracker,factor,*,entry,current,side,now,policy,tick):
     cost_model=from_policy(entry,entry,policy)
     costs=cost_model['taker_taker_total']
     buffer=max(tick*2,atr*.2)
-    activation=max(costs+buffer, risk*(COUNTERTREND_ACTIVATION_R if ctx.get('alignment')=='countertrend' else ALIGNED_ACTIVATION_R))
+    activation_r=COUNTERTREND_ACTIVATION_R if ctx.get('alignment')=='countertrend' else ALIGNED_ACTIVATION_R
+    activation=max(costs+buffer, risk*activation_r)
     stage='FOLLOW_THROUGH' if peak>=risk*.5 else 'INITIAL_CONFIRMATION'
     protection={'active':False,'kinetic_exit':False,'reason':'net_cost_not_covered','activation':activation}
     # Net-cost coverage is required to call an exit profitable, not to begin
     # reducing the original downside. A partial risk floor may still realize a loss.
     retained=None;kind=None;tier=0
     if peak>=activation:
-        tier=2 if peak>=max(activation,risk*1.2) else 1
+        tier2_r=1.0 if setup=='scalp_breakout_1m' else 1.2
+        tier=2 if peak>=max(activation,risk*tier2_r) else 1
         retained=max(costs,peak*(.65 if tier==2 else .5));kind='profit_lock'
     elif peak>=risk*FOLLOW_THROUGH_R:
         retained=peak*.35;kind='risk_reduction'
@@ -94,7 +96,7 @@ def evaluate(tracker,factor,*,entry,current,side,now,policy,tick):
             stage=('PROFIT_LOCK' if tier==2 else 'COST_PROTECTED') if covers_cost else 'RISK_REDUCED'
     result={'version':VERSION,'enabled':True,'state':stage,'exit':False,'reason':'structure_pending',
             'setup':setup,'alignment':ctx.get('alignment'),'peak_gain':peak,
-            'initial_risk':risk,'risk_reduction_activation_r':RISK_REDUCTION_R,'activation_target_r':COUNTERTREND_ACTIVATION_R if ctx.get('alignment')=='countertrend' else ALIGNED_ACTIVATION_R,'activation_target_r':COUNTERTREND_ACTIVATION_R if ctx.get('alignment')=='countertrend' else ALIGNED_ACTIVATION_R,'profit_r':gain/risk,
+            'initial_risk':risk,'risk_reduction_activation_r':RISK_REDUCTION_R,'activation_target_r':activation_r,'profit_r':gain/risk,
             'peak_r':peak/risk,'entry_atr':atr,'cost_distance':costs,'cost_model':cost_model,'protection':protection}
     if protection.get('active'):result['protected_stop']=protection['stop']
     elif old.get('protected_stop'):result['protected_stop']=old['protected_stop']
@@ -110,13 +112,14 @@ def evaluate(tracker,factor,*,entry,current,side,now,policy,tick):
         if not 0<=now*1000-int(bars[-1]['close_ms'])<=90000:
             return {**result,'reason':'closed_bars_stale'}
         if any(number(r.get('close')) is None or number(r.get('close'))<=0 for r in bars):return result
-        base=3 if setup=='scalp_pullback_1m' else 2
+        base=3
         needed=base+(1 if ctx.get('alignment')=='aligned' else 0)
         result.update(closed_bars=len(bars),required_bars=needed,last_close_ms=bars[-1]['close_ms'],
                       closed_evidence=[{'close_ms':r['close_ms'],'close':r['close']} for r in bars[-2:]])
         if len(bars)<needed:return result
         # Pullbacks have more noise allowance; no-fail on mere lack of profit.
-        allowance=max(tick*2,atr*(.4 if setup=='scalp_pullback_1m' else .25))
+        allowance_by_setup={'scalp_pullback_1m':.4,'scalp_breakout_1m':.35,'scalp_reversal_1m':.3}
+        allowance=max(tick*2,atr*allowance_by_setup.get(setup,.35))
         broken=all(sign*(number(r['close'])-trigger)<-allowance for r in bars[-2:])
         current_broken=sign*(current-trigger)<-allowance
         if broken and current_broken and gain<0:

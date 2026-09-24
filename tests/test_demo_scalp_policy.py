@@ -19,13 +19,13 @@ def sampling_package():
 
 
 class DemoPolicyTests(unittest.TestCase):
-    def test_sample_rejected_at_two_is_allowed_at_one_point_two(self):
+    def test_setup_target_is_fee_aware_and_allowed_by_demo_rr(self):
         p=sampling_package();base=risk_policy.Policy()
-        self.assertFalse(scalp_candidates.catalog(p,vars(base))['plans'])
+        self.assertTrue(scalp_candidates.catalog(p,vars(base))['plans'])
         plans=entry_candidates.catalog(p,vars(base))['plans']
         self.assertTrue(plans,plans)
         plan=plans[0]
-        self.assertTrue(1.2 <= plan['net_rr'] < 2,plan['net_rr'])
+        self.assertGreaterEqual(plan['net_rr'],1.2)
         row=demo_scalp.materialize(p,plan,p['data_as_of'],base)
         self.assertTrue(row['decision']['contract_valid'])
         self.assertEqual(row['decision']['entry_policy'],demo_scalp_policy.descriptor())
@@ -63,7 +63,7 @@ class DemoPolicyTests(unittest.TestCase):
             kwargs=dict(inst_id=p['instId'],side='long',entry=plan['entry_price'],stop=plan['stop_loss_price'],take_profit=plan['take_profit_price'],
                         requested_size=5,budget=15,decision_id=did,decision_at=p['data_as_of'],horizon='scalp')
             actual,cid=entry_gateway.prepare(env,**kwargs)
-            self.assertTrue(1.2<=actual['net_rr']<2,actual['net_rr'])
+            self.assertGreaterEqual(actual['net_rr'],1.2)
             self.assertLessEqual(actual['risk_usdt'],15)
             self.assertEqual(actual['leverage'],10)
             self.assertTrue(actual['leverage_verified'])

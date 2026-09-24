@@ -26,21 +26,21 @@ class ScalpManagementTests(unittest.TestCase):
     def test_two_confirmed_closes_not_adverse_tick_authorize_failure(self):
         t=tracker()
         self.assertFalse(evaluate(t,closes=(100.1,100.2,100.1),price=99.4)['exit'])
-        r=evaluate(t);self.assertTrue(r['exit']);self.assertEqual(r['state'],'FAILED')
-        self.assertEqual(r['last_close_ms'],720000)
+        r=evaluate(t,closes=(99.5,99.4,99.3),price=99.3);self.assertTrue(r['exit']);self.assertEqual(r['state'],'FAILED')
+        self.assertEqual(r['last_close_ms'],780000)
     def test_partial_entry_candle_is_not_a_full_confirmation(self):
         t=tracker();t['positionIdentity']['cTime']='630000'
         self.assertFalse(evaluate(t)['exit'])
     def test_pullback_has_its_own_longer_observation_window(self):
         t=tracker(setup='scalp_pullback_1m')
         self.assertFalse(evaluate(t)['exit'])
-        self.assertTrue(evaluate(t,closes=(99.5,99.4,99.3),price=99.3)['exit'])
+        self.assertTrue(evaluate(t,closes=(99.5,99.4,99.3,99.2),price=99.2)['exit'])
     def test_regime_changes_management_not_direction_permissions(self):
-        self.assertTrue(evaluate(tracker(alignment='countertrend'))['exit'])
+        self.assertFalse(evaluate(tracker(alignment='countertrend'))['exit'])
         self.assertFalse(evaluate(tracker(alignment='aligned'))['exit'])
-        self.assertTrue(evaluate(tracker(alignment='aligned'),closes=(99.5,99.4,99.3),price=99.3)['exit'])
+        self.assertTrue(evaluate(tracker(alignment='aligned'),closes=(99.5,99.4,99.3,99.2),price=99.2)['exit'])
     def test_short_and_long_use_symmetric_failure_conditions(self):
-        r=evaluate(tracker(side='short'),closes=(100.5,100.6),price=100.6,side='short')
+        r=evaluate(tracker(side='short'),closes=(100.5,100.6,100.7),price=100.7,side='short')
         self.assertTrue(r['exit'])
     def test_recovery_before_execution_does_not_close_on_old_broken_bars(self):
         self.assertFalse(evaluate(tracker(),price=100.1)['exit'])
@@ -74,6 +74,7 @@ class ScalpManagementTests(unittest.TestCase):
     def test_prior_progress_does_not_permanently_exempt_broken_structure(self):
         t=tracker();t['highWaterMark']=100.75
         result=evaluate(t)
+        result=evaluate(t,closes=(99.5,99.4,99.3),price=99.3)
         self.assertTrue(result['exit'])
         self.assertEqual(result['reason'],'follow_through_lost')
         self.assertEqual(result['protection']['kind'],'risk_reduction')
@@ -153,7 +154,7 @@ class ProgressiveRiskTests(unittest.TestCase):
         self.assertEqual(r['closed_evidence'],[{'close_ms':660000,'close':99.5},{'close_ms':720000,'close':99.4}])
     def test_v2_entry_context_is_retained_but_eval_is_versioned_v3(self):
         t=tracker();t['entry_context']['version']='scalp-management-v2'
-        r=evaluate(t);self.assertTrue(r['enabled']);self.assertEqual(r['version'],'scalp-management-v4')
+        r=evaluate(t);self.assertTrue(r['enabled']);self.assertEqual(r['version'],'scalp-management-v5')
         self.assertEqual(t['entry_context']['version'],'scalp-management-v2')
 
 class RealManagerTests(unittest.TestCase):
@@ -164,8 +165,8 @@ class RealManagerTests(unittest.TestCase):
         # Guard has adopted the cloud stop, not yet the saved entry context.
         tracked={INST+'_long':t};f={'instId':INST,'name':'TEST','market_data_valid':True,'price':99.4,'atr':1,'atr_15m':1,'precision':2,'tickSz':'.01','ctVal':1}
         saved={INST+'_long':{'entry_context':context(),'mode':mode,'horizon':'scalp','setup':'scalp_breakout_1m','decision_id':'decision','ts':600}}
-        def enrich(f,*args):f['closed_1m']=bars((99.5,99.4));f['atr_1m']=.2
-        with patch.object(trader.time,'time',return_value=725),patch.object(trader.market,'_selected',return_value=SimpleNamespace(identity='demo')),patch.object(trader,'load_horizon_intents',return_value=saved),patch('scripts.minute_exit.enrich_volatility',side_effect=enrich),patch.object(trader,'ensure_cloud_position_protection',return_value=(True,'verified')),patch.object(trader,'close_position_confirmed',return_value=(True,'confirmed')) as close,patch.object(trader,'add_stop_cooldown') as cooldown,patch.object(trader.strategy_evidence,'best_effort'):
+        def enrich(f,*args):f['closed_1m']=bars((99.5,99.4,99.3));f['atr_1m']=.2
+        with patch.object(trader.time,'time',return_value=785),patch.object(trader.market,'_selected',return_value=SimpleNamespace(identity='demo')),patch.object(trader,'load_horizon_intents',return_value=saved),patch('scripts.minute_exit.enrich_volatility',side_effect=enrich),patch.object(trader,'ensure_cloud_position_protection',return_value=(True,'verified')),patch.object(trader,'close_position_confirmed',return_value=(True,'confirmed')) as close,patch.object(trader,'add_stop_cooldown') as cooldown,patch.object(trader.strategy_evidence,'best_effort'):
             changed,_=trader.manage_position_tp_and_trailing(f,p,tracked,'fixture',[])
         self.assertTrue(changed);self.assertNotIn(INST+'_long',tracked)
         self.assertEqual(close.call_args.kwargs['exit_reason'],'strategy_failure_exit');cooldown.assert_not_called()

@@ -4,7 +4,7 @@ Targets from volatility are explicitly projections, never represented as observe
 import hashlib
 import json
 
-VERSION = 'scalp-minute-v4'
+VERSION = 'scalp-minute-v5'
 
 
 def catalog(package, policy):
@@ -57,9 +57,13 @@ def catalog(package, policy):
                 reject(side,'quote_moved_beyond_closed_trigger'); continue
             stop = (min(last['low'],prev['low'])-a1*.2 if sign==1 else max(last['high'],prev['high'])+a1*.2)
             stop = min(stop,entry-a1*1.1) if sign==1 else max(stop,entry+a1*1.1)
-            # v4 widens payoff projection to absorb observed round-trip fees.
-            # This does not remove any candidate or add an entry gate.
-            distance = max(a1*5.0, a5*3.5)
+            setup='scalp_reversal_1m' if turn_ok and not trend_ok else 'scalp_breakout_1m' if breakout else 'scalp_pullback_1m'
+            distance_by_setup = {
+                'scalp_breakout_1m': max(a1*5.5, a5*4.0),
+                'scalp_pullback_1m': max(a1*5.0, a5*3.5),
+                'scalp_reversal_1m': max(a1*4.5, a5*3.25),
+            }
+            distance = distance_by_setup[setup]
             target = entry+sign*distance
             if min(entry,stop,target)<=0: reject(side,'invalid_geometry'); continue
             from scripts.execution_costs import from_policy
@@ -67,7 +71,6 @@ def catalog(package, policy):
             rr=(distance-cost)/(abs(entry-stop)+cost)
             if rr<policy['minimum_net_rr']:
                 reject(side,'net_rr_below_policy',net_rr=rr,target_distance=distance,stop_distance=abs(entry-stop),cost=cost); continue
-            setup='scalp_reversal_1m' if turn_ok and not trend_ok else 'scalp_breakout_1m' if breakout else 'scalp_pullback_1m'
             from scripts.strategy_modes import mode_for
             mode=mode_for('scalp'); mode['engine']='demo_scalp_v2'
             plan={'version':VERSION,'instrument':package['instId'],'setup':setup,'action':action,
@@ -77,7 +80,7 @@ def catalog(package, policy):
                   'valid_for_seconds':60,'net_rr':rr,'entry_timeframe':'1M',
                   'trigger_level':level,'entry_atr':a1,'chase_atr':.6,
                   'stop_basis':'two_closed_1m_extremes_with_atr_buffer',
-                  'target_basis':'projected_max_4atr1m_3atr5m',
+                  'target_basis':f'projected_{setup}_volatility_target',
                   'target_observation':{'extrapolated':True,'basis':'volatility_projection_not_observed_target'},
                   'supporting_evidence':[
                     {'ref':'/entry_candles/1M/last/close','value':last['close'],'interpretation':'Closed one-minute structural trigger'},

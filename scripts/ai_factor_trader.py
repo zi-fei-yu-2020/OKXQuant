@@ -236,10 +236,10 @@ def _save_horizon_intents(data):
         if os.path.exists(tmp):os.unlink(tmp)
 
 
-def save_horizon_intent(inst_id, side, horizon, decision_id=None, strategy_mode=None, setup=None, entry_context=None):
+def save_horizon_intent(inst_id, side, horizon, decision_id=None, strategy_mode=None, setup=None, entry_context=None, execution_mode=None, order_type=None):
     data=load_horizon_intents(); from scripts.strategy_modes import mode_for
     mode=strategy_mode or mode_for(horizon)
-    data[f'{inst_id}_{side}']={'horizon': horizon if horizon in {'scalp','swing'} else 'swing','mode_version':mode.get('version','strategy-modes-v2'),'mode_signature':mode.get('signature',''),'entry_timeframe':mode['entry_timeframe'],'confirmation_timeframe':mode['confirmation_timeframe'],'bias_timeframe':mode['bias_timeframe'],'max_holding_seconds':mode['max_holding_seconds'],'mode':mode,'setup':setup,'entry_context':entry_context,'decision_id':decision_id,'ts':int(time.time())}
+    data[f'{inst_id}_{side}']={'horizon': horizon if horizon in {'scalp','swing'} else 'swing','mode_version':mode.get('version','strategy-modes-v2'),'mode_signature':mode.get('signature',''),'entry_timeframe':mode['entry_timeframe'],'confirmation_timeframe':mode['confirmation_timeframe'],'bias_timeframe':mode['bias_timeframe'],'max_holding_seconds':mode['max_holding_seconds'],'mode':mode,'setup':setup,'entry_context':entry_context,'decision_id':decision_id,'execution_mode':execution_mode,'order_type':order_type,'ts':int(time.time())}
     _save_horizon_intents(data)
 
 def consume_horizon_intent(inst_id, side, *, expected=None):
@@ -701,7 +701,7 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
     plan['maker_price']=maker_px if maker_first else None
     plan['fallback_allowed']=bool(maker_first)
     LAST_ENTRY_PLAN.clear(); LAST_ENTRY_PLAN.update(plan)
-    save_horizon_intent(inst_id, pos_side, horizon, decision_id, strategy_mode=plan.get('strategy_mode'), setup=plan.get('setup'), entry_context=plan.get('entry_context'))
+    save_horizon_intent(inst_id, pos_side, horizon, decision_id, strategy_mode=plan.get('strategy_mode'), setup=plan.get('setup'), entry_context=plan.get('entry_context'), execution_mode=plan.get('entry_execution_mode'), order_type='post_only' if maker_first else 'limit')
     size = plan['size']
     effective_px, effective_sl, effective_tp = plan['entry'], plan['stop'], plan['take_profit']
     from scripts.entry_diagnostics import submission_diagnostics, accepted_order_id
@@ -806,6 +806,7 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
         plan['entry_execution_mode']='bounded_fallback'
         plan['fallback_allowed']=False
         LAST_ENTRY_PLAN.clear(); LAST_ENTRY_PLAN.update(plan)
+        save_horizon_intent(inst_id, pos_side, horizon, decision_id, strategy_mode=plan.get('strategy_mode'), setup=plan.get('setup'), entry_context=plan.get('entry_context'), execution_mode='bounded_fallback', order_type='limit')
         fallback = dispatch_attempt(plan, fallback_client_id, 'limit')
         strategy_evidence.best_effort(env.identity, 'maker_fallback', {
             'instrument': inst_id, 'decision_id': decision_id, 'client_id': fallback_client_id,
