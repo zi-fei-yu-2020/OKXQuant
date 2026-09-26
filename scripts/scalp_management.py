@@ -11,7 +11,7 @@ RISK_REDUCTION_R=.75
 FOLLOW_THROUGH_R=1.2
 ALIGNED_ACTIVATION_R=.8
 COUNTERTREND_ACTIVATION_R=.6
-SETUPS={'scalp_breakout_1m','scalp_pullback_1m','scalp_reversal_1m'}
+SETUPS={'scalp_breakout_1m','scalp_pullback_1m','scalp_reversal_1m','scalp_range_reversion_1m'}
 
 def number(x):
     if isinstance(x,bool):return None
@@ -70,7 +70,7 @@ def evaluate(tracker,factor,*,entry,current,side,now,policy,tick):
     # reducing the original downside. A partial risk floor may still realize a loss.
     retained=None;kind=None;tier=0
     if peak>=activation:
-        tier2_r=1.0 if setup=='scalp_breakout_1m' else 1.2
+        tier2_r=1.0 if setup in {'scalp_breakout_1m','scalp_range_reversion_1m'} else 1.2
         tier=2 if peak>=max(activation,risk*tier2_r) else 1
         retained=max(costs,peak*(.65 if tier==2 else .5));kind='profit_lock'
     elif peak>=risk*FOLLOW_THROUGH_R:
@@ -118,7 +118,7 @@ def evaluate(tracker,factor,*,entry,current,side,now,policy,tick):
                       closed_evidence=[{'close_ms':r['close_ms'],'close':r['close']} for r in bars[-2:]])
         if len(bars)<needed:return result
         # Pullbacks have more noise allowance; no-fail on mere lack of profit.
-        allowance_by_setup={'scalp_pullback_1m':.4,'scalp_breakout_1m':.35,'scalp_reversal_1m':.3}
+        allowance_by_setup={'scalp_pullback_1m':.4,'scalp_breakout_1m':.35,'scalp_reversal_1m':.3,'scalp_range_reversion_1m':.45}
         allowance=max(tick*2,atr*allowance_by_setup.get(setup,.35))
         broken=all(sign*(number(r['close'])-trigger)<-allowance for r in bars[-2:])
         current_broken=sign*(current-trigger)<-allowance

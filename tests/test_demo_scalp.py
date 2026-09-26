@@ -51,6 +51,24 @@ class MinuteScalpTests(unittest.TestCase):
         result=entry_candidates.catalog(p)
         self.assertTrue(any(x['setup']=='scalp_reversal_1m' for x in result['plans']),result)
 
+    def test_range_market_generates_additional_1m_reversion_candidate(self):
+        p=minute_package();p.update(macro_4h='4H_MACRO_RANGE',structure_1h='1H_SWING_CHOP',
+                                    price=99.5,bidPx=99.49,askPx=99.51)
+        rows=p['entry_candles']['15M']['rows']
+        for row in rows: row.update(open=100,high=102,low=98,close=100)
+        rows[-2].update(open=99.0,high=100,low=98.0,close=98.8)
+        rows[-1].update(open=98.8,high=100,low=98.5,close=99.5)
+        result=entry_candidates.catalog(p)
+        plans=[x for x in result['plans'] if x['setup']=='scalp_range_reversion_1m']
+        self.assertEqual(len(plans),1,result)
+        plan=plans[0]
+        self.assertEqual(plan['target_basis'],'observed_15m_opposite_range_boundary')
+        self.assertFalse(plan['target_observation']['extrapolated'])
+        self.assertEqual(plan['stop_basis'],'range_boundary_reclaim_plus_volatility_buffer')
+        self.assertEqual(entry_candidates.validate_live_quote(p,plan['id'],p['price']),plan)
+        row=demo_scalp.materialize(p,plan,p['data_as_of'],risk_policy.Policy())
+        self.assertTrue(row['decision']['contract_valid'],row)
+
     def test_no_trigger_and_missing_minute_data_never_force_entry(self):
         p=minute_package();p['entry_candles']['1M']['rows'][-1].update(open=100,close=100,high=101,low=99)
         self.assertFalse(entry_candidates.catalog(p)['plans'])

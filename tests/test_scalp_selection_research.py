@@ -60,6 +60,28 @@ class RankingTests(unittest.TestCase):
         self.assertEqual(len(selected),len(pairs));self.assertEqual(audit['candidates_removed'],0)
         self.assertEqual(set(audit['new_order']),set(audit['legacy_order']));self.assertIsNone(audit['minimum_score'])
         self.assertEqual(pairs,before)
+    def test_range_regime_prioritizes_reversion_without_removing_breakouts(self):
+        p=minute_package();p.update(macro_4h='4H_MACRO_RANGE',structure_1h='1H_SWING_CHOP')
+        base=entry_candidates.catalog(p)['plans'][0]
+        breakout={**base,'id':'breakout','setup':'scalp_breakout_1m','net_rr':2.2}
+        reversion={**base,'id':'reversion','setup':'range_reversion','net_rr':2.2}
+        selected,audit=ranking.rank([(p,breakout),(p,reversion)],vars(Policy()))
+        self.assertEqual(audit['new_order'][0],'reversion')
+        self.assertEqual(len(selected),2)
+        self.assertEqual(audit['candidates_removed'],0)
+        self.assertEqual(audit['metrics']['reversion']['market_regime'],'range_chop')
+
+    def test_trend_regime_prioritizes_breakout_without_removing_pullbacks(self):
+        p=minute_package();p.update(macro_4h='4H_MACRO_BULL',structure_1h='1H_SWING_BULL')
+        base=entry_candidates.catalog(p)['plans'][0]
+        breakout={**base,'id':'breakout','setup':'scalp_breakout_1m','net_rr':2.2}
+        pullback={**base,'id':'pullback','setup':'scalp_pullback_1m','net_rr':2.2}
+        selected,audit=ranking.rank([(p,pullback),(p,breakout)],vars(Policy()))
+        self.assertEqual(audit['new_order'][0],'breakout')
+        self.assertEqual(len(selected),2)
+        self.assertEqual(audit['candidates_removed'],0)
+        self.assertEqual(audit['metrics']['breakout']['market_regime'],'trend')
+
     def test_scores_are_bounded_and_not_labeled_win_probabilities(self):
         _,audit=ranking.rank(self.candidates(),vars(Policy()))
         for d in audit['metrics'].values():

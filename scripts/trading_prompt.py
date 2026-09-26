@@ -215,6 +215,16 @@ def facts_for(package,position=None):
     for key,group in _SCALARS.items():add('/'+key,package.get(key),group)
     from scripts.entry_candidates import candle_facts
     out.update(candle_facts(package))
+    # Frozen 15M channel facts used by the 1M range-reversion candidate.
+    # Keeping them in the contract catalog makes every generated reference
+    # independently checkable during materialization.
+    try:
+        from scripts.entry_candidates import verified_bars
+        rows=verified_bars(package,'15M')[-12:-1]
+        add('/entry_candles/15M/range_low',min(r['low'] for r in rows),'structure')
+        add('/entry_candles/15M/range_high',max(r['high'] for r in rows),'structure')
+    except (ValueError,TypeError,KeyError,OverflowError):
+        pass
     for tf in ('1M','5M'):
         try:
             from scripts.entry_candidates import verified_bars

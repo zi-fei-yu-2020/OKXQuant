@@ -4,7 +4,7 @@ Targets from volatility are explicitly projections, never represented as observe
 import hashlib
 import json
 
-VERSION = 'scalp-minute-v5'
+VERSION = 'scalp-minute-v6'
 
 
 def catalog(package, policy):
@@ -30,6 +30,24 @@ def catalog(package, policy):
         slow_mean = sum(r['close'] for r in five[-12:])/12
         bias_mean = sum(r['close'] for r in bias[-8:])/8
         average_volume = sum(r['volume'] for r in one[-9:-1])/8
+        # Range-reversion uses the frozen 15M channel only as a context and
+        # trigger boundary. It is an additional candidate, never a replacement
+        # for the existing breakout/pullback/reversal candidates.
+        macro=str(package.get('macro_4h') or '').upper()
+        structure=str(package.get('structure_1h') or '').upper()
+        range_market=('RANGE' in macro or 'CHOP' in macro or
+                      'RANGE' in structure or 'CHOP' in structure)
+        range_rows=bias[-12:-1]
+        range_low=min(r['low'] for r in range_rows)
+        range_high=max(r['high'] for r in range_rows)
+        range_mid=(range_low+range_high)/2
+        range_buffer=max(a5*.45,a1*1.2)
+        range_long=(range_market and last['close']>last['open'] and
+                    last['close']>prev['close'] and last['low']<=range_low+range_buffer and
+                    last['close']>range_low)
+        range_short=(range_market and last['close']<last['open'] and
+                     last['close']<prev['close'] and last['high']>=range_high-range_buffer and
+                     last['close']<range_high)
         for side, sign in [('long',1), ('short',-1)]:
             action = 'BUY_LONG' if sign == 1 else 'SELL_SHORT'
             entry = ask if sign == 1 else bid
@@ -40,31 +58,44 @@ def catalog(package, policy):
             turn_ok = (sign*(five[-2]['close']-five[-2]['open'])<0
                        and sign*(five[-1]['close']-five[-1]['open'])>0
                        and sign*(five[-1]['close']-previous_mid)>0)
-            if not (trend_ok or turn_ok):
+            range_reversion = range_long if sign==1 else range_short
+            if not (trend_ok or turn_ok or range_reversion):
                 reject(side,'scalp_5m_confirmation_not_met'); continue
-            if sign*(bias[-1]['close']-bias_mean) < -a5*.5:
+            if sign*(bias[-1]['close']-bias_mean) < -a5*.5 and not range_reversion:
                 reject(side,'scalp_15m_bias_opposed'); continue
             level = (max(r['high'] for r in one[-7:-1]) if sign==1 else min(r['low'] for r in one[-7:-1]))
             breakout = sign*(last['close']-level)>0 and sign*(prev['close']-level)<=0
             pullback_level = prev['high'] if sign==1 else prev['low']
             pullback = sign*(prev['close']-prev['open'])<0 and sign*(last['close']-pullback_level)>0
-            if sign*(last['close']-last['open'])<=0 or not (breakout or pullback):
+            if sign*(last['close']-last['open'])<=0 or not (breakout or pullback or range_reversion):
                 reject(side,'scalp_1m_trigger_not_met'); continue
             if average_volume<=0 or last['volume']<average_volume*.8:
                 reject(side,'scalp_volume_insufficient'); continue
-            level = level if breakout else pullback_level
-            if sign*(entry-level)<=0 or sign*(entry-last['close'])>a1*.6:
+            if range_reversion:
+                level = range_low if sign==1 else range_high
+            else:
+                level = level if breakout else pullback_level
+            if sign*(entry-level)<=0 or (not range_reversion and sign*(entry-last['close'])>a1*.6):
                 reject(side,'quote_moved_beyond_closed_trigger'); continue
-            stop = (min(last['low'],prev['low'])-a1*.2 if sign==1 else max(last['high'],prev['high'])+a1*.2)
-            stop = min(stop,entry-a1*1.1) if sign==1 else max(stop,entry+a1*1.1)
-            setup='scalp_reversal_1m' if turn_ok and not trend_ok else 'scalp_breakout_1m' if breakout else 'scalp_pullback_1m'
+            if range_reversion:
+                stop_buffer=max(a1*.15,a5*.08)
+                stop=(min(last['low'],prev['low'])-stop_buffer if sign==1
+                      else max(last['high'],prev['high'])+stop_buffer)
+            else:
+                stop = (min(last['low'],prev['low'])-a1*.2 if sign==1 else max(last['high'],prev['high'])+a1*.2)
+                stop = min(stop,entry-a1*1.1) if sign==1 else max(stop,entry+a1*1.1)
+            setup=('scalp_range_reversion_1m' if range_reversion else
+                   'scalp_reversal_1m' if turn_ok and not trend_ok else
+                   'scalp_breakout_1m' if breakout else 'scalp_pullback_1m')
             distance_by_setup = {
                 'scalp_breakout_1m': max(a1*5.5, a5*4.0),
                 'scalp_pullback_1m': max(a1*5.0, a5*3.5),
                 'scalp_reversal_1m': max(a1*4.5, a5*3.25),
+                'scalp_range_reversion_1m': max(a1*3.5, a5*1.5),
             }
-            distance = distance_by_setup[setup]
-            target = entry+sign*distance
+            range_target = range_high if sign==1 else range_low
+            distance = (abs(range_target-entry) if range_reversion else distance_by_setup[setup])
+            target = (range_target if range_reversion else entry+sign*distance)
             if min(entry,stop,target)<=0: reject(side,'invalid_geometry'); continue
             from scripts.execution_costs import from_policy
             cost=from_policy(entry,max(stop,target),policy,ask-bid)['maker_taker_total']
@@ -79,10 +110,19 @@ def catalog(package, policy):
                   'created_at':number(package['data_as_of']),'trigger_close_ms':last['close_ms'],
                   'valid_for_seconds':60,'net_rr':rr,'entry_timeframe':'1M',
                   'trigger_level':level,'entry_atr':a1,'chase_atr':.6,
-                  'stop_basis':'two_closed_1m_extremes_with_atr_buffer',
-                  'target_basis':f'projected_{setup}_volatility_target',
-                  'target_observation':{'extrapolated':True,'basis':'volatility_projection_not_observed_target'},
-                  'supporting_evidence':[
+                  'stop_basis':('range_boundary_reclaim_plus_volatility_buffer' if range_reversion else 'two_closed_1m_extremes_with_atr_buffer'),
+                  'target_basis':('observed_15m_opposite_range_boundary' if range_reversion else f'projected_{setup}_volatility_target'),
+                  'target_observation':({'timeframe':'15M','field':'opposite_range_boundary','price':range_target,
+                                         'range_low':range_low,'range_high':range_high,
+                                         'extrapolated':False,'derived':False}
+                                        if range_reversion else
+                                        {'extrapolated':True,'basis':'volatility_projection_not_observed_target'}),
+                  'supporting_evidence':([{
+                    'ref':'/entry_candles/15M/range_low','value':range_low,
+                    'interpretation':'Frozen 15M range lower boundary'} ,{
+                    'ref':'/entry_candles/15M/range_high','value':range_high,
+                    'interpretation':'Frozen 15M range upper boundary'}]
+                    if range_reversion else []) + [
                     {'ref':'/entry_candles/1M/last/close','value':last['close'],'interpretation':'Closed one-minute structural trigger'},
                     {'ref':'/entry_candles/1M/last/volume','value':last['volume'],'interpretation':'Observed trigger candle activity'},
                     {'ref':'/entry_candles/5M/last/close','value':five[-1]['close'],'interpretation':'Observed five-minute directional structure'}],

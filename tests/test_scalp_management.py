@@ -54,6 +54,13 @@ class ScalpManagementTests(unittest.TestCase):
     def test_unknown_and_legacy_setups_are_not_forced_into_minute_failure_exit(self):
         for setup in ('unknown','range_reversion','pullback_reclaim'):
             self.assertFalse(evaluate(tracker(setup=setup))['enabled'])
+
+    def test_1m_range_reversion_uses_minute_failure_management(self):
+        t=tracker(setup='scalp_range_reversion_1m')
+        self.assertTrue(evaluate(t)['enabled'])
+        result=evaluate(t,closes=(99.5,99.4,99.3),price=99.3)
+        self.assertTrue(result['exit'])
+        self.assertEqual(result['state'],'FAILED')
     def test_profit_floor_covers_taker_costs_and_does_not_widen_after_restart(self):
         t=tracker();t['highWaterMark']=101.5
         r=evaluate(t,closes=(101.2,101.3),price=101.3)
