@@ -55,43 +55,77 @@ def load_policy():
         raw['per_trade_equity_pct'] = min(float(raw.get('per_trade_equity_pct', .02)), .02)
     return Policy(**raw)
 
-def ledger_daily_drawdown(policy=None, *, now=None, rows=None, initial_capital=None, reset_time=None, scope=None):
-    """Return the lifecycle-ledger daily loss gate used by every opening path."""
+def _scoped_daily_equity_anchor(scope, day, now_ts):
+    """Read the reconciled USDT account day anchor, never an old display baseline."""
     import json
+    import sqlite3
+    from pathlib import Path
+    from scripts.strategy_evidence import DB_PATH
+    path=Path(DB_PATH)
+    if not path.exists():return None
+    with sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True,timeout=.3) as db:
+        row=db.execute('SELECT payload FROM equity_state WHERE scope=?',(scope,)).fetchone()
+    if not row:return None
+    state=json.loads(row[0])
+    if (not isinstance(state,dict) or state.get('day')!=day or
+        state.get('equity_currency')!='USDT'):
+        return None
+    at=number(state.get('at'),positive=True)
+    if at>now_ts+1:return None
+    number(state.get('equity'),positive=True)
+    return number(state.get('day_anchor'),positive=True)
+
+
+def ledger_daily_drawdown(policy=None, *, now=None, rows=None, initial_capital=None, reset_time=None, scope=None):
+    """Apply settled daily loss to the same account's USDT day-equity anchor.
+
+    An explicitly injected initial_capital is kept for pure legacy/replay tests;
+    production never substitutes a historical dashboard baseline as today's NAV.
+    When an anchor is unavailable the final entry gateway first refreshes the
+    authenticated balance, rather than using a fabricated percentage.
+    """
+    import json
+    import sqlite3
     from datetime import datetime, timezone, timedelta
     from pathlib import Path
     policy=policy or Policy()
     root=Path(__file__).resolve().parents[1]
     try:
-        # Runtime reads always bind to the selected account. Explicit injected
-        # rows remain usable as a pure accounting calculation when scope omitted.
         if rows is None and scope is None:
             from scripts.okx_runtime import selected_environment
-            scope = selected_environment().identity
-        if initial_capital is None or reset_time is None:
-            from okxquant_backend.account_baseline import load_account_baseline
-            baseline=load_account_baseline(scope=scope)
-            if initial_capital is None and not baseline.get('baseline_configured'):
-                return {'blocked':False,'drawdown':0.,'net_pnl':0.,'reason':'baseline_unavailable'}
-            if scope and baseline.get('account_scope') and baseline['account_scope'] != scope:
-                return {'blocked':False,'drawdown':0.,'net_pnl':0.,'reason':'baseline_scope_mismatch'}
-            initial=float(baseline.get('initial_capital') or 0) if initial_capital is None else float(initial_capital)
-            reset=str(baseline.get('reset_time') or '1970-01-01 00:00:00') if reset_time is None else str(reset_time)
-        else:
-            initial=float(initial_capital);reset=str(reset_time)
-        if initial<=0:return {'blocked':False,'drawdown':0.,'net_pnl':0.,'reason':'baseline_unavailable'}
+            scope=selected_environment().identity
         now_dt=now or datetime.now(timezone(timedelta(hours=8)))
         day=now_dt.strftime('%Y-%m-%d')
+        if reset_time is None:
+            from okxquant_backend.account_baseline import load_account_baseline
+            baseline=load_account_baseline(scope=scope)
+            if scope and baseline.get('account_scope') and baseline['account_scope']!=scope:
+                return {'blocked':False,'drawdown':None,'net_pnl':None,'reason':'baseline_scope_mismatch'}
+            reset=str(baseline.get('reset_time') or '1970-01-01 00:00:00')
+        else:reset=str(reset_time)
+        if initial_capital is not None:
+            anchor=number(initial_capital,positive=True)
+            basis='explicit_replay_capital'
+        else:
+            anchor=_scoped_daily_equity_anchor(scope,day,now_dt.timestamp()) if scope else None
+            basis='reconciled_usdt_day_equity_anchor'
+            if anchor is None:
+                return {'blocked':False,'drawdown':None,'net_pnl':None,'threshold':policy.daily_drawdown_pct,
+                        'day':day,'reason':'equity_day_anchor_unavailable'}
         if rows is None:
             rows=json.loads((root/'data'/'trading_ledger.json').read_text(encoding='utf-8'))
         if scope is not None:
             from scripts.dashboard_stats import scoped_rows
-            rows = scoped_rows(rows, scope)
-        net=sum(number(r.get('net_pnl',r.get('pnl',0))) for r in rows if isinstance(r,dict) and r.get('status')=='closed' and str(r.get('close_time') or '')[:10]==day and str(r.get('close_time') or '')>=reset)
-        drawdown=max(0.,-net/initial)
-        return {'blocked':drawdown>=policy.daily_drawdown_pct,'drawdown':drawdown,'net_pnl':net,'threshold':policy.daily_drawdown_pct,'day':day,'reason':'lifecycle_ledger_daily_loss'}
-    except (OSError,ValueError,TypeError,KeyError):
-        return {'blocked':False,'drawdown':0.,'net_pnl':0.,'reason':'ledger_unavailable'}
+            rows=scoped_rows(rows,scope)
+        net=sum(number(r.get('net_pnl',r.get('pnl',0))) for r in rows
+                if isinstance(r,dict) and r.get('status')=='closed' and
+                str(r.get('close_time') or '')[:10]==day and str(r.get('close_time') or '')>=reset)
+        drawdown=max(0.,-net/anchor)
+        return {'blocked':drawdown>=policy.daily_drawdown_pct,'drawdown':drawdown,
+                'net_pnl':net,'day_anchor':anchor,'basis':basis,
+                'threshold':policy.daily_drawdown_pct,'day':day,'reason':'lifecycle_ledger_daily_loss'}
+    except (OSError,ValueError,TypeError,KeyError,sqlite3.Error):
+        return {'blocked':False,'drawdown':None,'net_pnl':None,'reason':'ledger_unavailable'}
 
 
 def monotonic_stop(side, old, new, current):

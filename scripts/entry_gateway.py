@@ -219,9 +219,6 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     if (recorded_execution and recorded_execution!=active_execution["signature"]) or (active_execution["execution"]["id"]=="small300" and not recorded_execution):
         raise risk.RiskRejected("Execution preset changed since inference; require a fresh decision")
     policy=risk.load_policy()
-    ledger_gate=risk.ledger_daily_drawdown(policy)
-    if ledger_gate.get('blocked'):
-        raise risk.RiskRejected(f"日内亏损熔断：{ledger_gate.get('net_pnl',0):.2f}U / 阈值 {ledger_gate.get('threshold',0):.2%}")
     if minute_engine:
         from scripts.demo_scalp_policy import descriptor, execution_policy
         if decision.get('entry_policy') != descriptor():
@@ -261,6 +258,11 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     balances=_request('GET','/api/v5/account/balance',{},env)
     if len(balances)!=1: raise risk.RiskRejected('Invalid account balance snapshot')
     observed_equity=equity_guard(env,balances[0],policy)
+    # The ledger gate uses the freshly reconciled USDT day anchor, not an old
+    # account baseline or a stale preflight observation.
+    ledger_gate=risk.ledger_daily_drawdown(policy)
+    if ledger_gate.get('blocked'):
+        raise risk.RiskRejected(f"日内亏损熔断：{ledger_gate.get('net_pnl',0):.2f}U / 阈值 {ledger_gate.get('threshold',0):.2%}")
     usdt=next((d for d in balances[0].get('details',[]) if d.get('ccy')=='USDT'),{})
     available=risk.number(usdt.get('availEq') or usdt.get('availBal'),positive=True)
     algos=read_algo_orders(env,priority='risk',force=True) if any(abs(risk.number(p.get('pos') or 0))>0 for p in positions) else []
