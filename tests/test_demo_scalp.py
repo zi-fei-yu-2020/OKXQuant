@@ -51,23 +51,87 @@ class MinuteScalpTests(unittest.TestCase):
         result=entry_candidates.catalog(p)
         self.assertTrue(any(x['setup']=='scalp_reversal_1m' for x in result['plans']),result)
 
-    def test_range_market_generates_additional_1m_reversion_candidate(self):
-        p=minute_package();p.update(macro_4h='4H_MACRO_RANGE',structure_1h='1H_SWING_CHOP',
-                                    price=99.5,bidPx=99.49,askPx=99.51)
+    @staticmethod
+    def range_package(side='long'):
+        p=minute_package()
+        p.update(macro_4h='4H_MACRO_RANGE',structure_1h='1H_SWING_CHOP',
+                 price=99.6,bidPx=99.59,askPx=99.61)
         rows=p['entry_candles']['15M']['rows']
         for row in rows: row.update(open=100,high=102,low=98,close=100)
         rows[-2].update(open=99.0,high=100,low=98.0,close=98.8)
         rows[-1].update(open=98.8,high=100,low=98.5,close=99.5)
+        rows=p['entry_candles']['1M']['rows']
+        for row in rows[-7:-1]:row.update(open=99.1,high=99.4,low=98.7,close=99.1)
+        rows[-2].update(open=99.4,high=99.5,low=98.9,close=99.1)
+        rows[-1].update(open=98.9,high=99.8,low=98.4,close=99.6,volume=160)
+        if side=='short':
+            for frame in p['entry_candles'].values():
+                for row in frame['rows']:
+                    row.update(open=200-row['open'],close=200-row['close'],
+                               high=200-row['low'],low=200-row['high'])
+            p.update(price=100.4,bidPx=100.39,askPx=100.41)
+        return p
+
+    def test_range_market_generates_independent_1m_reversion_and_momentum(self):
+        for side in ('long','short'):
+            with self.subTest(side=side):
+                p=self.range_package(side);before=copy.deepcopy(p)
+                result=entry_candidates.catalog(p)
+                plans={x['setup']:x for x in result['plans']}
+                self.assertIn('scalp_breakout_1m',plans,result)
+                self.assertIn('scalp_pullback_1m',plans,result)
+                self.assertIn('scalp_range_reversion_1m',plans,result)
+                self.assertEqual(len(set(x['id'] for x in plans.values())),3)
+                plan=plans['scalp_range_reversion_1m']
+                self.assertEqual(plan['target_basis'],'observed_15m_opposite_range_boundary')
+                self.assertFalse(plan['target_observation']['extrapolated'])
+                self.assertEqual(plan['stop_basis'],'range_boundary_reclaim_plus_volatility_buffer')
+                self.assertEqual(entry_candidates.validate_live_quote(p,plan['id'],p['price']),plan)
+                row=demo_scalp.materialize(p,plan,p['data_as_of'],risk_policy.Policy())
+                self.assertTrue(row['decision']['contract_valid'],row)
+                self.assertEqual(p,before)
+
+    def test_confirmed_range_reclaim_must_survive_final_quote_on_both_sides(self):
+        for side in ('long','short'):
+            with self.subTest(side=side):
+                p=self.range_package(side)
+                plan=next(q for q in entry_candidates.catalog(p)['plans']
+                          if q['setup']=='scalp_range_reversion_1m')
+                self.assertIsNotNone(plan['reentry_level'])
+                lost=plan['reentry_level']+(-.02 if side=='long' else .02)
+                with self.assertRaisesRegex(ValueError,'program_range_reclaim_lost'):
+                    entry_candidates.validate_live_quote(p,plan['id'],lost)
+
+    def test_4h_trend_with_1h_chop_does_not_impersonate_a_range(self):
+        p=self.range_package();p['macro_4h']='4H_MACRO_BULL (trend)'
+        setups={q['setup'] for q in entry_candidates.catalog(p)['plans']}
+        self.assertIn('scalp_breakout_1m',setups)
+        self.assertIn('scalp_pullback_1m',setups)
+        self.assertNotIn('scalp_range_reversion_1m',setups)
+        self.assertIn('scalp_trend_pause_reclaim_1m',setups)
+
+    def test_trend_pause_candidate_is_separate_and_ranked_below_confirmed_range(self):
+        p=self.range_package();p['macro_4h']='4H_MACRO_BULL (trend)'
+        plans=entry_candidates.catalog(p)['plans']
+        self.assertTrue(any(x['setup']=='scalp_trend_pause_reclaim_1m' for x in plans))
+        self.assertFalse(any(x['setup']=='scalp_range_reversion_1m' for x in plans))
+        plan=next(x for x in plans if x['setup']=='scalp_trend_pause_reclaim_1m')
+        self.assertEqual(plan['signal_quality'],'edge_observation')
+        self.assertTrue(demo_scalp.materialize(p,plan,p['data_as_of'],risk_policy.Policy())['decision']['contract_valid'])
+
+    def test_reversion_requires_edge_rejection_and_quote_near_closed_trigger(self):
+        p=self.range_package();rows=p['entry_candles']['1M']['rows']
+        rows[-1].update(open=99.3,high=99.8,low=99.25,close=99.6)
+        rows[-2].update(open=99.4,high=99.5,low=99.05,close=99.1)
         result=entry_candidates.catalog(p)
-        plans=[x for x in result['plans'] if x['setup']=='scalp_range_reversion_1m']
-        self.assertEqual(len(plans),1,result)
-        plan=plans[0]
-        self.assertEqual(plan['target_basis'],'observed_15m_opposite_range_boundary')
-        self.assertFalse(plan['target_observation']['extrapolated'])
-        self.assertEqual(plan['stop_basis'],'range_boundary_reclaim_plus_volatility_buffer')
-        self.assertEqual(entry_candidates.validate_live_quote(p,plan['id'],p['price']),plan)
-        row=demo_scalp.materialize(p,plan,p['data_as_of'],risk_policy.Policy())
-        self.assertTrue(row['decision']['contract_valid'],row)
+        self.assertTrue(any(q['signal_quality']=='edge_observation' for q in result['plans']
+                            if q['setup']=='scalp_range_reversion_1m'))
+        self.assertFalse(any(q['signal_quality']=='confirmed_edge_reclaim' for q in result['plans']))
+        p=self.range_package();p.update(bidPx=98.79,askPx=98.81)
+        result=entry_candidates.catalog(p)
+        self.assertTrue(any(q['signal_quality']=='edge_observation' for q in result['plans']
+                            if q['setup']=='scalp_range_reversion_1m'))
+        self.assertFalse(any(q['signal_quality']=='confirmed_edge_reclaim' for q in result['plans']))
 
     def test_no_trigger_and_missing_minute_data_never_force_entry(self):
         p=minute_package();p['entry_candles']['1M']['rows'][-1].update(open=100,close=100,high=101,low=99)

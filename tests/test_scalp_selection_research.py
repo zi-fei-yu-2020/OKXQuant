@@ -71,6 +71,43 @@ class RankingTests(unittest.TestCase):
         self.assertEqual(audit['candidates_removed'],0)
         self.assertEqual(audit['metrics']['reversion']['market_regime'],'range_chop')
 
+    def test_trend_pause_cannot_be_mislabeled_as_a_range(self):
+        p=minute_package();p.update(macro_4h='4H_MACRO_BULL (trend)',
+                                    structure_1h='1H_SWING_CHOP')
+        base=entry_candidates.catalog(p)['plans'][0]
+        breakout={**base,'id':'breakout','setup':'scalp_breakout_1m'}
+        pullback={**base,'id':'pullback','setup':'scalp_pullback_1m'}
+        selected,audit=ranking.rank([(p,breakout),(p,pullback)],vars(Policy()))
+        self.assertEqual(audit['metrics']['breakout']['market_regime'],'trend_pause')
+        self.assertEqual(audit['new_order'][0],'pullback')
+        self.assertEqual(len(selected),2)
+        self.assertEqual(audit['candidates_removed'],0)
+
+    def test_confirmed_range_reclaim_ranks_above_edge_observation(self):
+        p=minute_package();p.update(macro_4h='4H_MACRO_RANGE',structure_1h='1H_SWING_CHOP')
+        base=entry_candidates.catalog(p)['plans'][0]
+        confirmed={**base,'id':'confirmed','setup':'scalp_range_reversion_1m',
+                   'signal_quality':'confirmed_edge_reclaim'}
+        probe={**base,'id':'probe','setup':'scalp_range_reversion_1m',
+               'signal_quality':'edge_observation'}
+        ranked,audit=ranking.rank([(p,probe),(p,confirmed)],vars(Policy()))
+        self.assertEqual(audit['new_order'][0],'confirmed')
+        self.assertEqual(audit['candidates_removed'],0)
+        self.assertEqual(len(ranked),2)
+
+    def test_weak_breakout_ranks_below_strong_breakout_without_veto(self):
+        p=minute_package();base=entry_candidates.catalog(p)['plans'][0]
+        stronger=copy.deepcopy(p);stronger['instId']='STRONG-USDT-SWAP'
+        weak=copy.deepcopy(p);weak['instId']='WEAK-USDT-SWAP'
+        # Same geometry and 5M trend; compare closed 1M breakout strength.
+        stronger['entry_candles']['1M']['rows'][-1].update(open=100,high=102,low=99.9,close=101.9)
+        weak['entry_candles']['1M']['rows'][-1].update(open=100,high=102,low=99.9,close=100.2)
+        a=ranking.describe(stronger,{**base,'id':'strong','instrument':stronger['instId']},vars(Policy()))
+        b=ranking.describe(weak,{**base,'id':'weak','instrument':weak['instId']},vars(Policy()))
+        self.assertEqual(a['status'],b['status'])
+        self.assertGreater(a['terms']['breakout_quality'],b['terms']['breakout_quality'])
+        self.assertGreater(a['score'],b['score'])
+
     def test_trend_regime_prioritizes_breakout_without_removing_pullbacks(self):
         p=minute_package();p.update(macro_4h='4H_MACRO_BULL',structure_1h='1H_SWING_BULL')
         base=entry_candidates.catalog(p)['plans'][0]

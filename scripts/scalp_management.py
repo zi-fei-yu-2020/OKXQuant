@@ -5,13 +5,13 @@ Thresholds are experimental engineering rules, not calibrated trading probabilit
 from copy import deepcopy
 import math
 
-VERSION='scalp-management-v5'
-CONTEXT_VERSIONS={'scalp-management-v2','scalp-management-v4',VERSION}
+VERSION='scalp-management-v6'
+CONTEXT_VERSIONS={'scalp-management-v2','scalp-management-v4','scalp-management-v5',VERSION}
 RISK_REDUCTION_R=.75
 FOLLOW_THROUGH_R=1.2
 ALIGNED_ACTIVATION_R=.8
 COUNTERTREND_ACTIVATION_R=.6
-SETUPS={'scalp_breakout_1m','scalp_pullback_1m','scalp_reversal_1m','scalp_range_reversion_1m'}
+SETUPS={'scalp_breakout_1m','scalp_pullback_1m','scalp_reversal_1m','scalp_range_reversion_1m','scalp_trend_pause_reclaim_1m'}
 
 def number(x):
     if isinstance(x,bool):return None
@@ -25,11 +25,15 @@ def context(plan,features,*,scope,decision_id,stop):
     action=plan.get('action');side='long' if action=='BUY_LONG' else 'short' if action=='SELL_SHORT' else None
     regime=str(features.get('structure_1h') or '')
     regime_side='long' if 'BULL' in regime else 'short' if 'BEAR' in regime else None
+    macro=str(features.get('macro_4h') or '')
+    if plan['setup']=='scalp_trend_pause_reclaim_1m' and regime_side is None:
+        regime_side='long' if 'BULL' in macro else 'short' if 'BEAR' in macro else None
     return {'version':VERSION,'scope':scope,'instrument':features.get('instId'),'decision_id':decision_id,
             'candidate_id':plan.get('id'),'setup':plan['setup'],'side':side,
-            'trigger_level':plan.get('trigger_level'),'entry_atr':plan.get('entry_atr'),
+            'trigger_level':plan.get('trigger_level'),'reentry_level':plan.get('reentry_level'),
+            'entry_atr':plan.get('entry_atr'),
             'initial_stop':stop,'trigger_close_ms':plan.get('trigger_close_ms'),
-            'regime':regime,'alignment':'countertrend' if regime_side and regime_side!=side else 'aligned' if regime_side else 'range'}
+            'regime':regime,'macro_regime':macro,'alignment':'countertrend' if regime_side and regime_side!=side else 'aligned' if regime_side else 'range'}
 
 
 def adopt(tracker,saved,position,scope):
@@ -118,13 +122,19 @@ def evaluate(tracker,factor,*,entry,current,side,now,policy,tick):
                       closed_evidence=[{'close_ms':r['close_ms'],'close':r['close']} for r in bars[-2:]])
         if len(bars)<needed:return result
         # Pullbacks have more noise allowance; no-fail on mere lack of profit.
-        allowance_by_setup={'scalp_pullback_1m':.4,'scalp_breakout_1m':.35,'scalp_reversal_1m':.3,'scalp_range_reversion_1m':.45}
+        allowance_by_setup={'scalp_pullback_1m':.4,'scalp_breakout_1m':.35,'scalp_reversal_1m':.3,'scalp_range_reversion_1m':.45,'scalp_trend_pause_reclaim_1m':.45}
         allowance=max(tick*2,atr*allowance_by_setup.get(setup,.35))
-        broken=all(sign*(number(r['close'])-trigger)<-allowance for r in bars[-2:])
-        current_broken=sign*(current-trigger)<-allowance
+        # A new range-reversion thesis loses its 1M reclaim before the wider
+        # 15M boundary fails. Legacy entry contexts have no frozen reclaim level
+        # and continue using their original boundary without retrospective edits.
+        failure_level=(number(ctx.get('reentry_level')) if setup=='scalp_range_reversion_1m'
+                       and ctx.get('version')==VERSION else None)
+        failure_level=failure_level if failure_level and failure_level>0 else trigger
+        broken=all(sign*(number(r['close'])-failure_level)<-allowance for r in bars[-2:])
+        current_broken=sign*(current-failure_level)<-allowance
         if broken and current_broken and gain<0:
             result.update(state='FAILED',exit=True,reason='follow_through_lost' if peak>=risk*RISK_REDUCTION_R else 'two_closed_bars_reentered_invalidated_structure',
-                          trigger_level=trigger,invalidation_buffer=allowance)
+                          trigger_level=trigger,failure_level=failure_level,invalidation_buffer=allowance)
         else:result['reason']='structure_holding_or_recovered'
     except (ValueError,TypeError,KeyError,OverflowError):result['reason']='closed_bar_evidence_invalid'
     return result

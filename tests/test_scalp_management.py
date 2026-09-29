@@ -61,6 +61,33 @@ class ScalpManagementTests(unittest.TestCase):
         result=evaluate(t,closes=(99.5,99.4,99.3),price=99.3)
         self.assertTrue(result['exit'])
         self.assertEqual(result['state'],'FAILED')
+    def test_trend_pause_context_uses_macro_direction_when_1h_is_choppy(self):
+        p={'setup':'scalp_trend_pause_reclaim_1m','action':'SELL_SHORT','id':'pause',
+           'trigger_level':99,'entry_atr':.2}
+        ctx=sm.context(p,{'instId':INST,'structure_1h':'1H_SWING_CHOP',
+                          'macro_4h':'4H_MACRO_BULL'},scope='demo',
+                       decision_id='decision',stop=101)
+        self.assertEqual(ctx['alignment'],'countertrend')
+        self.assertEqual(ctx['macro_regime'],'4H_MACRO_BULL')
+        self.assertEqual(sm.adopt({}, {'entry_context':ctx,'decision_id':'decision','ts':600},
+                                  {'instId':INST,'posSide':'short','cTime':str(CREATED)},'demo'),True)
+
+    def test_range_reclaim_failure_is_persisted_and_old_entries_keep_original_level(self):
+        p=minute_package();p['macro_4h']='4H_MACRO_RANGE'
+        plan={'setup':'scalp_range_reversion_1m','action':'BUY_LONG','id':'range',
+              'trigger_level':99,'reentry_level':100,'entry_atr':.2}
+        ctx=sm.context(plan,{'instId':INST,'structure_1h':'1H_SWING_CHOP'},
+                       scope='demo',decision_id='decision',stop=99)
+        self.assertEqual(ctx['reentry_level'],100)
+        t=tracker(setup='scalp_range_reversion_1m')
+        t['entry_context'].update(ctx,trigger_level=99)
+        t=json.loads(json.dumps(t))
+        r=evaluate(t,closes=(99.5,99.4,99.3),price=99.3)
+        self.assertTrue(r['exit']);self.assertEqual(r['failure_level'],100)
+        t['entry_context']['version']='scalp-management-v5'
+        old=evaluate(t,closes=(99.5,99.4,99.3),price=99.3)
+        self.assertFalse(old['exit'])
+
     def test_profit_floor_covers_taker_costs_and_does_not_widen_after_restart(self):
         t=tracker();t['highWaterMark']=101.5
         r=evaluate(t,closes=(101.2,101.3),price=101.3)
@@ -161,7 +188,7 @@ class ProgressiveRiskTests(unittest.TestCase):
         self.assertEqual(r['closed_evidence'],[{'close_ms':660000,'close':99.5},{'close_ms':720000,'close':99.4}])
     def test_v2_entry_context_is_retained_but_eval_is_versioned_v3(self):
         t=tracker();t['entry_context']['version']='scalp-management-v2'
-        r=evaluate(t);self.assertTrue(r['enabled']);self.assertEqual(r['version'],'scalp-management-v5')
+        r=evaluate(t);self.assertTrue(r['enabled']);self.assertEqual(r['version'],'scalp-management-v6')
         self.assertEqual(t['entry_context']['version'],'scalp-management-v2')
 
 class RealManagerTests(unittest.TestCase):
