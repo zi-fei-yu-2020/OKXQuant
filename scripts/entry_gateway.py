@@ -344,6 +344,8 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     plan['selection_research']=decision.get('selection_research')
     plan['strategy_mode']=decision.get('strategy_mode')
     plan['setup']=frozen.get('setup') if decision.get('candidate_id') else decision.get('setup')
+    from scripts.execution_replay import geometry
+    plan['entry_geometry']=geometry(frozen if decision.get('candidate_id') else None,plan)
     if minute_engine:
         from scripts.scalp_management import context as exit_context
         plan['entry_context']=exit_context(frozen,record.get('features',{}),scope=env.identity,decision_id=decision_id,stop=plan['stop'])

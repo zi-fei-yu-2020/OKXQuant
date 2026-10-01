@@ -12,7 +12,7 @@ def same_lifecycle(a,b):
 
 
 @serialized
-def close(env,inst_id,side,observed_size,position,reason,*,request=None):
+def close(env,inst_id,side,observed_size,position,reason,*,request=None,profit_budget=None):
     if request is None:
         from okxquant_backend.okx_trade_service import _request as request
     from okxquant_backend.account_connections import assert_current
@@ -47,27 +47,54 @@ def close(env,inst_id,side,observed_size,position,reason,*,request=None):
         journal('submitted')
     except Exception as exc:
         return False,'Close preflight unavailable: '+type(exc).__name__
+    if profit_budget is not None:
+        from scripts.profit_exit_execution import attempt as passive_exit
+        passive=passive_exit(env,current,reason,profit_budget,request=request)
+        ids.extend(passive['order_ids'])
+        if passive['status']=='unknown':
+            journal('unconfirmed','passive_outcome_unknown')
+            return False,'Passive close unresolved; no fallback write'
+        if passive['status']=='terminal' or passive.get('refresh_required'):
+            try:
+                rows=request('GET','/api/v5/account/positions',{'instId':inst_id},env,timeout=2)
+                held=[p for p in rows if p.get('instId')==inst_id and p.get('posSide')==side and abs(number(p.get('pos') or 0))>0]
+                if not held:
+                    journal('confirmed');return True,'Passive profit exit confirmed'
+                if len(held)!=1 or not same_lifecycle(current,held[0]):
+                    journal('unconfirmed','lifecycle_changed');return False,'Position changed after passive exit; no fallback'
+                residual=abs(number(held[0]['pos'],positive=True))
+                original_entry=number(current['avgPx'],positive=True)
+                if residual>size+1e-8 or abs(number(held[0]['avgPx'],positive=True)-original_entry)>max(1e-8,original_entry*1e-6):
+                    journal('unconfirmed','position_increased');return False,'Position grew or entry changed after passive exit; no fallback'
+                current=held[0];size=abs(number(current['pos'],positive=True))
+            except Exception:
+                journal('unconfirmed','residual_unavailable');return False,'Passive residual unavailable; no fallback'
+            client_id='okxqc'+uuid.uuid4().hex[:27]
+            journal('submitted')
     payload={'instId':inst_id,'tdMode':'cross','posSide':side,'side':'sell' if side=='long' else 'buy',
              'ordType':'market','sz':format(size,'.15g'),'reduceOnly':True,'clOrdId':client_id}
-    error=None
+    error=None;market_ids=[]
     try:
+        assert_current(env)
         result=request('POST','/api/v5/trade/order',payload,env,timeout=10)
-        ids=[str(r['ordId']) for r in result if str(r.get('ordId') or '').isdigit() and str(r.get('sCode','0'))=='0']
+        market_ids=[str(r['ordId']) for r in result if str(r.get('ordId') or '').isdigit() and str(r.get('sCode','0'))=='0']
+        ids.extend(market_ids)
     except Exception as exc:error=type(exc).__name__
-    journal('accepted' if ids else 'unconfirmed',error)
+    journal('accepted' if market_ids else 'unconfirmed',error)
     # Reads may reconcile an uncertain ACK; they never resubmit this market order.
     deadline=time.monotonic()+8
     for _ in range(4):
         try:
-            if not ids:
+            if not market_ids:
                 receipt=request('GET','/api/v5/trade/order',{'instId':inst_id,'clOrdId':client_id},env,timeout=2)
-                ids=[str(r['ordId']) for r in receipt if r.get('clOrdId')==client_id and str(r.get('ordId') or '').isdigit()]
-                if ids:journal('accepted',error)
+                market_ids=[str(r['ordId']) for r in receipt if r.get('clOrdId')==client_id and str(r.get('ordId') or '').isdigit()]
+                if market_ids:
+                    ids.extend(market_ids);journal('accepted',error)
             rows=request('GET','/api/v5/account/positions',{'instId':inst_id},env,timeout=2)
             held=[p for p in rows if p.get('instId')==inst_id and p.get('posSide')==side and abs(number(p.get('pos') or 0))>0]
             if not held:
-                journal('confirmed' if ids else 'flat_observed',error)
-                return True,'Exchange position closed; order identity recorded' if ids else 'Flat observed; close order evidence still pending'
+                journal('confirmed' if market_ids else 'flat_observed',error)
+                return True,'Exchange position closed; order identity recorded' if market_ids else 'Flat observed; close order evidence still pending'
             if any(not same_lifecycle(current,p) for p in held):
                 journal('unconfirmed',error);return False,'New position lifecycle observed; no further close sent'
         except Exception:pass

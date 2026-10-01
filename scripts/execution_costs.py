@@ -63,3 +63,21 @@ def compare_actual(snapshot,history,fee):
                 'includes_slippage_or_funding':False,'accounting_changed':False}
     except (ValueError,TypeError,KeyError,OverflowError):
         return {'status':'unavailable','reason':'incomplete_cost_or_settlement_evidence'}
+
+
+def holding_budget(entry, current, policy, receipt=None):
+    """Price-unit exit budget; verified opening fees replace estimates."""
+    fallback=from_policy(entry,current,policy)
+    opening=fallback['entry_taker_fee'];basis='conservative_estimate'
+    if isinstance(receipt,dict) and receipt.get('status')=='verified':
+        try:
+            units=number(receipt['base_units'],True)
+            paid=float(receipt['opening_fee'])
+            if not math.isfinite(paid):raise ValueError('Invalid fee')
+            opening=max(0.,-paid)/units
+            basis='verified_opening_fills'
+        except (ValueError,TypeError,KeyError,OverflowError):pass
+    total=opening+fallback['exit_taker_fee']+fallback['slippage_budget']+fallback['spread_budget']
+    return {**fallback,'opening_cost':opening,'remaining_exit_cost':fallback['exit_taker_fee'],
+            'total_cost_distance':total,'opening_cost_basis':basis,
+            'opening_receipt':receipt if basis=='verified_opening_fills' else None}

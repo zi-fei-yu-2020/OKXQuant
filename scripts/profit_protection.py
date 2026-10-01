@@ -25,7 +25,7 @@ def activation_distance(entry, atr, thresholds, *, maker_fee=.0002, taker_fee=.0
 
 
 def floor_plan(side, entry, current, peak, initial_stop, atr, *, maker_fee=.0002,
-               taker_fee=.0005, slippage=.001, thresholds=None):
+               taker_fee=.0005, slippage=.001, thresholds=None, cost_budget=None):
     ex = thresholds if thresholds is not None else exit_policy.thresholds('standard')
     entry, current, peak, initial_stop, atr = [finite(v) for v in (entry, current, peak, initial_stop, atr)]
     if side not in ('long', 'short') or min(entry, current, peak, atr) <= 0:
@@ -35,6 +35,11 @@ def floor_plan(side, entry, current, peak, initial_stop, atr, *, maker_fee=.0002
     risk = sign * (entry - initial_stop) if initial_stop > 0 else 0
     costs = reference_at_entry(entry,{'maker_fee':maker_fee,'taker_fee':taker_fee,'slippage':slippage})
     activation = activation_distance(entry, atr, ex, maker_fee=maker_fee, taker_fee=taker_fee, slippage=slippage)
+    minimum_net=0.
+    if isinstance(cost_budget,dict) and finite(cost_budget.get('total_cost_distance'))>0:
+        costs=finite(cost_budget['total_cost_distance'])
+        minimum_net=max(0.,finite(cost_budget.get('minimum_net_profit_distance')))
+        activation=max(costs*1.5,atr*ex['tier1_breakeven_atr'],costs+minimum_net+max(entry*.001,min(atr*.25,entry*.003)))
     if gain < activation:
         return {'active': False, 'reason': 'profit_below_preset_activation',
                 'activation': activation, 'kinetic_exit': False}
@@ -43,18 +48,20 @@ def floor_plan(side, entry, current, peak, initial_stop, atr, *, maker_fee=.0002
     fraction = .55 if risk > 0 and gain >= risk else .45
     tier = 2 if gain >= ex['tier2_lock_atr'] * atr else 1
     distance = max(costs, gain * fraction, ex[f'tier{tier}_floor_atr'] * atr)
+    if minimum_net>0:distance=costs+max(minimum_net,(gain-costs)*fraction,ex[f'tier{tier}_floor_atr']*atr)
     desired = entry + sign * distance
     buffer = max(entry * .001, min(atr * .25, entry * .003))
     crossed = sign * (current - desired) <= 0
     if not crossed and sign * (current - desired) < buffer:
         desired = current - sign * buffer
-    if sign * (desired - entry) < costs:
+    if sign * (desired - entry) < costs+minimum_net:
         return {'active': False, 'reason': 'insufficient_cost_buffer',
                 'activation': activation, 'kinetic_exit': False}
     pullback = sign * (peak - current)
     kinetic = (gain >= max(activation, ex['kinetic_peak_atr'] * atr)
                and pullback >= ex['kinetic_pullback_atr'] * atr)
     return {'active': True, 'stop': desired, 'crossed': crossed, 'activation': activation,
+            'minimum_net_profit_distance':minimum_net,'retained_net_gain':sign*(desired-entry)-costs,
             'cost_buffer': costs, 'market_buffer': buffer, 'peak_gain': gain,
             'initial_risk': risk if risk > 0 else None, 'tier': tier,
             'retained_gain': sign * (desired - entry), 'kinetic_exit': kinetic,
@@ -62,7 +69,7 @@ def floor_plan(side, entry, current, peak, initial_stop, atr, *, maker_fee=.0002
 
 
 def allow_ai_tightening(side, entry, current, new_stop, atr, *, maker_fee=.0002,
-                        taker_fee=.0005, slippage=.001, thresholds=None):
+                        taker_fee=.0005, slippage=.001, thresholds=None, cost_budget=None):
     ex = thresholds if thresholds is not None else exit_policy.thresholds('standard')
     entry, current, new_stop, atr = [finite(v) for v in (entry, current, new_stop, atr)]
     if side not in ('long', 'short') or min(entry, current, new_stop, atr) <= 0:
@@ -71,6 +78,10 @@ def allow_ai_tightening(side, entry, current, new_stop, atr, *, maker_fee=.0002,
     costs = reference_at_entry(entry,{'maker_fee':maker_fee,'taker_fee':taker_fee,'slippage':slippage})
     buffer = max(entry * .001, min(atr * .25, entry * .003))
     activation = activation_distance(entry, atr, ex, maker_fee=maker_fee, taker_fee=taker_fee, slippage=slippage)
+    minimum_net=0.
+    if isinstance(cost_budget,dict) and finite(cost_budget.get('total_cost_distance'))>0:
+        costs=finite(cost_budget['total_cost_distance']);minimum_net=max(0.,finite(cost_budget.get('minimum_net_profit_distance')))
+        activation=max(costs*1.5,atr*ex['tier1_breakeven_atr'],costs+minimum_net+buffer)
     return (sign * (current - entry) >= activation
-            and sign * (new_stop - entry) >= costs
+            and sign * (new_stop - entry) >= costs+minimum_net
             and sign * (current - new_stop) >= buffer)

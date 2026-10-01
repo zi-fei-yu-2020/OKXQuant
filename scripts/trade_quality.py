@@ -24,6 +24,7 @@ def record_observation(scope,position,tracker):
         'position':{k:position.get(k) for k in ('instId','posSide','posId','cTime','pos','avgPx','markPx','upl','lever')},
         'horizon':tracker.get('horizon'),'mode':tracker.get('mode'),'setup':tracker.get('setup'),
         'management_state':tracker.get('scalpManagement'),'entry_context':tracker.get('entry_context'),
+        'opening_cost_receipt':tracker.get('openingCostReceipt'),'exit_cost_budget':tracker.get('exitCostBudget'),
         'exit_evaluation':tracker.get('exitEvaluation'),'stop':tracker.get('trailingStopPx')})
 
 
@@ -77,6 +78,9 @@ def annotate(row,history,observations,executions):
     if not row['exit_market_snapshot']:gaps.append('exit_market_snapshot')
     if (row.get('fee_reconciliation') or {}).get('status')!='verified':gaps.append('fees')
     from scripts.execution_costs import compare_actual
+    from scripts.execution_replay import analyze
+    row['joint_execution_replay']=analyze(row.get('entry_geometry'),history,samples,
+        fees_verified=(row.get('fee_reconciliation') or {}).get('status')=='verified')
     row['cost_comparison']=compare_actual(row.get('execution_cost_model'),history,row.get('fee')) if (row.get('fee_reconciliation') or {}).get('status')=='verified' else {'status':'unavailable','reason':'fees_not_verified'}
     row.update(evidence_status='partial' if gaps else 'complete',evidence_gaps=gaps,loss_classification=loss_class(row))
     return row

@@ -60,7 +60,7 @@ FEE_EVIDENCE_FIELDS = ('open_fee', 'close_fee', 'fee_allocation', 'fee_reconcili
 ORIGIN_EVIDENCE_FIELDS = ('strategy', 'strategy_evidence', 'source_status', 'strategy_decision_id',
     'decision_id', 'candidate_id', 'strategy_version', 'setup', 'opening_features', 'news_snapshot',
     'evidence_status', 'decision_horizon', 'execution_horizon', 'strategy_engine',
-    'execution_cost_model', 'selection_research', 'strategy_type', 'horizon')
+    'execution_cost_model', 'entry_geometry', 'selection_research', 'strategy_type', 'horizon')
 ATTRIBUTION_EVIDENCE_FIELDS = ('exit_reason', 'exit_source', 'exit_evidence', 'attribution_status',
                               'close_order_ids', 'close_order_sources', 'attribution_note')
 

@@ -481,12 +481,12 @@ def query_positions(timeout=20) -> Tuple[bool, List[Dict[str, Any]], str]:
     return True, result["data"], ""
 
 
-def close_position_confirmed(inst_id: str, pos_side: str, before_size: float, *, exit_reason='strategy_close', position=None) -> Tuple[bool, str]:
+def close_position_confirmed(inst_id: str, pos_side: str, before_size: float, *, exit_reason='strategy_close', position=None, profit_budget=None) -> Tuple[bool, str]:
     """Close a position and verify at the exchange before changing local state."""
     env=market._selected()
     if getattr(env,"configured",False) and position and position.get("posId") and position.get("cTime"):
         from scripts.close_execution import close
-        return close(env,inst_id,pos_side,before_size,position,exit_reason)
+        return close(env,inst_id,pos_side,before_size,position,exit_reason,profit_budget=profit_budget)
     # Pre-cancel any conflicting pending/reduce-only orders for this instrument to release available size
     try:
         ord_res = run_cmd_result(okx_private_command(f"okx swap orders --instId {inst_id} --json"), timeout=10)
@@ -1547,13 +1547,21 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
     from scripts.risk_policy import load_policy
     try: policy=load_policy()
     except (ValueError, OSError, TypeError): policy=None
+    from scripts.holding_costs import refresh as refresh_opening_costs
+    from scripts.execution_costs import holding_budget
+    opening_costs=refresh_opening_costs(curr_pos,t,market._selected().identity,ct_val,now_ts)
+    t['exitCostBudget']=holding_budget(entry_px,cur_px,policy,opening_costs) if policy is not None else None
     if not t.get('initialRiskStopPx'):
         original=float(t.get('exchangeStopPx') or t.get('trailingStopPx') or 0)
         if original>0 and ((is_long and original<entry_px) or (not is_long and original>entry_px)):
             t['initialRiskStopPx']=original
+    if t.get('exitCostBudget'):
+        initial_distance=max(0.,(entry_px-float(t.get('initialRiskStopPx') or entry_px))*(1 if is_long else -1))
+        t['exitCostBudget'].update(identity=t.get('positionIdentity'),tick=f.get('tickSz'),
+            minimum_net_profit_distance=max(initial_distance*.2,exit_atr*.25,_float_or_zero(f.get('tickSz'))*2))
     protection=floor_plan('long' if is_long else 'short',entry_px,cur_px,
         t['highWaterMark'] if is_long else t['lowWaterMark'],t.get('initialRiskStopPx'),
-        exit_atr,taker_fee=policy.taker_fee,slippage=policy.slippage,thresholds=ex) if policy is not None else {'active':False,'reason':'cost_policy_unavailable'}
+        exit_atr,taker_fee=policy.taker_fee,slippage=policy.slippage,thresholds=ex,cost_budget=t.get('exitCostBudget')) if policy is not None else {'active':False,'reason':'cost_policy_unavailable'}
     # Only a frozen, lifecycle-bound minute context selects v2 management.
     # Unknown/manual/legacy 15M positions retain their existing protective exits.
     management={}
@@ -1562,6 +1570,9 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
         management=evaluate_scalp(t,f,entry=entry_px,current=cur_px,side='long' if is_long else 'short',
                                   now=now_ts,policy=policy,tick=f.get('tickSz'))
         t['scalpManagement']=management
+        if management.get('enabled') and t.get('exitCostBudget'):
+            t['exitCostBudget'].update(identity=t.get('positionIdentity'),tick=f.get('tickSz'),
+                minimum_net_profit_distance=management['minimum_net_profit_distance'])
         if management.get('enabled'):
             protection=management['protection']
             t['stage_desc']={'INITIAL_CONFIRMATION':'等待收盘结构确认','FOLLOW_THROUGH':'结构延续',
@@ -1680,7 +1691,7 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
                        f"价格浮盈 {cur_profit_px/exit_atr if exit_atr>0 else 0:.3f} ATR < {ex['time_stop_profit_atr']:g} ATR，时间退出")
         if minute_timeout: time_reason = "程序短线持仓已满60分钟，执行时间退出"
         t['lastExitAttempt'] = exit_evidence
-        closed, close_detail = close_position_confirmed(inst_id, "long" if is_long else "short", pos_sz, exit_reason='time_exit', position=curr_pos)
+        closed, close_detail = close_position_confirmed(inst_id, "long" if is_long else "short", pos_sz, exit_reason='time_exit', position=curr_pos,profit_budget=t.get('exitCostBudget'))
         if not closed:
             executed_actions.append(f"[{name}] {time_reason}，平仓失败，仓位仍保留: {close_detail}")
             return False, "平仓失败"
@@ -1713,7 +1724,7 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
     if protection.get('kinetic_exit'):
         exit_evidence = {**t['exitEvaluation'], 'rule': 'trailing_exit'}
         t['lastExitAttempt'] = exit_evidence
-        closed, close_detail = close_position_confirmed(inst_id, "long" if is_long else "short", pos_sz, exit_reason='trailing_exit', position=curr_pos)
+        closed, close_detail = close_position_confirmed(inst_id, "long" if is_long else "short", pos_sz, exit_reason='trailing_exit', position=curr_pos,profit_budget=t.get('exitCostBudget'))
         if not closed:
             executed_actions.append(f"[{name}] 动能回撤止盈失败，仓位仍保留: {close_detail}")
             return False, "平仓失败"
@@ -1721,6 +1732,10 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
         pnl_val = curr_pos["upl"]
         reason = (f"预设 {t['exitPolicyStatus']['preset_id']}：峰值浮盈 {peak_profit_px/exit_atr:.3f} ATR，"
                   f"回撤 {protection['pullback']/exit_atr:.3f} ATR >= {ex['kinetic_pullback_atr']:g} ATR")
+        if protection.get('normal_profit_reason'):
+            reason={
+                'range_target_approach':'区间反转接近对侧边界，兑现净盈利',
+                'confirmed_continuation_exhaustion':'连续收盘确认动量衰减，兑现净盈利'}.get(protection['normal_profit_reason'],reason)
         executed_actions.append(f"[{name}] 🎯 {reason}，动能止盈已确认 (平仓前浮盈参考 {pnl_val:+.2f}U，结算以账本为准)")
         record_trade({
             "is_trade": True, "time": timestamp_full, "inst": name, "name": name,
@@ -1811,7 +1826,7 @@ def execute_ai_position_management(real_pos_dict, trackers, timestamp_full, exec
                 executed_actions.append(f"[{name}] Cost policy unavailable; retain existing cloud stop")
                 continue
             tightens_risk=allow_ai_tightening(pos_side,avg_px,current_px,new_sl,atr_val,
-                taker_fee=policy.taker_fee,slippage=policy.slippage,thresholds=ex)
+                taker_fee=policy.taker_fee,slippage=policy.slippage,thresholds=ex,cost_budget=tracker.get('exitCostBudget'))
 
             if not tightens_risk:
                 executed_actions.append(f"[{name}] 浮盈空间不足或与现价缓冲过近({current_px} vs 拟调SL {new_sl})，未满足预设浮盈启动、成本保本或最小行情缓冲")
