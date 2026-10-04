@@ -4,7 +4,7 @@ Momentum targets are volatility projections; range-edge targets use sealed 15M b
 import hashlib
 import json
 
-VERSION = 'scalp-minute-v7'
+VERSION = 'scalp-minute-v8'
 
 
 def catalog(package, policy):
@@ -90,6 +90,10 @@ def catalog(package, policy):
                   'invalidation':{'price':stop,'timeframe':'1M',
                                   'condition':'One-minute structural stop breached'},
                   'order_authorized':False}
+            from scripts.structure_targets import calibrate_stop,layers
+            series={'1M':one,'5M':five,'15M':bias}
+            calibrate_stop(plan,series,policy)
+            plan['target_layers']=layers(plan,{'5M':five,'15M':bias},policy)
             plan['id']=hashlib.sha256(json.dumps(plan,sort_keys=True,
                                   ensure_ascii=False,allow_nan=False).encode()).hexdigest()[:24]
             result['plans'].append(plan)

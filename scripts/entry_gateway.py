@@ -349,6 +349,9 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     if minute_engine:
         from scripts.scalp_management import context as exit_context
         plan['entry_context']=exit_context(frozen,record.get('features',{}),scope=env.identity,decision_id=decision_id,stop=plan['stop'])
+    elif candidate_id and horizon=='swing':
+        from scripts.swing_management import context as exit_context
+        plan['entry_context']=exit_context(frozen,record.get('features',{}),scope=env.identity,decision_id=decision_id,stop=plan['stop'])
     if minute_engine:
         slot=int(record['as_of_ms'])//900000
         plan['entry_engine']='demo_scalp_v2'

@@ -1504,6 +1504,8 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
     t = trackers[pos_key]
     from scripts.scalp_management import adopt as adopt_entry_context
     adopt_entry_context(t,entry_item or load_horizon_intents().get(pos_key) or {},curr_pos,market._selected().identity)
+    from scripts.swing_management import adopt as adopt_swing_context
+    adopt_swing_context(t,entry_item or load_horizon_intents().get(pos_key) or {},curr_pos,market._selected().identity)
     # The independent guard may create a tracker before the 15M trader sees it.
     # Adopt the frozen submission mode only within this exact new position's entry window.
     saved=load_horizon_intents().get(pos_key) or {}
@@ -1514,6 +1516,9 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
     if t.get('mode',{}).get('engine') == 'demo_scalp_v2':
         from scripts.minute_exit import enrich_volatility
         enrich_volatility(f,inst_id,market)
+    elif (t.get('entry_context') or {}).get('version')=='swing-structure-v1':
+        from scripts.minute_exit import enrich_swing
+        enrich_swing(f,inst_id,market)
     global CURRENT_HORIZON
     CURRENT_HORIZON = str(t.get('horizon','swing')).lower()
     # Exit volatility must follow the persisted position mode. Without this
@@ -1527,6 +1532,8 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
     setup=str(t.get('setup') or 'unknown')
     volatility = exit_policy.volatility(f)
     exit_atr = volatility['value']
+    if (t.get('entry_context') or {}).get('version')=='swing-structure-v1' and _float_or_zero(f.get('atr_1h'))>0:
+        exit_atr=float(f['atr_1h']);volatility={'value':exit_atr,'source':'atr_1h'}
     t['exitVolatility'] = {**volatility, 'observed_at': now_ts}
     t["currentSz"] = pos_sz
     if "entryTs" not in t:
@@ -1577,13 +1584,28 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
             protection=management['protection']
             t['stage_desc']={'INITIAL_CONFIRMATION':'等待收盘结构确认','FOLLOW_THROUGH':'结构延续',
                              'COST_PROTECTED':'费用后保本保护','PROFIT_LOCK':'浮盈锁定','RISK_REDUCED':'风险已收缩（未净保本）','FAILED':'收盘结构失效'}.get(management['state'],'持有监控中')
-    t['exitEvaluation'] = {**protection, 'management_version':management.get('version') if management.get('enabled') else None, 'policy': dict(t['exitPolicyStatus']), 'atr': dict(t['exitVolatility'])}
+    elif policy is not None and CURRENT_HORIZON=='swing':
+        from scripts.swing_management import evaluate as evaluate_swing
+        management=evaluate_swing(t,f,entry=entry_px,current=cur_px,side='long' if is_long else 'short',
+                                  now=now_ts,policy=policy,tick=f.get('tickSz'),thresholds=ex)
+        t['swingManagement']=management
+        if management.get('enabled'):
+            protection=management['protection']
+            t['exitCostBudget'].update(minimum_net_profit_distance=management['minimum_net_profit_distance'])
+        elif (t.get('entry_context') or {}).get('version')=='swing-structure-v1':
+            protection={'active':False,'kinetic_exit':False,'reason':'hourly_exit_volatility_unavailable'}
+    t['exitEvaluation'] = {**protection, 'management_version':management.get('version') if management.get('enabled') else None, 'coordination':management.get('coordination'), 'policy': dict(t['exitPolicyStatus']), 'atr': dict(t['exitVolatility'])}
     if protection.get('active'):
         desired=protection['stop'];old=float(t.get('trailingStopPx') or 0)
         if not old or (desired>old if is_long else desired<old):
             t['trailingStopPx']=desired;t['localTrailingStopPx']=desired
             t['profitProtection']=protection
             t['stage_desc']='风险收缩，尚未覆盖全部成本' if protection.get('kind')=='risk_reduction' else '成本覆盖后的浮盈保护'
+
+    if t.get('exitCostBudget'):
+        armed=[_float_or_zero(t.get(k)) for k in ('trailingStopPx','exchangeStopPx')]
+        armed=[v for v in armed if v>0]
+        if armed:t['exitCostBudget']['protected_stop']=(max if is_long else min)(armed)
 
     # 1. Hard Stop Loss (loss protection is independent of profit-lock activation).
     # The tracker stop is the exchange-protection source of truth; if a legacy or
@@ -1642,8 +1664,14 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
     default_tp_dist = max(atr * profile["tp_atr_mult"], entry_px * profile["min_profit_ratio"])
     if not _float_or_zero(t.get("takeProfitPx")):
         t["takeProfitPx"] = round(entry_px + default_tp_dist if is_long else entry_px - default_tp_dist, prec)
+    # A pending normal-profit exit retains the already armed OCO instead of
+    # tightening it into the same passive quote. Hard/crossed floors above have
+    # already taken the immediate market path; an unknown close stays protected.
+    cloud_stop_for_exit=hard_stop_px
+    if protection.get('kinetic_exit') and not protection.get('crossed') and _float_or_zero(t.get('exchangeStopPx'))>0:
+        cloud_stop_for_exit=float(t['exchangeStopPx'])
     protected, protection_detail = ensure_cloud_position_protection(
-        inst_id, "long" if is_long else "short", pos_sz, float(t["takeProfitPx"]), hard_stop_px
+        inst_id, "long" if is_long else "short", pos_sz, float(t["takeProfitPx"]), cloud_stop_for_exit
     )
     if not protected and protection_detail.startswith('UNKNOWN:'):
         # A stale/transitioning algo snapshot is not an immediate close command.
@@ -1724,6 +1752,9 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
     if protection.get('kinetic_exit'):
         exit_evidence = {**t['exitEvaluation'], 'rule': 'trailing_exit'}
         t['lastExitAttempt'] = exit_evidence
+        strategy_evidence.best_effort(market._selected().identity,'normal_profit_evaluation',{
+            'position_identity':t.get('positionIdentity'),'decision_id':t.get('decision_id'),
+            'entry_context':t.get('entry_context'),'evaluation':exit_evidence,'budget':t.get('exitCostBudget')})
         closed, close_detail = close_position_confirmed(inst_id, "long" if is_long else "short", pos_sz, exit_reason='trailing_exit', position=curr_pos,profit_budget=t.get('exitCostBudget'))
         if not closed:
             executed_actions.append(f"[{name}] 动能回撤止盈失败，仓位仍保留: {close_detail}")
@@ -1735,7 +1766,9 @@ def manage_position_tp_and_trailing(f, curr_pos, trackers, timestamp_full, execu
         if protection.get('normal_profit_reason'):
             reason={
                 'range_target_approach':'区间反转接近对侧边界，兑现净盈利',
-                'confirmed_continuation_exhaustion':'连续收盘确认动量衰减，兑现净盈利'}.get(protection['normal_profit_reason'],reason)
+                'confirmed_continuation_exhaustion':'连续收盘确认动量衰减，兑现净盈利',
+                'observed_near_target_exhaustion':'近期结构目标附近动量衰减，兑现净利润',
+                'cloud_floor_preemptive_profit':'保护价尚未击穿，提前兑现净利润'}.get(protection['normal_profit_reason'],reason)
         executed_actions.append(f"[{name}] 🎯 {reason}，动能止盈已确认 (平仓前浮盈参考 {pnl_val:+.2f}U，结算以账本为准)")
         record_trade({
             "is_trade": True, "time": timestamp_full, "inst": name, "name": name,

@@ -22,6 +22,8 @@ def geometry(candidate, submission):
             'entry_atr':candidate.get('entry_atr') or ctx.get('entry_atr'),
             'contract_base_units':(submission.get('cost_model') or {}).get('contract_base_units'),
             'target_observation':candidate.get('target_observation'),
+            'target_layers':candidate.get('target_layers') or ctx.get('target_layers'),
+            'structure_stop':candidate.get('structure_stop') or ctx.get('structure_stop'),
             'trigger_close_ms':candidate.get('trigger_close_ms') or ctx.get('trigger_close_ms')}
 
 

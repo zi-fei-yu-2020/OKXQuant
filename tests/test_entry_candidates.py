@@ -89,10 +89,10 @@ class ProgramPlanTests(unittest.TestCase):
             self.assertEqual(plan['take_profit_price'],observed)
             self.assertEqual(plan['target_observation']['price'],observed)
             self.assertFalse(plan['target_observation']['extrapolated'])
-            self.assertEqual(plan['version'],'closed-candle-plans-v4')
+            self.assertEqual(plan['version'],plans.VERSION)
             # Stop basis is setup-aware: pullback_reclaim anchors to the retest structure
             # (no 1.5xATR floor), closed_range_breakout keeps the 1.5xATR volatility floor.
-            self.assertIn(plan['stop_basis'],('retest_structure_plus_volatility_buffer','max_structural_3bar_extreme_and_1.5x_atr'))
+            self.assertIn(plan['stop_basis'],('retest_structure_plus_volatility_buffer','retest_structure_plus_volatility_buffer_bounded_1h_buffer','max_structural_3bar_extreme_and_1.5x_atr'))
             if side=='short':
                 for i,r in enumerate(p['entry_candles']['1H']['rows']):r.update(open=100,close=100.05-i*.01,low=99.8)
                 result=plans.catalog(p)
@@ -148,7 +148,7 @@ class ProgramPlanTests(unittest.TestCase):
         result=plans.catalog(p)
         self.assertTrue(result['plans'], result)
         plan=result['plans'][0]
-        self.assertEqual(plan['stop_basis'],'retest_structure_plus_volatility_buffer')
+        self.assertTrue(plan['stop_basis'].startswith('retest_structure_plus_volatility_buffer'))
         self.assertGreater(abs(plan['stop_loss_price']-plan['entry_price']), 0.25*3.0)
 
     def test_range_boundary_reversion_creates_observable_candidate(self):

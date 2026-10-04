@@ -50,6 +50,10 @@ def close(env,inst_id,side,observed_size,position,reason,*,request=None,profit_b
     if profit_budget is not None:
         from scripts.profit_exit_execution import attempt as passive_exit
         passive=passive_exit(env,current,reason,profit_budget,request=request)
+        from scripts import strategy_evidence as evidence
+        evidence.best_effort(env.identity,'profit_exit_route',{'attempt_id':attempt,
+            'position_identity':profit_budget.get('identity'),'exit_reason':reason,
+            'passive_result':passive,'fallback_allowed':passive['status']!='unknown'})
         ids.extend(passive['order_ids'])
         if passive['status']=='unknown':
             journal('unconfirmed','passive_outcome_unknown')

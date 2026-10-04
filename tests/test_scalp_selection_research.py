@@ -39,7 +39,8 @@ class CostModelTests(unittest.TestCase):
         self.assertEqual(costs.compare_actual(None,{},-1)['status'],'unavailable')
     def test_generated_candidate_prices_counts_and_ids_match_reference_formula(self):
         def reference(entry,exit_price,policy,spread=0):
-            return {'maker_taker_total':entry*policy['maker_fee']+exit_price*policy['taker_fee']+entry*policy['slippage']+spread}
+            conservative=entry*(2*policy['taker_fee']+policy['slippage'])+spread if entry==exit_price else entry*policy['taker_fee']+exit_price*policy['taker_fee']+entry*policy['slippage']+spread
+            return {'maker_taker_total':entry*policy['maker_fee']+exit_price*policy['taker_fee']+entry*policy['slippage']+spread,'taker_taker_total':conservative}
         from test_entry_candidates import package
         for factory in (minute_package,package):
             for side in ('long','short'):

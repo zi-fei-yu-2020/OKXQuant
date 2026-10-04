@@ -23,7 +23,7 @@ def record_observation(scope,position,tracker):
     evidence.best_effort(scope,'position_observation',{'identity':identity(position,scope),
         'position':{k:position.get(k) for k in ('instId','posSide','posId','cTime','pos','avgPx','markPx','upl','lever')},
         'horizon':tracker.get('horizon'),'mode':tracker.get('mode'),'setup':tracker.get('setup'),
-        'management_state':tracker.get('scalpManagement'),'entry_context':tracker.get('entry_context'),
+        'management_state':tracker.get('scalpManagement') or tracker.get('swingManagement'),'entry_context':tracker.get('entry_context'),
         'opening_cost_receipt':tracker.get('openingCostReceipt'),'exit_cost_budget':tracker.get('exitCostBudget'),
         'exit_evaluation':tracker.get('exitEvaluation'),'stop':tracker.get('trailingStopPx')})
 

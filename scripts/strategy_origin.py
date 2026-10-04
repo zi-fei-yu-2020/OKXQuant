@@ -30,7 +30,7 @@ def index(scope):
                 decision_horizon=horizon
                 execution_horizon=plan.get('horizon')
                 if execution_horizon in {'scalp','swing'}:horizon=execution_horizon
-                title={'pullback_reclaim':'趋势回踩' if version in {'closed-candle-plans-v3','closed-candle-plans-v4'} else '回收反弹（旧规则）',
+                title={'pullback_reclaim':'趋势回踩' if version in {'closed-candle-plans-v3','closed-candle-plans-v4','closed-candle-plans-v5'} else '回收反弹（旧规则）',
                        'closed_range_breakout':'收盘突破','scalp_breakout_1m':'程序1分突破','scalp_pullback_1m':'程序1分回踩','scalp_reversal_1m':'程序1分转向','scalp_range_reversion_1m':'\u7a0b\u5e8f1\u5206\u533a\u95f4\u53cd\u8f6c','scalp_trend_pause_reclaim_1m':'\u7a0b\u5e8f1\u5206\u8d8b\u52bf\u6574\u7406\u56de\u6536','model_independent':'模型独立方案'}.get(setup,'已关联模型方案')
                 for oid in ids:result[oid]={'strategy':title,'strategy_evidence':'opening_fill_order_decision_link','decision_id':did,'candidate_id':d.get('candidate_id'),'setup':setup,'strategy_type':setup,'horizon':horizon,'decision_horizon':decision_horizon,'execution_horizon':execution_horizon,'strategy_engine':plan.get('entry_engine') or 'ai_trader','candidate_version':version,'execution_cost_model':plan.get('cost_model'),'selection_research':plan.get('selection_research'),'strategy_version':record.get('strategy_version'),'opening_features':record.get('features',{}),'news_snapshot':record.get('news_snapshot',{}),'instId':plan.get('instId'),'side':plan.get('side')}
                 for oid in ids:result[oid]['entry_geometry']=entry_geometry

@@ -9,7 +9,7 @@ import hashlib
 import json
 import math
 
-VERSION = 'closed-candle-plans-v4'
+VERSION = 'closed-candle-plans-v5'
 # Entry-quality guardrails: do not sell the exhausted tail of a move or buy the
 # panic low. These are deterministic filters, not probability claims.
 MIN_PULLBACK_ATR = 0.35
@@ -209,6 +209,11 @@ def _swing_catalog(package, policy=None):
                          {'ref':'/entry_candles/15M/last/close','value':bar['close'],'interpretation':'已收盘的回收/突破触发，不等待所有慢周期指标同时同向'}],
                       'invalidation':{'price':stop,'timeframe':'15M','condition':'价格突破结构失效点（回踩防守）或1.5倍ATR波动率防线（突破追势），候选失效'},
                       'order_authorized':False}
+                plan.update(entry_atr=atr,entry_atr_1h=atr_1h,
+                            trigger_level=prev['close'] if setup in {'pullback_reclaim','range_reversion'} else level)
+                from scripts.structure_targets import calibrate_stop,layers
+                calibrate_stop(plan,{'15M':f,'1H':h},policy)
+                plan['target_layers']=layers(plan,{'15M':f,'1H':h},policy)
                 plan['id']=hashlib.sha256(json.dumps(plan,sort_keys=True,ensure_ascii=False,allow_nan=False).encode()).hexdigest()[:24]
                 result['plans'].append(plan)
         return result

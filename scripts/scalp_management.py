@@ -5,8 +5,8 @@ Thresholds are experimental engineering rules, not calibrated trading probabilit
 from copy import deepcopy
 import math
 
-VERSION='scalp-management-v7'
-CONTEXT_VERSIONS={'scalp-management-v2','scalp-management-v4','scalp-management-v5','scalp-management-v6',VERSION}
+VERSION='scalp-management-v8'
+CONTEXT_VERSIONS={'scalp-management-v2','scalp-management-v4','scalp-management-v5','scalp-management-v6','scalp-management-v7',VERSION}
 RISK_REDUCTION_R=.75
 FOLLOW_THROUGH_R=1.2
 ALIGNED_ACTIVATION_R=.8
@@ -41,6 +41,8 @@ def context(plan,features,*,scope,decision_id,stop):
             'initial_stop':stop,'trigger_close_ms':plan.get('trigger_close_ms'),
             'signal_entry':plan.get('entry_price'),'target':plan.get('take_profit_price'),
             'target_observation':deepcopy(plan.get('target_observation')),
+            'target_layers':deepcopy(plan.get('target_layers')),
+            'structure_stop':deepcopy(plan.get('structure_stop')),
             'management_profile':deepcopy(PROFILES[plan['setup']]),
             'regime':regime,'macro_regime':macro,'alignment':'countertrend' if regime_side and regime_side!=side else 'aligned' if regime_side else 'range'}
 
@@ -76,7 +78,7 @@ def evaluate(tracker,factor,*,entry,current,side,now,policy,tick):
     if receipt.get('identity')!=tracker.get('positionIdentity') or receipt.get('decision_id')!=tracker.get('decision_id'):receipt=None
     cost_model=holding_budget(entry,current,policy,receipt)
     costs=cost_model['total_cost_distance']
-    profile=ctx.get('management_profile') if ctx.get('version')==VERSION else None
+    profile=ctx.get('management_profile') if ctx.get('version') in {'scalp-management-v7',VERSION} else None
     profile=profile or PROFILES[setup]
     if not isinstance(profile,dict):return {**inactive,'reason':'management_profile_unavailable'}
     profile={field:number(profile.get(field)) for field in PROFILES[setup]}
@@ -146,6 +148,19 @@ def evaluate(tracker,factor,*,entry,current,side,now,policy,tick):
         needed=base+(1 if ctx.get('alignment')=='aligned' else 0)
         result.update(closed_bars=len(bars),required_bars=needed,last_close_ms=bars[-1]['close_ms'],
                       closed_evidence=[{'close_ms':r['close_ms'],'close':r['close']} for r in bars[-2:]])
+        from scripts.exit_coordination import complete_bars,normal_profit
+        sealed=complete_bars(rows,created,now,60000)
+        cloud=number(tracker.get('exchangeStopPx'));local=number(tracker.get('trailingStopPx'))
+        stops=[value for value in (cloud,local,number(protection.get('stop'))) if value and value>0]
+        effective=(max if sign==1 else min)(stops) if stops else None
+        coordinated=normal_profit(side=side,entry=entry,current=current,peak=entry+sign*peak,
+            atr=atr,tick=tick,costs=costs,minimum_net=minimum_net,stop=effective,
+            targets=ctx.get('target_layers'),bars=sealed)
+        result.update(coordination=coordinated,target_layers=deepcopy(ctx.get('target_layers')))
+        if coordinated['eligible']:
+            result['normal_profit_reason']=coordinated['reason']
+            protection.update(kinetic_exit=True,normal_profit_reason=coordinated['reason'],
+                              pullback=peak-gain,pullback_threshold=max(atr*.3,tick*2))
         if len(bars)<needed:return result
         # Pullbacks have more noise allowance; no-fail on mere lack of profit.
         allowance=max(tick*2,atr*profile['failure_atr'])
@@ -153,7 +168,14 @@ def evaluate(tracker,factor,*,entry,current,side,now,policy,tick):
         # 15M boundary fails. Legacy entry contexts have no frozen reclaim level
         # and continue using their original boundary without retrospective edits.
         failure_level=(number(ctx.get('reentry_level')) if setup=='scalp_range_reversion_1m'
-                       and ctx.get('version') in {'scalp-management-v6',VERSION} else None)
+                       and ctx.get('version') in {'scalp-management-v6','scalp-management-v7',VERSION} else None)
+        if setup=='scalp_reversal_1m' and ctx.get('version')==VERSION:
+            structural=ctx.get('structure_stop') or {}
+            reclaim=number(structural.get('reclaim_level'))
+            if reclaim and reclaim>0:
+                failure_level=reclaim;allowance=max(allowance,(number(structural.get('atr')) or 0)*.2)
+                confirmed=complete_bars(factor.get('closed_5m') or [],created,now,300000)
+                result['reversal_state']='CONFIRMED' if confirmed and sign*(float(confirmed[-1]['close'])-reclaim)>0 else 'PROBE'
         failure_level=failure_level if failure_level and failure_level>0 else trigger
         broken=all(sign*(number(r['close'])-failure_level)<-allowance for r in bars[-2:])
         current_broken=sign*(current-failure_level)<-allowance
