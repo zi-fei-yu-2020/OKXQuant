@@ -23,6 +23,8 @@ class MarketObservationTests(unittest.TestCase):
         self.assertEqual(row['fields']['open_interest_usd']['age_ms'],100)
         self.assertAlmostEqual(row['fields']['basis_bps']['value'],10,places=6)
         self.assertEqual(row['fields']['basis_bps']['source'],'okx_mark_vs_index')
+        self.assertEqual(row['fields']['funding_rate']['freshness_limit_ms'],300000)
+        self.assertEqual(row['fields']['open_interest_usd']['freshness_limit_ms'],60000)
         self.assertEqual(row['derivatives_history']['open_interest_usd_delta_5m'],1000000)
         self.assertEqual(row['derivatives_history']['funding_rate_delta_5m'],.00005)
 

@@ -1,5 +1,9 @@
+from pathlib import Path
+import tempfile
 import unittest
-from scripts import execution_quality as quality
+from types import SimpleNamespace
+from unittest.mock import patch
+from scripts import execution_quality as quality, strategy_evidence as evidence
 
 
 class ExecutionQualityTests(unittest.TestCase):
@@ -16,6 +20,17 @@ class ExecutionQualityTests(unittest.TestCase):
         self.assertEqual(row['partial_fill_ratio'],.25)
         self.assertAlmostEqual(row['adverse_slippage_bps'],5,places=6)
         self.assertEqual(row['entry_market_snapshot']['spread_bps'],2)
+
+    def test_record_receipts_counts_only_new_fills_and_batches_idempotently(self):
+        scope='demo-receipt-scope';env=SimpleNamespace(identity=scope)
+        submission={'client_id':'c1','order_type':'limit','plan':{'entry':100,'size':1,'side':'long'}}
+        fill={'instId':'BTC-USDT-SWAP','clOrdId':'c1','ordId':'o1','tradeId':'t1',
+              'fillPx':'100.1','fillSz':'1','ts':'1001000','execType':'T'}
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp,patch.object(evidence,'DB_PATH',Path(temp)/'evidence.db'):
+            evidence.append(scope,'entry_submission',submission)
+            self.assertEqual(quality.record_receipts(env,[fill]),1)
+            self.assertEqual(quality.record_receipts(env,[fill]),0)
+            self.assertEqual(len(evidence.export_events(scope,'execution_receipt')),1)
 
     def test_short_favorable_fill_has_negative_adverse_slippage(self):
         submission={'submitted_at':1000,'client_id':'c1','order_type':'limit','plan':{'entry':100,'size':1,'side':'short'}}

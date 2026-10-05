@@ -26,19 +26,20 @@ def number(value):
     return result
 
 
-def field(value, *, source, exchange_ts, received_at, required=True):
-    ts=number(exchange_ts);received=number(received_at)
+def field(value, *, source, exchange_ts, received_at, required=True, max_age_ms=15000):
+    ts=number(exchange_ts);received=number(received_at);limit=number(max_age_ms)
+    if limit <= 0:raise ValueError('invalid freshness limit')
     if ts > received + 1000:raise ValueError('observation timestamp is in the future')
     age=max(0.,received-ts)
     return {'value':number(value),'source':source,'exchange_ts':int(ts),'received_at':int(received),
-            'age_ms':age,'status':'fresh' if age<=15000 else 'stale',
+            'age_ms':age,'freshness_limit_ms':int(limit),'status':'fresh' if age<=limit else 'stale',
             'required_for_strategy':bool(required),'fallback_used':False}
 
 
-def unavailable(source, error_type, *, required=True):
+def unavailable(source, error_type, *, required=True, max_age_ms=15000):
     return {'value':None,'source':source,'exchange_ts':None,'received_at':int(time.time()*1000),
-            'age_ms':None,'status':'unavailable','required_for_strategy':bool(required),
-            'fallback_used':False,'error_type':str(error_type)}
+            'age_ms':None,'freshness_limit_ms':int(number(max_age_ms)),'status':'unavailable',
+            'required_for_strategy':bool(required),'fallback_used':False,'error_type':str(error_type)}
 
 
 def _read_history(limit=20000):
@@ -107,20 +108,20 @@ def collect_one(item, *, getter=None, now_ms=None, history=None):
         fields['basis_bps']=unavailable('okx_mark_vs_index',type(exc).__name__,required=False)
     try:
         row=payloads['funding']['data'][0];ts=row.get('ts') or now
-        fields['funding_rate']=field(row['fundingRate'],source='okx_public_funding_rate',exchange_ts=ts,received_at=now)
-    except Exception as exc:fields['funding_rate']=unavailable('okx_public_funding_rate',type(exc).__name__)
+        fields['funding_rate']=field(row['fundingRate'],source='okx_public_funding_rate',exchange_ts=ts,received_at=now,max_age_ms=300000)
+    except Exception as exc:fields['funding_rate']=unavailable('okx_public_funding_rate',type(exc).__name__,max_age_ms=300000)
     try:
         row=payloads['oi']['data'][0];ts=row.get('ts') or now
-        fields['open_interest_usd']=field(row['oiUsd'],source='okx_public_open_interest',exchange_ts=ts,received_at=now)
-    except Exception as exc:fields['open_interest_usd']=unavailable('okx_public_open_interest',type(exc).__name__)
+        fields['open_interest_usd']=field(row['oiUsd'],source='okx_public_open_interest',exchange_ts=ts,received_at=now,max_age_ms=60000)
+    except Exception as exc:fields['open_interest_usd']=unavailable('okx_public_open_interest',type(exc).__name__,max_age_ms=60000)
     try:
         row=payloads['ls']['data'][0]
-        fields['long_short_ratio']=field(row[1],source='okx_rubik_long_short',exchange_ts=row[0],received_at=now,required=False)
-    except Exception as exc:fields['long_short_ratio']=unavailable('okx_rubik_long_short',type(exc).__name__,required=False)
+        fields['long_short_ratio']=field(row[1],source='okx_rubik_long_short',exchange_ts=row[0],received_at=now,required=False,max_age_ms=600000)
+    except Exception as exc:fields['long_short_ratio']=unavailable('okx_rubik_long_short',type(exc).__name__,required=False,max_age_ms=600000)
     try:
         row=payloads['taker']['data'][0]
-        fields['taker_net_volume']=field(number(row[1])-number(row[2]),source='okx_rubik_taker_volume',exchange_ts=row[0],received_at=now,required=False)
-    except Exception as exc:fields['taker_net_volume']=unavailable('okx_rubik_taker_volume',type(exc).__name__,required=False)
+        fields['taker_net_volume']=field(number(row[1])-number(row[2]),source='okx_rubik_taker_volume',exchange_ts=row[0],received_at=now,required=False,max_age_ms=600000)
+    except Exception as exc:fields['taker_net_volume']=unavailable('okx_rubik_taker_volume',type(exc).__name__,required=False,max_age_ms=600000)
     record={'version':VERSION,'instId':inst,'observed_at_ms':now,'fields':fields}
     record['derivatives_history']=derive(record,history or [])
     required=[value for value in fields.values() if value.get('required_for_strategy')]

@@ -65,15 +65,28 @@ def receipt(scope, fill, submission):
 
 def record_receipts(env, fills):
     from scripts import strategy_evidence as evidence
-    by_client,by_order=_submission_index(env.identity);recorded=0
+    by_client,by_order=_submission_index(env.identity)
+    candidates={}
     for fill in fills:
         source=by_client.get(str(fill.get('clOrdId') or '')) or by_order.get(str(fill.get('ordId') or ''))
         if not source:continue
         try:item=receipt(env.identity,fill,source)
         except (ValueError,TypeError,KeyError,OverflowError):continue
         identity='execution-receipt:'+env.identity+':'+(item['trade_id'] or item['bill_id'] or item['order_id']+':'+str(item['fill_ts_ms']))
-        evidence.append(env.identity,'execution_receipt',item,identity);recorded+=1
-    return recorded
+        candidates.setdefault(identity,item)
+    if not candidates:return 0
+    identities=list(candidates)
+    placeholders=','.join('?' for _ in identities)
+    try:
+        with evidence.connection() as db:
+            existing={row[0] for row in db.execute(
+                f"SELECT id FROM events WHERE scope=? AND kind='execution_receipt' AND id IN ({placeholders})",
+                (env.identity,*identities)).fetchall()}
+    except sqlite3.Error:
+        existing=set()
+    pending=[(identity,candidates[identity]) for identity in identities if identity not in existing]
+    if pending:evidence.append_batch(env.identity,'execution_receipt',pending)
+    return len(pending)
 
 
 def _existing_markouts(scope):
