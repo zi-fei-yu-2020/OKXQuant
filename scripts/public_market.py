@@ -29,9 +29,11 @@ INDICATOR_DEFAULTS = {"ADX": [14], "KDJ": [9, 3, 3], "BBWIDTH": [20, 2], "CMF": 
 # path -> (permitted query parameters, freshness seconds, minimum request gap)
 POLICY = {
     "/api/v5/market/ticker": ({"instId"}, 2.0, .12),
+    "/api/v5/market/index-tickers": ({"instId", "quoteCcy"}, 5.0, .12),
     "/api/v5/market/books": ({"instId", "sz"}, 2.0, .12),
     "/api/v5/market/candles": ({"instId", "bar", "limit"}, 5.0, .08),
     "/api/v5/public/instruments": ({"instId", "instType"}, 30.0, .12),
+    "/api/v5/public/mark-price": ({"instId", "instType", "uly", "instFamily"}, 5.0, .12),
     "/api/v5/public/funding-rate": ({"instId"}, 10.0, .12),
     "/api/v5/public/open-interest": ({"instId", "instType"}, 10.0, .12),
     "/api/v5/rubik/stat/contracts/long-short-account-ratio": ({"ccy", "period"}, 10.0, .45),

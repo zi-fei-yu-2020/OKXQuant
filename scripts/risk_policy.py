@@ -29,6 +29,10 @@ class Policy:
     slippage: float = .001
     minimum_net_rr: float = 2
     max_entry_distance_pct: float = .02
+    max_entry_spread_bps: float = 8
+    minimum_depth_multiple: float = 3
+    orderbook_max_age_ms: float = 5000
+    minimum_cost_edge_multiple: float = 2.5
     max_leverage: float = 5
     scalp_max_leverage: float = 20  # Independent DEMO short-horizon ceiling.
 
@@ -144,7 +148,7 @@ def floor_step(value, step):
     return float((Decimal(str(value))/Decimal(str(step))).to_integral_value(rounding=ROUND_FLOOR)*Decimal(str(step)))
 
 def order_plan(*, metadata, side, entry, stop, take_profit, requested_size, budget_usdt,
-               equity, available, leverage, policy=None, existing_margin=0, portfolio=None):
+               equity, available, leverage, policy=None, existing_margin=0, portfolio=None, spread=0):
     policy=policy or Policy()
     ct,lot,minimum,tick=linear_metadata(metadata)
     entry,stop,take_profit,equity,available,leverage = [number(x,positive=True) for x in (entry,stop,take_profit,equity,available,leverage)]
@@ -158,7 +162,7 @@ def order_plan(*, metadata, side, entry, stop, take_profit, requested_size, budg
     if distance >= entry/leverage*.8: raise RiskRejected('Stop exceeds conservative leverage buffer')
     # Keep the existing admission scenario explicitly labelled; a limit order may take liquidity.
     from scripts.execution_costs import from_policy
-    costs=from_policy(entry,max(stop,take_profit),policy)
+    costs=from_policy(entry,max(stop,take_profit),policy,spread=spread)
     cost_per_contract=ct*costs['maker_taker_total']
     unit_risk=ct*distance+cost_per_contract
     unit_reward=ct*abs(take_profit-entry)-cost_per_contract

@@ -54,7 +54,7 @@ test('chart uses public SDK updates and keeps its data request independent of th
  for(const forbidden of ['_chartStore','_addData','window.__klineChart','POST','close-position','amend-order'])assert.ok(!source.includes(forbidden),forbidden)
  assert.equal(CHART_INDICATORS.length,12)
  const store=readFileSync(new URL('../src/stores/dashboard.ts',import.meta.url),'utf8')
- assert.ok(store.includes('/api/all?_t='));assert.ok(store.includes('startPolling(intervalMs = 3000)'))
+ assert.ok(store.includes('/api/all?_t='));assert.ok(store.includes('startPolling(intervalMs = 10000)'))
 })
 test('only one chart dependency is introduced and it stays lazy-loaded',()=>{
  const pkg=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'))

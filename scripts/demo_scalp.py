@@ -31,7 +31,8 @@ def chosen_entries(packages, policy, *, include_rank=False):
         p['strategy_engine']='demo_scalp_v2'
         result=entry_candidates.catalog(p, vars(policy))
         diagnostics.append({'instrument':p['instId'],'checks':result['checks'],'error':result.get('error'),
-                            'candidate_count':len(result['plans'])})
+                            'candidate_count':len(result['plans']),
+                            'shadow_candidate_count':sum(1 for plan in result['plans'] if plan.get('shadow_only'))})
         for plan in result['plans']:
             candidates.append((p, plan))
     # A deterministic rank, not an empirical win probability. Rank BEFORE submission.
@@ -41,6 +42,9 @@ def chosen_entries(packages, policy, *, include_rank=False):
 
 
 def materialize(package, plan, now, policy=None):
+    if (plan.get('shadow_only') or plan.get('setup') == 'scalp_range_reversion_1m'
+            or plan.get('signal_quality') == 'edge_observation'):
+        raise ValueError('shadow_only_candidate_not_authorized_for_order')
     proposal={'action':plan['action'],'candidate_id':plan['id'],'confidence':0,
               'summary_reason':'程序短线：5M结构确认后，1M收盘触发，按净成本、目标距离与收盘结构择优',
               'counter_evidence_status':'none_observed','counter_evidence':[],
@@ -95,8 +99,15 @@ def run(*, observe_only=False):
             p['environment_support']=support['items'][p['instId']];p['news_snapshot']=news
         policy=load_policy(); candidates,diagnostics,ranking=chosen_entries(packages,policy,include_rank=True)
         from scripts.scalp_ranking import legacy_key
+        shadow_candidates=[(p,q) for p,q in candidates if q.get('shadow_only')]
+        executable_candidates=[(p,q) for p,q in candidates if not q.get('shadow_only')]
         result={'status':'observed' if observe_only else 'evaluated','engine':'demo_scalp_v2',
-                'mode':env.mode,'at':now,'ranking_observed_at':time.time(),'candidate_count':len(candidates),'checks':diagnostics,'selected':None,'ranking':ranking,
+                'mode':env.mode,'at':now,'ranking_observed_at':time.time(),'candidate_count':len(candidates),
+                'shadow_candidate_count':len(shadow_candidates),'executable_candidate_count':len(executable_candidates),
+                'shadow_candidates':[{'instrument':p['instId'],'candidate_id':q.get('id'),'setup':q.get('setup'),
+                                      'signal_quality':q.get('signal_quality'),'reason':q.get('shadow_reason')}
+                                     for p,q in shadow_candidates],
+                'checks':diagnostics,'selected':None,'ranking':ranking,
                 'entry_policy':__import__('scripts.demo_scalp_policy',fromlist=['descriptor']).descriptor()}
         if observe_only: return result
         with writer(timeout=5):
@@ -125,7 +136,7 @@ def run(*, observe_only=False):
                     occupied={p['instId'] for p in positions if abs(float(p.get('pos') or 0))>0}
                     occupied.update(o['instId'] for o in pending['data'])
                     limits=trader.execution_limits()
-                    eligible=[(p,q) for p,q in candidates if p['instId'] not in occupied]
+                    eligible=[(p,q) for p,q in candidates if p['instId'] not in occupied and not q.get('shadow_only')]
                     if len(occupied)>=limits['max_positions']:
                         result.update(status='position_limit')
                     elif eligible:
@@ -160,6 +171,8 @@ def run(*, observe_only=False):
                             risk_budget_usdt=budget,decision_id=row['decision_id'],decision_at=p['data_as_of'],
                             allow_demo_translation=False,horizon='scalp',setup=plan.get('setup'))
                         result.update(status='submitted' if accepted else 'execution_rejected',detail=detail,decision_id=row['decision_id'])
+                    elif shadow_candidates and not executable_candidates:
+                        result.update(status='shadow_only',reason='all_candidates_require_forward_validation')
             evidence.best_effort(env.identity,'demo_scalp_cycle',result)
             from scripts.ledger_monitor import atomic
             atomic('demo_scalp_status.json',result)

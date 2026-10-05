@@ -12,6 +12,7 @@ from scripts.okx_runtime import OKXEnvironment
 from test_strategy_risk import META
 
 
+from test_market_helpers import orderbook
 def config(**kwargs):
     return pool.Config(**{'enabled':True,'dedicated_account_confirmed':True,'virtual_cap_acknowledged':True,**kwargs})
 
@@ -183,7 +184,10 @@ class PoolAdmissionTests(unittest.TestCase):
                 'details':[{'ccy':'USDT','eq':'5000','availEq':'5000','liab':'0'}]}]
             if path.endswith('/leverage-info'):return [{'posSide':'long','lever':'3'}]
             raise AssertionError('Unexpected endpoint '+path)
-        def public(url,**kwargs):return {'data':[self.meta] if '/instruments?' in url else [{'last':'100','ts':str(int(time.time()*1000))}]}
+        def public(url,**kwargs):
+            if '/instruments?' in url:return {'data':[self.meta]}
+            if '/books?' in url:return orderbook(100)
+            return {'data':[{'last':'100','ts':str(int(time.time()*1000))}]}
         with patch.object(entry_gateway,'_request',side_effect=private),patch.object(entry_gateway.public_market,'get_json',side_effect=public):
             plan,client=entry_gateway.prepare(self.env,inst_id=self.meta['instId'],side='long',entry=100,stop=94,take_profit=125,
                 requested_size=100,budget=15,decision_id=identity,decision_at=time.time())

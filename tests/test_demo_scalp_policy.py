@@ -12,6 +12,7 @@ from test_demo_scalp import minute_package
 from test_strategy_risk import META
 
 
+from test_market_helpers import orderbook
 def sampling_package():
     p=minute_package()
     p['entry_candles']['1M']['rows'][-2]['low']=96.5
@@ -56,7 +57,9 @@ class DemoPolicyTests(unittest.TestCase):
             if path.endswith('/leverage-info'):return [{'posSide':'long','lever':str(exchange_leverage[0])}]
             self.fail(path)
         def public(url,**kwargs):
-            return {'data':[meta] if '/instruments?' in url else [{'last':str(p['price']),'ts':str(int(now*1000))}]}
+            if '/instruments?' in url:return {'data':[meta]}
+            if '/books?' in url:return orderbook(p['price'],ts_ms=now*1000)
+            return {'data':[{'last':str(p['price']),'ts':str(int(now*1000))}]}
         with tempfile.TemporaryDirectory() as temp,patch.object(evidence,'DB_PATH',Path(temp)/'ev.db'),patch.object(trade_lock,'PATH',Path(temp)/'lock'),             patch.object(entry_gateway.time,'time',return_value=now),patch.object(demo_scalp,'enabled',return_value=True),             patch.object(entry_gateway,'_request',side_effect=private),patch.object(entry_gateway.public_market,'get_json',side_effect=public),             patch.object(risk_policy,'load_policy',return_value=base):
             did=evidence.append(env.identity,'decision',{'instrument':p['instId'],'features':p,'decision':row['decision'],
                 'as_of_ms':int(p['data_as_of']*1000),'position_basis':{'size':0}})
@@ -80,6 +83,30 @@ class DemoPolicyTests(unittest.TestCase):
             # A missing decision STILL fails before querying or submitting any order.
             with self.assertRaisesRegex(risk_policy.RiskRejected,'Decision evidence not found'):
                 entry_gateway.prepare(env,**{**kwargs,'decision_id':'absent'})
+
+    def test_shadow_candidate_is_rejected_before_market_or_account_reads(self):
+        p=sampling_package();base=risk_policy.Policy();now=p['data_as_of']+8
+        executable=entry_candidates.catalog(p,vars(base))['plans'][0]
+        row=demo_scalp.materialize(p,executable,now,base)
+        shadow={**executable,'id':'shadow-only-fixture','shadow_only':True,
+                'setup':'scalp_range_reversion_1m','signal_quality':'edge_observation'}
+        row['decision']['candidate_id']=shadow['id']
+        row['decision']['entry_plans']={'plans':[shadow]}
+        env=OKXEnvironment('demo','fake','fake','fake')
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(evidence,'DB_PATH',Path(temp)/'ev.db'), \
+             patch.object(trade_lock,'PATH',Path(temp)/'lock'), \
+             patch.object(entry_gateway.time,'time',return_value=now), \
+             patch.object(demo_scalp,'enabled',return_value=True), \
+             patch.object(entry_gateway,'_request') as private, \
+             patch.object(entry_gateway.public_market,'get_json') as public:
+            did=evidence.append(env.identity,'decision',{'instrument':p['instId'],'features':p,
+                'decision':row['decision'],'as_of_ms':int(p['data_as_of']*1000),'position_basis':{'size':0}})
+            with self.assertRaisesRegex(risk_policy.RiskRejected,'Shadow-only'):
+                entry_gateway.prepare(env,inst_id=p['instId'],side='long',entry=shadow['entry_price'],
+                    stop=shadow['stop_loss_price'],take_profit=shadow['take_profit_price'],requested_size=1,
+                    budget=15,decision_id=did,decision_at=p['data_as_of'],horizon='scalp')
+            private.assert_not_called();public.assert_not_called()
 
     def test_legacy_candidate_engine_does_not_use_sampling_policy(self):
         from test_entry_candidates import package

@@ -3,6 +3,8 @@ import asyncio
 import json
 import time
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 import dashboard.app as dashboard
 from scripts.okx_runtime import OKXEnvironment
@@ -40,13 +42,61 @@ class DashboardRefreshTests(unittest.TestCase):
         self.assertEqual(result['account_source_id'], self.env.identity)
         refresh.assert_called_once()
 
-    def test_refresh_keeps_complete_prompt_history_and_other_full_payload_fields(self):
-        cached={**self.snapshot(),'ai_last_prompt':'FULL PROMPT','ai_brain_history':[{'time':'x','ai_last_prompt':'HISTORIC PROMPT'}],
-                'review':{'original':'FULL REVIEW'},'state_snapshot':{'data':'KEEP'},'trades':[]}
+    def test_refresh_returns_small_monitoring_projection_and_keeps_core_fields(self):
+        cached={
+            **self.snapshot(),
+            'ai_last_prompt':'FULL PROMPT' * 1000,
+            'ai_brain_history':[{'time':'x','ai_last_prompt':'HISTORIC PROMPT' * 1000,
+                                 'macro_assessment':'summary',
+                                 'council_transcript':{'advisors':{'risk':{'role_name':'risk','content':'FULL TRANSCRIPT' * 1000}}}}],
+            'review':{'original':'FULL REVIEW','ai_last_prompt':'EMBEDDED PROMPT' * 1000},
+            'state_snapshot':{'data':'KEEP'},
+            'trades':[{'id':'t1','instId':'BTC-USDT-SWAP','net_pnl':1,
+                       'opening_features':{'candles':['x' * 1000] * 100},
+                       'holding_observations':{'samples':999}}],
+            'factors':[{'instId':'BTC-USDT-SWAP','ai_last_prompt':'FACTOR PROMPT' * 1000}],
+        }
         with patch.object(dashboard,'CACHE_DATA',cached), patch.object(dashboard,'LAST_CACHE_TIME',time.time()):
-            value=json.loads(asyncio.run(dashboard.get_all_data()).body)
-        for key in ('ai_last_prompt','ai_brain_history','review','state_snapshot'):
-            self.assertEqual(value[key],cached[key])
+            response=asyncio.run(dashboard.get_all_data())
+            value=json.loads(response.body)
+        self.assertNotIn('ai_last_prompt', value)
+        self.assertNotIn('ai_last_prompt', value['review'])
+        self.assertNotIn('ai_last_prompt', value['factors'][0])
+        self.assertEqual(value['state_snapshot'], cached['state_snapshot'])
+        self.assertEqual(value['payload_profile'], 'monitoring-summary-v1')
+        self.assertNotIn('opening_features', value['trades'][0])
+        self.assertNotIn('holding_observations', value['trades'][0])
+        self.assertNotIn('ai_last_prompt', value['ai_brain_history'][0])
+        self.assertNotIn('content', value['ai_brain_history'][0]['council_transcript']['advisors']['risk'])
+        self.assertLess(len(response.body), 20_000)
+
+    def test_deferred_prompt_and_ai_history_details_remain_available(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prompt_file=Path(temp_dir) / 'prompt.txt'
+            history_file=Path(temp_dir) / 'history.json'
+            prompt_file.write_text('FULL PROMPT', encoding='utf-8')
+            record={'time':'2026-10-06 01:00:00','macro_assessment':'summary',
+                    'council_transcript':{'advisors':{'risk':{'role_name':'risk','content':'FULL TRANSCRIPT'}}}}
+            history_file.write_text(json.dumps([record]), encoding='utf-8')
+            history_id=dashboard._history_id(record)
+            with patch.object(dashboard,'AI_LAST_PROMPT_FILE',str(prompt_file)), \
+                 patch.object(dashboard,'AI_HISTORY_FILE',str(history_file)):
+                prompt=json.loads(asyncio.run(dashboard.get_ai_last_prompt()).body)
+                summaries=json.loads(asyncio.run(dashboard.get_ai_history()).body)
+                detail=json.loads(asyncio.run(dashboard.get_ai_history_detail(history_id)).body)
+        self.assertEqual(prompt['prompt'],'FULL PROMPT')
+        self.assertEqual(summaries['items'][0]['history_id'],history_id)
+        self.assertNotIn('content',summaries['items'][0]['council_transcript']['advisors']['risk'])
+        self.assertEqual(detail['council_transcript']['advisors']['risk']['content'],'FULL TRANSCRIPT')
+
+    def test_trade_list_is_compact_but_detail_keeps_audit_evidence(self):
+        row={'id':'trade-1','environment_id':self.env.identity,'instId':'BTC-USDT-SWAP',
+             'net_pnl':1.2,'opening_features':{'candles':['large evidence']}}
+        with patch.object(dashboard,'_read_ledger_rows',return_value=[row]):
+            listing=json.loads(asyncio.run(dashboard.get_trades()).body)
+            detail=json.loads(asyncio.run(dashboard.get_trade_detail('trade-1')).body)
+        self.assertNotIn('opening_features',listing['items'][0])
+        self.assertEqual(detail['opening_features'],row['opening_features'])
 
     def test_wrong_account_snapshot_is_never_served(self):
         cached = self.snapshot()

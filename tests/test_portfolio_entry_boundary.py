@@ -1,3 +1,4 @@
+from test_market_helpers import orderbook
 """Exercise the real portfolio -> protected order -> final risk boundary, no exchange writes."""
 from contextlib import ExitStack
 import copy
@@ -120,7 +121,10 @@ class PortfolioEntryBoundaryTests(unittest.TestCase):
             capital=stack.enter_context(patch.object(entry_gateway.capital_pool,'admit',side_effect=RuntimeError('reached capital admission')))
             kwargs=dict(inst_id=p['instId'],side='long',entry=plan['entry_price'],stop=plan['stop_loss_price'],take_profit=plan['take_profit_price'],requested_size=1,budget=15,decision_id=identity,decision_at=now)
             for current in (99,100):
-                def public(url,**extra):return {'data':[meta]} if '/instruments?' in url else {'data':[{'last':str(current),'ts':str(int(now*1000))}]}
+                def public(url,**extra):
+                    if '/instruments?' in url:return {'data':[meta]}
+                    if '/books?' in url:return orderbook(current,ts_ms=now*1000)
+                    return {'data':[{'last':str(current),'ts':str(int(now*1000))}]}
                 with patch.object(entry_gateway.public_market,'get_json',side_effect=public):
                     if current==99:
                         with self.assertRaisesRegex(risk_policy.RiskRejected,'program_trigger_lost'):entry_gateway.prepare(env,**kwargs)

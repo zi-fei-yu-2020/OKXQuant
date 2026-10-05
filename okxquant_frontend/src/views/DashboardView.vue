@@ -48,7 +48,7 @@ watch(
 )
 onMounted(() => {
   syncTabFromRoute()
-  store.startPolling(3000)
+  store.startPolling(10000)
   try {
     layoutMode.value = localStorage.getItem('okxquant_dashboard_layout_v2') === 'stacked' ? 'stacked' : 'dual'
   } catch {

@@ -34,6 +34,19 @@ def index(scope):
                        'closed_range_breakout':'收盘突破','scalp_breakout_1m':'程序1分突破','scalp_pullback_1m':'程序1分回踩','scalp_reversal_1m':'程序1分转向','scalp_range_reversion_1m':'\u7a0b\u5e8f1\u5206\u533a\u95f4\u53cd\u8f6c','scalp_trend_pause_reclaim_1m':'\u7a0b\u5e8f1\u5206\u8d8b\u52bf\u6574\u7406\u56de\u6536','model_independent':'模型独立方案'}.get(setup,'已关联模型方案')
                 for oid in ids:result[oid]={'strategy':title,'strategy_evidence':'opening_fill_order_decision_link','decision_id':did,'candidate_id':d.get('candidate_id'),'setup':setup,'strategy_type':setup,'horizon':horizon,'decision_horizon':decision_horizon,'execution_horizon':execution_horizon,'strategy_engine':plan.get('entry_engine') or 'ai_trader','candidate_version':version,'execution_cost_model':plan.get('cost_model'),'selection_research':plan.get('selection_research'),'strategy_version':record.get('strategy_version'),'opening_features':record.get('features',{}),'news_snapshot':record.get('news_snapshot',{}),'instId':plan.get('instId'),'side':plan.get('side')}
                 for oid in ids:result[oid]['entry_geometry']=entry_geometry
+            receipts=db.execute("SELECT id,payload FROM events WHERE scope=? AND kind='execution_receipt' ORDER BY at DESC LIMIT 10000",(scope,)).fetchall()
+            markouts=db.execute("SELECT payload FROM events WHERE scope=? AND kind='post_fill_markout' ORDER BY at DESC LIMIT 50000",(scope,)).fetchall()
+            receipt_map={}
+            for receipt_id,raw in receipts:
+                item=json.loads(raw);oid=str(item.get('order_id') or '')
+                if oid:receipt_map.setdefault(oid,[]).append({**item,'receipt_id':receipt_id})
+            markout_map={}
+            for (raw,) in markouts:
+                item=json.loads(raw);markout_map.setdefault(item.get('receipt_id'),[]).append(item)
+            for oid,value in result.items():
+                linked=receipt_map.get(oid,[])
+                value['execution_receipts']=linked
+                value['post_fill_markout']=[sample for item in linked for sample in markout_map.get(item.get('receipt_id'),[])]
             return result
     except (OSError,ValueError,TypeError,sqlite3.Error):return {}
 

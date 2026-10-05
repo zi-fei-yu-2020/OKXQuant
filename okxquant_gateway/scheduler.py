@@ -35,10 +35,12 @@ class JobSpec:
 JOBS = (
     JobSpec("position_guard", "position_guard.py", 60, 240),
     JobSpec("evidence_sync", "evidence_sync.py", 300, 60),
+    JobSpec("execution_quality", "execution_quality.py", 5, 20),
     JobSpec("ledger_sync", "ledger_monitor.py", 60, 50),
     JobSpec("trader", "ai_factor_trader.py", 15 * 60, 840),
     JobSpec("demo_scalp", "demo_scalp.py", 60, 120),
     JobSpec("factor_library", "factor_library.py", 60, 55),
+    JobSpec("market_observations", "market_observations.py", 60, 55),
     JobSpec("news", "news_sentiment_harvester.py", 10 * 60, 300),
     JobSpec("daily_briefing", "daily_summary_and_backup.py", None, 600, "briefing_times", ("08:00", "20:00")),
     JobSpec("self_improvement", "self_improvement_engine.py", None, 1200, "self_improvement_time", ("02:00", "08:00", "14:00", "20:00")),

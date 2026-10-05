@@ -1,3 +1,4 @@
+from test_market_helpers import orderbook
 """Independent trading cross-review: only this file is new; production stays read-only.
 
 Run in WSL with scripts/run_tests.py --pattern test_cross_review_trading.py.
@@ -103,7 +104,9 @@ class IsolatedTradingCase(unittest.TestCase):
             if path.endswith('/bills'):return []
             self.fail('Unexpected request: '+path)
         def public(url,**kwargs):
-            return {'data':[META]} if '/instruments?' in url else {'data':[{'last':'100','ts':str(int(AT*1000))}]}
+            if '/instruments?' in url:return {'data':[META]}
+            if '/books?' in url:return orderbook(100,ts_ms=AT*1000)
+            return {'data':[{'last':'100','ts':str(int(AT*1000))}]}
         with patch.object(account_connections,'assert_current'), \
              patch.object(profiles,'runtime',return_value=execution), \
              patch.object(prompt_library,'active_profile',return_value=profile), \

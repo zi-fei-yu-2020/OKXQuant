@@ -13,6 +13,7 @@ from scripts.dashboard_stats import today_lifecycle_stats, scoped_rows
 import os
 import json
 import time
+import hashlib
 import datetime
 import subprocess
 import shutil
@@ -20,7 +21,7 @@ import asyncio
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -45,6 +46,117 @@ AI_LAST_PROMPT_FILE = os.path.join(DATA_DIR, "ai_brain_last_prompt.txt")
 FACTOR_LIBRARY_FILE = os.path.join(DATA_DIR, "factor_library_snapshot.json")
 AI_MEMORY_MD_FILE = os.path.join(DATA_DIR, "AI_TRADING_MEMORY.md")
 DASHBOARD_CACHE_FILE = os.path.join(DATA_DIR, "dashboard_last_good.json")
+
+PUBLIC_TRADE_FIELDS = (
+    "id", "position_created_at", "environment_id", "environment", "inst", "instId",
+    "side", "lever", "strategy", "strategy_type", "strategy_engine", "strategy_version",
+    "setup", "horizon", "decision_horizon", "execution_horizon", "status",
+    "settlement_status", "open_time", "close_time", "duration", "duration_seconds",
+    "duration_bucket", "open_px", "close_px", "margin", "sz", "pnl", "gross_pnl",
+    "net_pnl", "roi", "roi_pct", "fee", "open_fee", "close_fee", "funding_fee",
+    "fee_allocation", "exit_reason", "exit_source", "attribution_note", "exit_evidence",
+    "source_status", "strategy_evidence", "loss_classification", "valuation_at",
+    "valuation_source", "confirmed_close_at",
+)
+PUBLIC_FEE_RECONCILIATION_FIELDS = (
+    "status", "reason", "currency", "basis", "matched_fills", "opening_size",
+    "closing_size", "receipt_fee", "allocated_fee", "tolerance",
+)
+_LEDGER_READ_CACHE = {"path": "", "mtime_ns": None, "size": None, "rows": []}
+_LEDGER_READ_LOCK = threading.Lock()
+
+
+def _read_ledger_rows():
+    """Read the large lifecycle ledger only when the file actually changes."""
+    try:
+        stat = os.stat(LEDGER_JSON_FILE)
+    except OSError:
+        return []
+    key = (os.path.abspath(LEDGER_JSON_FILE), stat.st_mtime_ns, stat.st_size)
+    with _LEDGER_READ_LOCK:
+        if (_LEDGER_READ_CACHE["path"], _LEDGER_READ_CACHE["mtime_ns"], _LEDGER_READ_CACHE["size"]) == key:
+            return _LEDGER_READ_CACHE["rows"]
+        try:
+            with open(LEDGER_JSON_FILE, "r", encoding="utf-8") as handle:
+                rows = json.load(handle)
+            if not isinstance(rows, list):
+                rows = []
+        except (OSError, ValueError, TypeError):
+            return []
+        _LEDGER_READ_CACHE.update(path=key[0], mtime_ns=key[1], size=key[2], rows=rows)
+        return rows
+
+
+def _public_trade_row(row):
+    if not isinstance(row, dict):
+        return {}
+    result = {key: row.get(key) for key in PUBLIC_TRADE_FIELDS if key in row}
+    reconciliation = row.get("fee_reconciliation")
+    if isinstance(reconciliation, dict):
+        result["fee_reconciliation"] = {
+            key: reconciliation.get(key)
+            for key in PUBLIC_FEE_RECONCILIATION_FIELDS
+            if key in reconciliation
+        }
+    return result
+
+
+def _history_id(item):
+    if not isinstance(item, dict):
+        return ""
+    explicit = item.get("decision_id") or item.get("id")
+    if explicit:
+        return str(explicit)
+    encoded = json.dumps(item, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:24]
+
+
+def _public_history_row(item):
+    if not isinstance(item, dict):
+        return {}
+    result = {
+        "history_id": _history_id(item),
+        "time": item.get("time") or item.get("timestamp") or "",
+        "macro_assessment": item.get("macro_assessment") or "",
+        "position_management": item.get("position_management") or [],
+        "details_available": True,
+    }
+    transcript = item.get("council_transcript")
+    if isinstance(transcript, dict):
+        def member_summary(member):
+            if not isinstance(member, dict):
+                return {}
+            return {key: member.get(key) for key in (
+                "role_id", "role_name", "model_used", "status", "duration_ms", "weight"
+            ) if key in member}
+        result["council_transcript"] = {
+            "council_mode": transcript.get("council_mode"),
+            "total_duration_ms": transcript.get("total_duration_ms"),
+            "advisors": {str(key): member_summary(value) for key, value in (transcript.get("advisors") or {}).items()},
+            "arbitrator": member_summary(transcript.get("arbitrator")),
+            "details_deferred": True,
+        }
+    else:
+        result["council_transcript"] = None
+    return result
+
+
+def _public_monitoring_snapshot(snapshot):
+    """Project the cached operational snapshot into a small polling payload."""
+    data = dict(snapshot or {})
+    data["trades"] = [_public_trade_row(row) for row in (data.get("trades") or [])]
+    data["ai_brain_history"] = [_public_history_row(row) for row in (data.get("ai_brain_history") or [])]
+    data["factors"] = [
+        {key: value for key, value in row.items() if key != "ai_last_prompt"}
+        if isinstance(row, dict) else row
+        for row in (data.get("factors") or [])
+    ]
+    data.pop("ai_last_prompt", None)
+    review = data.get("review")
+    if isinstance(review, dict) and "ai_last_prompt" in review:
+        data["review"] = {key: value for key, value in review.items() if key != "ai_last_prompt"}
+    data["payload_profile"] = "monitoring-summary-v1"
+    return data
 
 
 def get_target_instruments() -> list[dict[str, Any]]:
@@ -367,11 +479,12 @@ def _inject_local_data_into_stale(stale, positions, timestamp_full):
         except Exception:
             pass
 
-    # AI brain history — local file
+    # AI brain history: polling receives summaries; full transcripts are loaded on demand.
     if os.path.exists(AI_HISTORY_FILE):
         try:
             with open(AI_HISTORY_FILE, "r", encoding="utf-8") as f:
-                stale["ai_brain_history"] = json.load(f)
+                raw_history = json.load(f)
+            stale["ai_brain_history"] = [_public_history_row(item) for item in raw_history[:25]]
         except Exception:
             pass
 
@@ -383,13 +496,8 @@ def _inject_local_data_into_stale(stale, positions, timestamp_full):
         except Exception:
             pass
 
-    # AI last prompt — local file
-    if os.path.exists(AI_LAST_PROMPT_FILE):
-        try:
-            with open(AI_LAST_PROMPT_FILE, "r", encoding="utf-8") as f:
-                stale["ai_last_prompt"] = f.read()
-        except Exception:
-            pass
+    # Full prompts are excluded from the polling snapshot.
+    stale.pop("ai_last_prompt", None)
 
     # AI trading memory — local file
     if os.path.exists(AI_MEMORY_MD_FILE):
@@ -413,10 +521,9 @@ def _inject_local_data_into_stale(stale, positions, timestamp_full):
     local_ledger_rows = []
     if os.path.exists(LEDGER_JSON_FILE):
         try:
-            with open(LEDGER_JSON_FILE, "r", encoding="utf-8") as f:
-                from scripts.okx_runtime import selected_environment
-                local_ledger_rows = scoped_rows(json.load(f), selected_environment().identity)
-                stale["trades"] = local_ledger_rows[:60]
+            from scripts.okx_runtime import selected_environment
+            local_ledger_rows = scoped_rows(_read_ledger_rows(), selected_environment().identity)
+            stale["trades"] = [_public_trade_row(row) for row in local_ledger_rows[:60]]
         except Exception:
             pass
     try:
@@ -436,7 +543,10 @@ def _inject_local_data_into_stale(stale, positions, timestamp_full):
     from scripts import ledger_monitor, wait_audit, capital_pool, scenario_shadow, entry_opportunities
     from scripts.okx_runtime import selected_environment
     stale.update(macro_fields(DATA_DIR, history=stale.get('ai_brain_history', []), state=state_data))
-    stale['trades']=ledger_monitor.project_rows(stale.get('trades', []), selected_environment().identity)
+    stale['trades']=[
+        _public_trade_row(row)
+        for row in ledger_monitor.project_rows(stale.get('trades', []), selected_environment().identity)
+    ]
     stale['ledger_sync']=ledger_monitor.load('ledger_sync_status.json', {})
     from scripts.wait_audit import public_status as wait_status
     stale['evolution_review']=evolution_status(DATA_DIR)
@@ -1100,7 +1210,6 @@ def _update_cache_cycle():
             "confluence_15m": m_struct,
             "confluence_1h": v_oi,
             "desc": reason,
-            "ai_last_prompt": ai_info.get("ai_last_prompt", ""),
             "time_str": ai_info.get("time_str") or state_data.get("timestamp") or timestamp_full,
             "timestamp": ai_info.get("timestamp"),
         })
@@ -1112,8 +1221,7 @@ def _update_cache_cycle():
 
     if os.path.exists(LEDGER_JSON_FILE):
         try:
-            with open(LEDGER_JSON_FILE, "r", encoding="utf-8") as f:
-                ledger_trades = scoped_rows(json.load(f), environment.identity)
+            ledger_trades = scoped_rows(_read_ledger_rows(), environment.identity)
         except Exception:
             pass
     
@@ -1194,31 +1302,15 @@ def _update_cache_cycle():
         except Exception:
             pass
 
-    ai_last_prompt_text = ""
-    if os.path.exists(AI_LAST_PROMPT_FILE):
-        try:
-            with open(AI_LAST_PROMPT_FILE, "r", encoding="utf-8") as f:
-                ai_last_prompt_text = f.read()
-        except Exception:
-            pass
-
     ai_history_list = []
     if os.path.exists(AI_HISTORY_FILE):
         try:
             with open(AI_HISTORY_FILE, "r", encoding="utf-8") as f:
                 raw_history = json.load(f)
-                # Keep up to 25 records and trim heavy repeated prompts in older history
-                for idx, item in enumerate(raw_history[:25]):
-                    c = dict(item)
-                    if idx > 0 and "ai_last_prompt" in c and len(str(c["ai_last_prompt"])) > 500:
-                        c["ai_last_prompt"] = str(c["ai_last_prompt"])[:200] + "...(历史已收敛)"
-                    ai_history_list.append(c)
+                # Polling uses summaries; full transcripts are fetched on expansion.
+                ai_history_list = [_public_history_row(item) for item in raw_history[:25]]
         except Exception:
             pass
-
-    # Inject latest prompt into review payload if running under older worker
-    if isinstance(review_data, dict):
-        review_data["ai_last_prompt"] = ai_last_prompt_text
 
     factor_lib_snapshot = {}
     if os.path.exists(FACTOR_LIBRARY_FILE):
@@ -1236,21 +1328,13 @@ def _update_cache_cycle():
         except Exception:
             pass
 
-    ai_last_prompt_text = ""
-    if os.path.exists(AI_LAST_PROMPT_FILE):
-        try:
-            with open(AI_LAST_PROMPT_FILE, "r", encoding="utf-8") as f:
-                ai_last_prompt_text = f.read()
-        except Exception:
-            pass
-
     # System Disk info
     total_b, used_b, free_b = shutil.disk_usage("/")
     disk_free_gb = round(free_b / (1024 ** 3), 1)
 
     from okxquant_backend.macro_status import fields as macro_fields
-    from scripts import ledger_monitor, wait_audit, capital_pool, scenario_shadow, entry_opportunities
-    trades_table = ledger_monitor.project_rows(trades_table, environment.identity)
+    from scripts import ledger_monitor, wait_audit, capital_pool, scenario_shadow, entry_opportunities, market_observations
+    trades_table = [_public_trade_row(row) for row in ledger_monitor.project_rows(trades_table, environment.identity)]
     published_memory=memory_publication(DATA_DIR,environment.identity)
     CACHE_DATA = {
         **macro_fields(DATA_DIR, ai_decisions, ai_history_list, state=state_data),
@@ -1280,8 +1364,10 @@ def _update_cache_cycle():
         "system": {
             "disk": {
                 "free_gb": disk_free_gb
-            }
+            },
+            "market_data_health": market_observations.public_status(),
         },
+        "market_observations": market_observations.public_status(),
         "account": {
             "initial_capital": round(initial_capital_val, 2) if baseline_configured else None,
             "baseline_configured": baseline_configured,
@@ -1342,7 +1428,6 @@ def _update_cache_cycle():
         "evolution_review": evolution_status(DATA_DIR),
         "ai_trading_memory_md": published_memory.get("content",""),
         "memory_publication": published_memory,
-        "ai_last_prompt": ai_last_prompt_text,
         "snapshots": snapshots_list if baseline_configured else [],
         "state_snapshot": state_data,
         "logs": log_lines,
@@ -1572,10 +1657,69 @@ def monitoring_snapshot():
     return data
 
 
+def _read_ai_history_records():
+    try:
+        with open(AI_HISTORY_FILE, "r", encoding="utf-8") as handle:
+            rows = json.load(handle)
+        return rows if isinstance(rows, list) else []
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+@app.get("/api/trades")
+async def get_trades(limit: int = 30, offset: int = 0):
+    from scripts.okx_runtime import selected_environment
+    limit = min(100, max(1, int(limit)))
+    offset = max(0, int(offset))
+    rows = scoped_rows(_read_ledger_rows(), selected_environment().identity)
+    return JSONResponse({
+        "items": [_public_trade_row(row) for row in rows[offset:offset + limit]],
+        "total": len(rows), "limit": limit, "offset": offset,
+    }, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/trades/{trade_id}")
+async def get_trade_detail(trade_id: str):
+    from scripts.okx_runtime import selected_environment
+    rows = scoped_rows(_read_ledger_rows(), selected_environment().identity)
+    for row in rows:
+        if str(row.get("id") or "") == trade_id:
+            return JSONResponse(row, headers={"Cache-Control": "no-store"})
+    raise HTTPException(status_code=404, detail="Trade not found")
+
+
+@app.get("/api/ai/last-prompt")
+async def get_ai_last_prompt():
+    try:
+        prompt = Path(AI_LAST_PROMPT_FILE).read_text(encoding="utf-8")
+    except OSError:
+        prompt = ""
+    return JSONResponse({"prompt": prompt}, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/ai/history")
+async def get_ai_history(limit: int = 25, offset: int = 0):
+    limit = min(100, max(1, int(limit)))
+    offset = max(0, int(offset))
+    rows = _read_ai_history_records()
+    return JSONResponse({
+        "items": [_public_history_row(row) for row in rows[offset:offset + limit]],
+        "total": len(rows), "limit": limit, "offset": offset,
+    }, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/ai/history/{history_id}")
+async def get_ai_history_detail(history_id: str):
+    for row in _read_ai_history_records():
+        if _history_id(row) == history_id:
+            return JSONResponse(row, headers={"Cache-Control": "no-store"})
+    raise HTTPException(status_code=404, detail="AI history record not found")
+
+
 @app.get("/api/all")
 async def get_all_data():
     return JSONResponse(
-        monitoring_snapshot(),
+        _public_monitoring_snapshot(monitoring_snapshot()),
         headers={"Cache-Control": "no-store"},
     )
 
@@ -1583,7 +1727,7 @@ async def get_all_data():
 @app.get("/api/overview")
 async def get_overview():
     return JSONResponse(
-        monitoring_snapshot(),
+        _public_monitoring_snapshot(monitoring_snapshot()),
         headers={"Cache-Control": "no-store"},
     )
 

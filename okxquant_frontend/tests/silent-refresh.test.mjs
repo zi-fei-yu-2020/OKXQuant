@@ -84,10 +84,10 @@ test('transient and prolonged errors retain the last valid data; recovery restor
  assert.equal(h.store.account.total_eq,1005);assert.equal(h.store.error,null);assert.equal(h.store.isStale,false)
 })
 
-test('eight-second timeout clears pending work but leaves displayed data intact',async t=>{
+test('twelve-second timeout clears pending work but leaves displayed data intact',async t=>{
  const h=harness(t);await h.store.fetchDashboard(true);const previous=h.store.data
  h.setResponse((_,{signal})=>new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(new Error('timeout')),{once:true})))
- const waiting=h.store.fetchDashboard(true);await flush();await h.tick(8000);await waiting
+ const waiting=h.store.fetchDashboard(true);await flush();await h.tick(12000);await waiting
  assert.equal(h.store.data,previous);assert.equal(h.store.isRefreshing,false);assert.ok(h.store.error)
  h.setResponse(async()=>reply(good()));await h.store.fetchDashboard(true);assert.equal(h.store.error,null)
 })

@@ -1,4 +1,4 @@
-﻿import test from 'node:test'
+import test from 'node:test'
 import assert from 'node:assert/strict'
 import {readFileSync} from 'node:fs'
 import {adminPages,pageTitle,publicPages} from '../src/config/navigation.ts'
@@ -32,7 +32,6 @@ test('initial, transient and prolonged refresh delays use only the status badge'
 
 test('refresh request is bounded and cannot permanently stall single-flight polling',()=>{
  const source=read('stores/dashboard.ts')
- assert.ok(source.includes('controller.abort(), 8000'))
+ assert.ok(source.includes('controller.abort(), 12000'))
  assert.ok(source.includes('clearTimeout(timeout)'))
 })
-

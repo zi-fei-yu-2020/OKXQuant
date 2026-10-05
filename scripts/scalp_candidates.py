@@ -68,6 +68,11 @@ def catalog(package, policy):
                  'interpretation':'Observed trigger candle activity'},
                 {'ref':'/entry_candles/5M/last/close','value':five[-1]['close'],
                  'interpretation':'Observed five-minute directional structure'}]
+            shadow_reason = None
+            if setup == 'scalp_range_reversion_1m':
+                shadow_reason = 'range_reversion_forward_validation'
+            elif signal_quality == 'edge_observation':
+                shadow_reason = 'edge_observation_forward_validation'
             plan={'version':VERSION,'instrument':package['instId'],'setup':setup,'action':
                   'BUY_LONG' if sign==1 else 'SELL_SHORT',
                   'entry_price':entry,'stop_loss_price':stop,'take_profit_price':target,
@@ -77,6 +82,7 @@ def catalog(package, policy):
                   'trigger_level':level,'entry_atr':a1,'chase_atr':.6,
                   'reentry_level':reclaim if is_range else None,
                   'signal_quality':signal_quality if is_range else None,
+                  'shadow_only':bool(shadow_reason),'shadow_reason':shadow_reason,
                   'stop_basis':('range_boundary_reclaim_plus_volatility_buffer' if is_range
                                 else 'two_closed_1m_extremes_with_atr_buffer'),
                   'target_basis':('observed_15m_opposite_range_boundary' if is_range

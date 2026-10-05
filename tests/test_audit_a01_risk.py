@@ -1,3 +1,4 @@
+from test_market_helpers import orderbook
 """A01: currency/allocation semantics, environment isolation and risk invariants.
 
 Run only via scripts/run_tests.py: source snapshots contain no runtime data.
@@ -207,8 +208,9 @@ class AllocationTests(unittest.TestCase):
             raise AssertionError(path)
 
         def public(url, **kwargs):
-            return {'data': [META] if '/instruments?' in url else [
-                {'last': '100', 'ts': str(int(now * 1000))}]}
+            if '/instruments?' in url:return {'data':[META]}
+            if '/books?' in url:return orderbook(100,ts_ms=now*1000)
+            return {'data':[{'last':'100','ts':str(int(now*1000))}]}
 
         with patch.object(profiles, 'runtime', return_value=binding), \
              patch.object(risk, 'load_policy', return_value=self.policy), \

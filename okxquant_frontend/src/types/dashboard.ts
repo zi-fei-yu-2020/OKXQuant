@@ -241,6 +241,8 @@ export interface CouncilMemberResult {
 }
 
 export interface AiBrainHistoryItem {
+  history_id?: string
+  details_available?: boolean
   time: string
   macro_assessment?: string
   ai_last_prompt?: string

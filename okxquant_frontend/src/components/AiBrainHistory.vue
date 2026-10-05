@@ -10,12 +10,29 @@ const visibleCount = ref(24)
 const allHistory = computed(() => store.data?.ai_brain_history || [])
 const history = computed(() => allHistory.value.slice(0, visibleCount.value))
 const expanded = ref<Set<string>>(new Set())
-const historyKey = (item: unknown) => JSON.stringify(item)
+const loadingDetails = ref<Set<string>>(new Set())
+const historyKey = (item: any) => item?.history_id || JSON.stringify(item)
 
-function toggle(i: string) {
-  const s = new Set(expanded.value)
-  s.has(i) ? s.delete(i) : s.add(i)
-  expanded.value = s
+async function toggle(item: any) {
+  const key = historyKey(item)
+  const next = new Set(expanded.value)
+  if (next.has(key)) {
+    next.delete(key)
+    expanded.value = next
+    return
+  }
+  next.add(key)
+  expanded.value = next
+  if (!item?.history_id || item?.details_loaded || loadingDetails.value.has(key)) return
+  loadingDetails.value = new Set(loadingDetails.value).add(key)
+  try {
+    const resp = await fetch(`/api/ai/history/${encodeURIComponent(item.history_id)}`, { cache: 'no-store' })
+    if (resp.ok) Object.assign(item, await resp.json(), { details_loaded: true })
+  } finally {
+    const pending = new Set(loadingDetails.value)
+    pending.delete(key)
+    loadingDetails.value = pending
+  }
 }
 </script>
 
@@ -74,7 +91,7 @@ function toggle(i: string) {
         style="background-color: var(--bg-card-subtle); border-color: var(--border-subtle)"
       >
         <button
-          @click="toggle(historyKey(item))"
+          @click="toggle(item)"
           :aria-expanded="expanded.has(historyKey(item))"
           class="w-full flex items-center justify-between text-left cursor-pointer gap-2"
         >

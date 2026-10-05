@@ -1,3 +1,4 @@
+from test_market_helpers import orderbook
 """small300 caller ceiling vs actual 1M risk allocation and fresh reservations."""
 import json
 import tempfile
@@ -47,7 +48,9 @@ class Small300BudgetTests(unittest.TestCase):
             if path.endswith('/leverage-info'):return [{'posSide':'long','lever':'10'}]
             raise AssertionError(path)
         def public(url,**kw):
-            return {'data':[meta] if '/instruments?' in url else [{'last':str(package['price']),'ts':str(int(now*1000))}]}
+            if '/instruments?' in url:return {'data':[meta]}
+            if '/books?' in url:return orderbook(package['price'],ts_ms=now*1000)
+            return {'data':[{'last':str(package['price']),'ts':str(int(now*1000))}]}
         with patch.object(entry_gateway.time,'time',return_value=now), \
              patch.object(demo_scalp,'enabled',return_value=True), \
              patch.object(profiles,'runtime',return_value=binding), \

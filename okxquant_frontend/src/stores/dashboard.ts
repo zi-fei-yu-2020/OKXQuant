@@ -101,7 +101,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     if (generation !== refreshGeneration) return
     const controller = new AbortController()
     activeController = controller
-    const timeout = setTimeout(() => controller.abort(), 8000)
+    const timeout = setTimeout(() => controller.abort(), 12000)
     try {
       const resp = await fetch(`/api/all?_t=${Date.now()}`, {
         signal: controller.signal,
@@ -139,11 +139,22 @@ export const useDashboardStore = defineStore('dashboard', () => {
     }
   }
 
+  async function fetchLatestPrompt(): Promise<string> {
+    const existing = data.value?.ai_last_prompt?.trim()
+    if (existing) return existing
+    const resp = await fetch('/api/ai/last-prompt', { headers: { Accept: 'application/json' }, cache: 'no-store' })
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`)
+    const payload = await resp.json()
+    const prompt = typeof payload?.prompt === 'string' ? payload.prompt : ''
+    if (data.value) data.value = { ...data.value, ai_last_prompt: prompt }
+    return prompt
+  }
+
   function onVisible() {
     if (document.visibilityState === 'visible') void fetchDashboard(true)
   }
 
-  function startPolling(intervalMs = 3000) {
+  function startPolling(intervalMs = 10000) {
     stopPolling()
     void fetchDashboard(true)
     document.addEventListener('visibilitychange', onVisible)
@@ -183,6 +194,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     isStale,
     showAboutModal,
     fetchDashboard,
+    fetchLatestPrompt,
     startPolling,
     stopPolling,
   }

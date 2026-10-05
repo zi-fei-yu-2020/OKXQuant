@@ -28,7 +28,7 @@ NEWS_PATHS = {'/api/v5/orbit/news-search', '/api/v5/orbit/currency-sentiment-que
               '/api/v5/journal/smartmoney/overview'}
 READ_PATHS = {'/api/v5/account/config', '/api/v5/account/balance', '/api/v5/account/positions',
  '/api/v5/account/positions-history', '/api/v5/account/bills', '/api/v5/account/bills-archive',
- '/api/v5/account/leverage-info', '/api/v5/trade/orders-pending', '/api/v5/trade/orders-history',
+ '/api/v5/account/leverage-info', '/api/v5/account/trade-fee', '/api/v5/trade/orders-pending', '/api/v5/trade/orders-history',
  '/api/v5/trade/orders-history-archive', '/api/v5/trade/order', '/api/v5/trade/fills',
  '/api/v5/trade/fills-history', '/api/v5/trade/orders-algo-pending', '/api/v5/trade/orders-algo-history'}
 WRITE_PATHS = {'/api/v5/trade/order', '/api/v5/trade/cancel-order', '/api/v5/trade/cancel-batch-orders',

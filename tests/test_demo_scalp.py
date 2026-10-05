@@ -87,8 +87,10 @@ class MinuteScalpTests(unittest.TestCase):
                 self.assertFalse(plan['target_observation']['extrapolated'])
                 self.assertEqual(plan['stop_basis'],'range_boundary_reclaim_plus_volatility_buffer')
                 self.assertEqual(entry_candidates.validate_live_quote(p,plan['id'],p['price']),plan)
-                row=demo_scalp.materialize(p,plan,p['data_as_of'],risk_policy.Policy())
-                self.assertTrue(row['decision']['contract_valid'],row)
+                self.assertTrue(plan['shadow_only'])
+                self.assertEqual(plan['shadow_reason'],'range_reversion_forward_validation')
+                with self.assertRaisesRegex(ValueError,'shadow_only_candidate'):
+                    demo_scalp.materialize(p,plan,p['data_as_of'],risk_policy.Policy())
                 self.assertEqual(p,before)
 
     def test_confirmed_range_reclaim_must_survive_final_quote_on_both_sides(self):
@@ -117,7 +119,10 @@ class MinuteScalpTests(unittest.TestCase):
         self.assertFalse(any(x['setup']=='scalp_range_reversion_1m' for x in plans))
         plan=next(x for x in plans if x['setup']=='scalp_trend_pause_reclaim_1m')
         self.assertEqual(plan['signal_quality'],'edge_observation')
-        self.assertTrue(demo_scalp.materialize(p,plan,p['data_as_of'],risk_policy.Policy())['decision']['contract_valid'])
+        self.assertTrue(plan['shadow_only'])
+        self.assertEqual(plan['shadow_reason'],'edge_observation_forward_validation')
+        with self.assertRaisesRegex(ValueError,'shadow_only_candidate'):
+            demo_scalp.materialize(p,plan,p['data_as_of'],risk_policy.Policy())
 
     def test_reversion_requires_edge_rejection_and_quote_near_closed_trigger(self):
         p=self.range_package();rows=p['entry_candles']['1M']['rows']
@@ -132,6 +137,16 @@ class MinuteScalpTests(unittest.TestCase):
         self.assertTrue(any(q['signal_quality']=='edge_observation' for q in result['plans']
                             if q['setup']=='scalp_range_reversion_1m'))
         self.assertFalse(any(q['signal_quality']=='confirmed_edge_reclaim' for q in result['plans']))
+
+    def test_shadow_candidates_remain_ranked_for_research_but_are_identified(self):
+        p=self.range_package()
+        candidates,diagnostics,ranking=demo_scalp.chosen_entries([p],risk_policy.Policy(),include_rank=True)
+        shadows=[plan for _,plan in candidates if plan.get('shadow_only')]
+        executable=[plan for _,plan in candidates if not plan.get('shadow_only')]
+        self.assertTrue(shadows)
+        self.assertTrue(executable)
+        self.assertEqual(diagnostics[0]['shadow_candidate_count'],len(shadows))
+        self.assertEqual(ranking['candidate_count'],len(candidates))
 
     def test_no_trigger_and_missing_minute_data_never_force_entry(self):
         p=minute_package();p['entry_candles']['1M']['rows'][-1].update(open=100,close=100,high=101,low=99)

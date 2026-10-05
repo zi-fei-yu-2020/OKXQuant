@@ -201,6 +201,15 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
         if memory_basis.get('scope')!=env.identity or current_memory['prompt_hash']!=memory_basis['prompt_hash']:
             raise risk.RiskRejected('Published memory changed after inference; fresh decision required')
     candidate_id = decision.get('candidate_id')
+    if candidate_id:
+        frozen_catalog = decision.get('entry_plans') or {}
+        frozen_plans = frozen_catalog.get('plans') if isinstance(frozen_catalog, dict) else []
+        frozen_candidate = next((item for item in frozen_plans or []
+                                 if isinstance(item, dict) and item.get('id') == candidate_id), None)
+        if frozen_candidate and (frozen_candidate.get('shadow_only')
+                or frozen_candidate.get('setup') == 'scalp_range_reversion_1m'
+                or frozen_candidate.get('signal_quality') == 'edge_observation'):
+            raise risk.RiskRejected('Shadow-only candidate is not authorized for order submission')
     if not candidate_id:
         # Compatibility path for validated model-independent proposals. They
         # still go through independent direction, quote, geometry, account and
@@ -287,10 +296,21 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     if not 0 <= time.time()*1000-risk.number(ticker.get('ts'),positive=True) <= 15000:
         raise risk.RiskRejected('Final execution quote is stale or future-dated')
     if abs(entry-current)/current>policy.max_entry_distance_pct: raise risk.RiskRejected('Final limit too far from current market')
+    from scripts import execution_liquidity
+    try:
+        orderbook=execution_liquidity.fetch(
+            inst_id,ct_val=risk.linear_metadata(metadata[inst_id])[0],simulated=env.simulated,
+            now_ms=time.time()*1000,
+        )
+    except (execution_liquidity.LiquidityRejected, OSError, KeyError, TypeError, ValueError) as exc:
+        raise risk.RiskRejected('Final order-book snapshot rejected: '+str(exc)) from None
     if decision.get('candidate_id'):
         from scripts.entry_candidates import validate_live_quote
         try:
             frozen=validate_live_quote(record.get('features',{}),decision['candidate_id'],current,vars(policy))
+            if (frozen.get('shadow_only') or frozen.get('setup') == 'scalp_range_reversion_1m'
+                    or frozen.get('signal_quality') == 'edge_observation'):
+                raise ValueError('shadow_only_candidate_not_authorized_for_order')
             tick=risk.number(metadata[inst_id].get('tickSz'),positive=True)
             for key,actual in [('entry_price',entry),('stop_loss_price',stop),('take_profit_price',take_profit)]:
                 delta=abs(risk.number(actual)-frozen[key])
@@ -311,9 +331,18 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     allocation=capital_pool.admit(env,observed_equity,balances[0],positions,pending,metadata,
         inst_id=inst_id,available=available,policy=policy,leverage_reader=pending_leverage)
     allocation=cap_allocation(allocation,active_execution["execution"],positions,pending,metadata,inst_id,pending_leverage,env=env,observation=observed_equity,balance=balances[0])
+    existing_margin=sum(risk.number(p.get('imr') if p.get('imr') not in (None,'') else p.get('margin') or 0) for p in existing)
     plan=risk.order_plan(metadata=metadata[inst_id],side=side,entry=entry,stop=stop,take_profit=take_profit,
                          requested_size=requested_size,budget_usdt=budget,equity=allocation.equity,available=allocation.available,
-                         leverage=target_leverage,policy=allocation.policy,existing_margin=sum(risk.number(p.get('imr') if p.get('imr') not in (None,'') else p.get('margin') or 0) for p in existing),portfolio=portfolio)
+                         leverage=target_leverage,policy=allocation.policy,existing_margin=existing_margin,
+                         portfolio=portfolio,spread=orderbook['spread'])
+    try:
+        plan['liquidity_admission']=execution_liquidity.admit(
+            orderbook,side=side,order_size=plan['size'],entry=entry,take_profit=take_profit,
+            policy=allocation.policy,cost_model=plan['cost_model'])
+    except execution_liquidity.LiquidityRejected as exc:
+        raise risk.RiskRejected('Final liquidity admission rejected: '+str(exc)) from None
+    plan['entry_market_snapshot']=execution_liquidity.public_snapshot(orderbook)
     # Include the proposed order's realized risk in the correlated cluster check.
     if active_execution['execution']['id']=='small300' and str(inst_id).split('-')[0].upper() in {'BTC','ETH','SOL','DOGE'}:
         if portfolio.get('correlated',0.0) + plan['risk_usdt'] > allocation.equity*0.04:
@@ -382,6 +411,27 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
             try:validate_live_quote(record.get('features',{}),decision['candidate_id'],fresh_price,vars(policy))
             except (ValueError,TypeError,KeyError) as exc:
                 raise risk.RiskRejected('Signal changed during leverage confirmation: '+str(exc)) from None
+    try:
+        final_orderbook=execution_liquidity.fetch(
+            inst_id,ct_val=risk.linear_metadata(metadata[inst_id])[0],simulated=env.simulated,
+            now_ms=time.time()*1000,
+        )
+        final_risk_plan=risk.order_plan(
+            metadata=metadata[inst_id],side=side,entry=entry,stop=stop,take_profit=take_profit,
+            requested_size=requested_size,budget_usdt=budget,equity=allocation.equity,
+            available=allocation.available,leverage=actual_leverage,policy=allocation.policy,
+            existing_margin=existing_margin,portfolio=portfolio,spread=final_orderbook['spread'])
+        final_admission=execution_liquidity.admit(
+            final_orderbook,side=side,order_size=final_risk_plan['size'],entry=entry,
+            take_profit=take_profit,policy=allocation.policy,cost_model=final_risk_plan['cost_model'])
+    except (execution_liquidity.LiquidityRejected, OSError, KeyError, TypeError, ValueError) as exc:
+        raise risk.RiskRejected('Final pre-submit liquidity check rejected: '+str(exc)) from None
+    plan.update(final_risk_plan)
+    plan['liquidity_admission']=final_admission
+    plan['entry_market_snapshot']=execution_liquidity.public_snapshot(final_orderbook)
+    if active_execution['execution']['id']=='small300' and str(inst_id).split('-')[0].upper() in {'BTC','ETH','SOL','DOGE'}:
+        if portfolio.get('correlated',0.0) + plan['risk_usdt'] > allocation.equity*0.04:
+            raise risk.RiskRejected('Correlated BTC/ETH/SOL/DOGE cluster risk budget exhausted after final liquidity sizing')
     plan['leverage']=actual_leverage
     plan['leverage_verified']=True
     plan['previous_leverage']=current_leverage

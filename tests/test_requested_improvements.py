@@ -1,4 +1,5 @@
-﻿import copy
+from test_market_helpers import orderbook
+import copy
 from contextlib import ExitStack
 import importlib.util
 import json
@@ -123,7 +124,10 @@ class ExecutionPresetTests(unittest.TestCase):
             if path.endswith('/balance'):return [{'totalEq':'5000','uTime':str(int(now*1000)),'details':[{'ccy':'USDT','eq':'5000','availEq':'5000'}]}]
             if path.endswith('/leverage-info'):return [{'posSide':'long','lever':'3'}]
             return []
-        def public(url,**kwargs):return {'data':[meta]} if '/instruments?' in url else {'data':[{'last':'100','ts':str(int(now*1000))}]}
+        def public(url,**kwargs):
+            if '/instruments?' in url:return {'data':[meta]}
+            if '/books?' in url:return orderbook(100,ts_ms=now*1000)
+            return {'data':[{'last':'100','ts':str(int(now*1000))}]}
         with patch.object(entry_gateway,'_request',side_effect=private),patch.object(entry_gateway.public_market,'get_json',side_effect=public):
             plan,client=entry_gateway.prepare(env,inst_id=meta['instId'],side='long',entry=100,stop=98,take_profit=110,requested_size=1000,budget=15,decision_id=identity,decision_at=now)
         self.assertLessEqual(plan['risk_usdt'],6.0)

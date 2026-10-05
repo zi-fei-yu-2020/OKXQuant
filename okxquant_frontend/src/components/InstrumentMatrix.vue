@@ -28,9 +28,10 @@ const selectedInstrument = ref<any | null>(null)
 const drawerVisible = ref(false)
 const detailInstrument = computed(() => store.factors.find(item => item.instId === selectedInstrument.value?.instId) || selectedInstrument.value)
 
-function openDetail(item: any) {
+async function openDetail(item: any) {
   selectedInstrument.value = item
   drawerVisible.value = true
+  try { await store.fetchLatestPrompt() } catch { /* factor detail remains usable without prompt text */ }
 }
 
 function getActionStyle(action?: string) {

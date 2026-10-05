@@ -292,6 +292,8 @@ def build_lifecycle_ledger(*, notify=True):
             "execution_cost_model": origin.get("execution_cost_model"),
             "entry_geometry": origin.get("entry_geometry"),
             "selection_research": origin.get("selection_research"),
+            "execution_receipts": origin.get("execution_receipts") or [],
+            "post_fill_markout": origin.get("post_fill_markout") or [],
             "strategy_type": origin.get("strategy_type") or origin.get("setup") or "unknown",
             "horizon": origin.get("horizon", "unknown"),
             "margin": margin_usdt,

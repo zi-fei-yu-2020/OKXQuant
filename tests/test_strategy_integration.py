@@ -11,6 +11,7 @@ import ai_factor_trader as trader
 import okx_runtime
 from test_strategy_risk import META
 
+from test_market_helpers import orderbook
 class StrategyIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
@@ -30,7 +31,9 @@ class StrategyIntegrationTests(unittest.TestCase):
             self.fail('Unexpected private endpoint '+path)
         def public(url,**kwargs):
             self.assertTrue(kwargs.get('simulated'))
-            return {'data':[META] if '/instruments?' in url else [{'last':'100','ts':str(int(time.time()*1000))}]}
+            if '/instruments?' in url:return {'data':[META]}
+            if '/books?' in url:return orderbook(100)
+            return {'data':[{'last':'100','ts':str(int(time.time()*1000))}]}
         with patch.object(entry_gateway,'_request',side_effect=private),patch.object(entry_gateway.public_market,'get_json',side_effect=public):
             plan,client=entry_gateway.prepare(self.env,inst_id=META['instId'],side='long',entry=100,stop=94,take_profit=125,
                 requested_size=16,budget=15,decision_id=identity,decision_at=time.time())
@@ -50,7 +53,9 @@ class StrategyIntegrationTests(unittest.TestCase):
             if path.endswith('/leverage-info'):return [{'posSide':'long','lever':'3'}]
             self.fail(path)
         def public(url,**kwargs):
-            return {'data':[meta] if '/instruments?' in url else [{'last':'100','ts':str(int(time.time()*1000))}]}
+            if '/instruments?' in url:return {'data':[meta]}
+            if '/books?' in url:return orderbook(100)
+            return {'data':[{'last':'100','ts':str(int(time.time()*1000))}]}
         with patch.object(entry_gateway,'_request',side_effect=private),patch.object(entry_gateway.public_market,'get_json',side_effect=public):
             plan,client=entry_gateway.prepare(self.env,inst_id=META['instId'],side='long',entry=100.000024,stop=94.000016,take_profit=125.000023,
                 requested_size=1,budget=15,decision_id=identity,decision_at=time.time())
@@ -87,7 +92,11 @@ class StrategyIntegrationTests(unittest.TestCase):
 
         def public(url, **kwargs):
             self.assertTrue(kwargs.get('simulated'))
-            return {'data': [META] if '/instruments?' in url else [{'last': '120', 'ts': str(int(time.time() * 1000))}]}
+            if '/instruments?' in url:
+                return {'data': [META]}
+            if '/books?' in url:
+                return orderbook(120)
+            return {'data': [{'last': '120', 'ts': str(int(time.time() * 1000))}]}
 
         with (
             patch.object(entry_gateway, '_request', side_effect=private),
