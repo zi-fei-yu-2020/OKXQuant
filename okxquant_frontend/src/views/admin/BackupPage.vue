@@ -344,18 +344,13 @@ const toast = useToast()
                   >1. 备份内容</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><select
+                ><div
                   :id="fieldId"
-                  disabled
-                  class="w-full rounded-lg px-3 py-2 text-sm font-sans opacity-70 border"
-                  style="
-                    background-color: var(--bg-input);
-                    border-color: var(--border-subtle);
-                    color: var(--text-main);
-                  "
-                >
-                  <option>OKXQuant 系统、策略、配置与运行数据</option>
-                </select></template
+                  role="note"
+                  aria-readonly="true"
+                  class="w-full rounded-lg px-3 py-2 text-sm font-sans border"
+                  style="background-color: var(--bg-input); border-color: var(--border-subtle); color: var(--text-main)"
+                >OKXQuant 系统、策略、配置与运行数据（固定完整备份范围）</div></template
               ></AppField
             >
           </div>

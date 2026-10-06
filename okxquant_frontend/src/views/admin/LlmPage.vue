@@ -65,6 +65,7 @@ const providerForm = ref<any>({
 const testResult = ref<any>(null)
 const testLoading = ref(false)
 const testingModelId = ref<string | null>(null)
+const providerTestModel = ref('')
 
 // Remote Fetch State & Modal
 const fetchModalVisible = ref(false)
@@ -73,6 +74,8 @@ const remoteFetchResult = ref<any>(null)
 const remoteSearch = ref('')
 const customFetchUrl = ref('')
 const customFetchKey = ref('')
+const remoteTestingModelId = ref<string | null>(null)
+const remoteTestResults = ref<Record<string, any>>({})
 
 // Add / Edit Single Model Modal
 const modelModalVisible = ref(false)
@@ -169,6 +172,7 @@ function openAddProviderModal() {
   detailTab.value = 'config'
   currentView.value = 'detail'
   testResult.value = null
+  providerTestModel.value = ''
   showApiKey.value = false
 }
 
@@ -198,6 +202,7 @@ function selectProvider(p: any) {
   detailTab.value = 'config'
   currentView.value = 'detail'
   testResult.value = null
+  providerTestModel.value = p.models?.[0]?.id || ''
   showApiKey.value = false
 }
 
@@ -257,7 +262,9 @@ const toggleProviderQuick = action(async (p: any, e: Event) => {
 const saveProviderConfig = action(async () => {
   try {
     const payload = { ...providerForm.value }
-    if (!String(payload.name || '').trim()) { toast.error('请输入供应商名称'); return }
+    if (!String(payload.name || '').trim()) { toast.error('请输入供应商名称'); return false }
+    if (!String(payload.group || '').trim()) payload.group = '其他'
+    if (!String(payload.type || '').trim()) payload.type = payload.name
     if (!payload.id) {
       payload.id = payload.name
         .trim()
@@ -278,11 +285,20 @@ const saveProviderConfig = action(async () => {
         selectedProvider.value = created
       }
     }
+    return true
   } catch (err: any) {
     if (err?.silent) return
     toast.error(err.message)
+    return false
   }
 })
+
+async function saveProviderAndOpenModels() {
+  const saved = await saveProviderConfig()
+  if (!saved || !selectedProvider.value || selectedProvider.value.is_new) return
+  detailTab.value = 'models'
+  openFetchDialog()
+}
 
 const clearCurrentProviderModels = action(async () => {
   if (!selectedProvider.value) return
@@ -305,13 +321,32 @@ const clearCurrentProviderModels = action(async () => {
 // ----------------- Remote Fetch -----------------
 function openFetchDialog() {
   if (!selectedProvider.value) return
-  customFetchUrl.value = selectedProvider.value.base_url || ''
-  customFetchKey.value = ''
+  customFetchUrl.value = providerForm.value.base_url || selectedProvider.value.base_url || ''
+  customFetchKey.value = providerForm.value.api_key || ''
   remoteFetchResult.value = null
+  remoteTestResults.value = {}
+  remoteTestingModelId.value = null
   remoteSearch.value = ''
   fetchModalVisible.value = true
-  // 优化：若当前供应商已配置好 Base URL，弹窗打开时自动发起探测拉取，免除重复输入与多次点击
-  executeRemoteFetch()
+}
+
+function savedProviderId() {
+  return selectedProvider.value?.is_new ? '' : String(selectedProvider.value?.id || '')
+}
+
+function currentProviderPayload(modelId: string, model: any = {}) {
+  const payload: any = {
+    model: modelId,
+    base_url: String(providerForm.value.base_url || selectedProvider.value?.base_url || '').trim(),
+    api_format: providerForm.value.api_format || model.api_format || 'openai_chat',
+    reasoning_effort: model.reasoning_effort || model.default_effort || 'auto',
+    reasoning_type: model.reasoning_type || 'auto',
+  }
+  const providerId = savedProviderId()
+  if (providerId) payload.provider_id = providerId
+  const temporaryKey = String(providerForm.value.api_key || '').trim()
+  if (temporaryKey) payload.api_key = temporaryKey
+  return payload
 }
 
 const executeRemoteFetch = action(async () => {
@@ -319,10 +354,14 @@ const executeRemoteFetch = action(async () => {
   fetchingRemote.value = true
   remoteFetchResult.value = null
   try {
-    const payload: any = {
-      provider_id: selectedProvider.value.id,
-      base_url: customFetchUrl.value.trim() || selectedProvider.value.base_url,
+    const baseUrl = customFetchUrl.value.trim() || String(providerForm.value.base_url || '').trim()
+    if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
+      remoteFetchResult.value = { ok: false, error: '请先填写以 http:// 或 https:// 开头的 Base URL' }
+      return
     }
+    const payload: any = { base_url: baseUrl }
+    const providerId = savedProviderId()
+    if (providerId) payload.provider_id = providerId
     if (customFetchKey.value.trim()) {
       payload.api_key = customFetchKey.value.trim()
     }
@@ -339,6 +378,26 @@ const executeRemoteFetch = action(async () => {
   }
 }, false)
 
+const runRemoteModelTest = action(async (m: any) => {
+  remoteTestingModelId.value = m.id
+  remoteTestResults.value = { ...remoteTestResults.value, [m.id]: null }
+  try {
+    const payload = currentProviderPayload(m.id, m)
+    payload.base_url = customFetchUrl.value.trim() || payload.base_url
+    const temporaryKey = customFetchKey.value.trim()
+    if (temporaryKey) payload.api_key = temporaryKey
+    remoteTestResults.value = {
+      ...remoteTestResults.value,
+      [m.id]: await api('/api/v1/admin/llm/test', { method: 'POST', body: JSON.stringify(payload) }),
+    }
+  } catch (err: any) {
+    if (err?.silent) return
+    remoteTestResults.value = { ...remoteTestResults.value, [m.id]: { ok: false, error: err.message } }
+  } finally {
+    remoteTestingModelId.value = null
+  }
+}, false)
+
 const filteredRemoteModels = computed(() => {
   if (!remoteFetchResult.value?.models) return []
   const q = remoteSearch.value.trim().toLowerCase()
@@ -350,14 +409,15 @@ const filteredRemoteModels = computed(() => {
 
 const importRemoteModel = action(async (m: any, autoActivate = false) => {
   if (!selectedProvider.value) return
+  if (!savedProviderId()) { toast.warning('请先保存供应商配置，再添加模型'); return }
   try {
     const payload = {
       id: m.id,
       name: m.name || m.id,
-      provider_id: selectedProvider.value.id,
-      provider_name: selectedProvider.value.name,
-      base_url: selectedProvider.value.base_url,
-      api_format: m.api_format || selectedProvider.value.api_format || 'openai_chat',
+      provider_id: savedProviderId(),
+      provider_name: providerForm.value.name || selectedProvider.value.name,
+      base_url: customFetchUrl.value.trim() || providerForm.value.base_url || selectedProvider.value.base_url,
+      api_format: m.api_format || providerForm.value.api_format || selectedProvider.value.api_format || 'openai_chat',
       reasoning_type: m.reasoning_type || 'auto',
       reasoning_effort: m.default_effort || 'high',
       capabilities: m.capabilities || ['chat'],
@@ -384,6 +444,7 @@ const importRemoteModel = action(async (m: any, autoActivate = false) => {
 
 const importAllFilteredRemoteModels = action(async () => {
   if (!selectedProvider.value || !filteredRemoteModels.value.length) return
+  if (!savedProviderId()) { toast.warning('请先保存供应商配置，再批量添加模型'); return }
   const list = [...filteredRemoteModels.value]
   let successCount = 0
   for (const m of list) {
@@ -391,10 +452,10 @@ const importAllFilteredRemoteModels = action(async () => {
       const payload = {
         id: m.id,
         name: m.name || m.id,
-        provider_id: selectedProvider.value.id,
-        provider_name: selectedProvider.value.name,
-        base_url: selectedProvider.value.base_url,
-        api_format: m.api_format || selectedProvider.value.api_format || 'openai_chat',
+        provider_id: savedProviderId(),
+        provider_name: providerForm.value.name || selectedProvider.value.name,
+        base_url: customFetchUrl.value.trim() || providerForm.value.base_url || selectedProvider.value.base_url,
+        api_format: m.api_format || providerForm.value.api_format || selectedProvider.value.api_format || 'openai_chat',
         reasoning_type: m.reasoning_type || 'auto',
         reasoning_effort: m.default_effort || 'high',
         capabilities: m.capabilities || ['chat'],
@@ -504,22 +565,19 @@ const deleteSingleModel = action(async (modelId: string) => {
 })
 
 // ----------------- Test Connection -----------------
-const runTestModel = action(async (m: any) => {
+async function executeModelTest(modelId: string, model: any = {}) {
+  const cleanModelId = String(modelId || '').trim()
+  if (!cleanModelId) {
+    testResult.value = { ok: false, error: '请先填写要测试的模型 ID' }
+    return
+  }
   testLoading.value = true
-  testingModelId.value = m.id
+  testingModelId.value = cleanModelId
   testResult.value = null
   try {
-    const prov =
-      selectedProvider.value || cfg.value?.providers?.find((p: any) => p.id === m.provider_id)
     testResult.value = await api('/api/v1/admin/llm/test', {
       method: 'POST',
-      body: JSON.stringify({
-        model: m.id,
-        provider_id: prov?.id || m.provider_id,
-        base_url: prov?.base_url || m.base_url,
-        api_format: prov?.api_format || m.api_format || 'openai_chat',
-        reasoning_effort: m.reasoning_effort || 'auto',
-      }),
+      body: JSON.stringify(currentProviderPayload(cleanModelId, model)),
     })
   } catch (e: any) {
     if (e?.silent) return
@@ -528,7 +586,10 @@ const runTestModel = action(async (m: any) => {
     testLoading.value = false
     testingModelId.value = null
   }
-}, false)
+}
+
+const runTestModel = action(async (m: any) => executeModelTest(m.id, m), false)
+const runProviderTest = action(async () => executeModelTest(providerTestModel.value), false)
 
 function toggleCapability(cap: string) {
   const caps = modelForm.value.capabilities
@@ -757,12 +818,21 @@ const toast = useToast()
             class="rounded-xl border divide-y overflow-hidden text-sm"
             style="background-color: var(--bg-card-subtle); border-color: var(--border-subtle)"
           >
-            <!-- 供应商类型 -->
-            <div class="p-3.5 flex items-center justify-between">
-              <span class="font-medium" style="color: var(--text-main)">供应商类型</span>
-              <div class="flex items-center space-x-1" style="color: var(--text-muted)">
-                <span>{{ providerForm.type }}</span>
-                <span class="text-[var(--text-muted)]">›</span>
+            <!-- Provider type -->
+            <div class="p-3.5 grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(180px,260px)] gap-2 sm:items-center">
+              <div>
+                <label for="provider-type" class="font-medium" style="color: var(--text-main)">供应商类型</label>
+                <div class="text-xs" style="color: var(--text-faint)">用于后台分类展示，不改变 API 协议</div>
+              </div>
+              <div>
+                <input id="provider-type" v-model="providerForm.type" list="provider-type-options"
+                  :disabled="actionBusy || !canManage" placeholder="例如：OpenAI 兼容"
+                  class="w-full rounded-lg px-2.5 py-1.5 text-sm font-sans outline-none border"
+                  style="background-color: var(--bg-card); border-color: var(--border-subtle); color: var(--text-main)" />
+                <datalist id="provider-type-options">
+                  <option value="OpenAI 兼容" /><option value="OpenAI" /><option value="Anthropic" />
+                  <option value="Gemini" /><option value="聚合网关" />
+                </datalist>
               </div>
             </div>
 
@@ -774,7 +844,7 @@ const toast = useToast()
                   选择该端点底层支持的通信协议标准
                 </div>
               </div>
-              <select :disabled="actionBusy"
+              <select :disabled="actionBusy || !canManage"
                 aria-label="API 交互协议"
                 v-model="providerForm.api_format"
                 @change="onApiFormatChange"
@@ -791,25 +861,34 @@ const toast = useToast()
               </select>
             </div>
 
-            <!-- 分组 -->
-            <div class="p-3.5 flex items-center justify-between">
-              <span class="font-medium" style="color: var(--text-main)">分组</span>
-              <div class="flex items-center space-x-1" style="color: var(--text-muted)">
-                <span>{{ providerForm.group }}</span>
-                <span class="text-[var(--text-muted)]">›</span>
+            <!-- Provider group -->
+            <div class="p-3.5 grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(180px,260px)] gap-2 sm:items-center">
+              <div>
+                <label for="provider-group" class="font-medium" style="color: var(--text-main)">分组</label>
+                <div class="text-xs" style="color: var(--text-faint)">可选择常用分组，也可直接输入自定义名称</div>
+              </div>
+              <div>
+                <input id="provider-group" v-model="providerForm.group" list="provider-group-options"
+                  :disabled="actionBusy || !canManage" placeholder="例如：自定义"
+                  class="w-full rounded-lg px-2.5 py-1.5 text-sm font-sans outline-none border"
+                  style="background-color: var(--bg-card); border-color: var(--border-subtle); color: var(--text-main)" />
+                <datalist id="provider-group-options">
+                  <option value="基础供应" /><option value="自定义" />
+                  <option value="聚合网关" /><option value="其他" />
+                </datalist>
               </div>
             </div>
 
             <!-- 是否启用开关 -->
             <div class="p-3.5 flex items-center justify-between">
               <span class="font-medium" style="color: var(--text-main)">是否启用</span>
-              <AppSwitch v-model="providerForm.enabled" label="启用供应商" />
+              <AppSwitch v-model="providerForm.enabled" label="启用供应商" :disabled="actionBusy || !canManage" />
             </div>
 
             <!-- 多Key模式开关 -->
             <div class="p-3.5 flex items-center justify-between">
               <span class="font-medium" style="color: var(--text-main)">多Key模式</span>
-              <AppSwitch v-model="providerForm.multi_key_enabled" label="多 Key 模式" />
+              <AppSwitch v-model="providerForm.multi_key_enabled" label="多 Key 模式" :disabled="actionBusy || !canManage" />
             </div>
           </div>
         </div>
@@ -824,7 +903,7 @@ const toast = useToast()
                   >供应商唯一标识 (ID)</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input :disabled="actionBusy"
+                ><input :disabled="actionBusy || !canManage"
                   :id="fieldId"
                   v-model="providerForm.id"
                   placeholder="例如: openrouter 或 my-proxy"
@@ -845,7 +924,7 @@ const toast = useToast()
                   >名称</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input :disabled="actionBusy"
+                ><input :disabled="actionBusy || !canManage"
                   :id="fieldId"
                   v-model="providerForm.name"
                   placeholder="OpenAI"
@@ -872,7 +951,7 @@ const toast = useToast()
               </span>
             </div>
             <div class="relative">
-              <input :disabled="actionBusy"
+              <input :disabled="actionBusy || !canManage"
                 aria-label="供应商 API Key"
                 id="provider-api-key"
                 v-model="providerForm.api_key"
@@ -905,7 +984,7 @@ const toast = useToast()
                   >API Base URL</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input :disabled="actionBusy"
+                ><input :disabled="actionBusy || !canManage"
                   :id="fieldId"
                   v-model="providerForm.base_url"
                   placeholder="https://api.openai.com/v1"
@@ -926,7 +1005,7 @@ const toast = useToast()
                   >API 路径</span
                 ></template
               ><template #default="{ id: fieldId }"
-                ><input :disabled="actionBusy"
+                ><input :disabled="actionBusy || !canManage"
                   :id="fieldId"
                   v-model="providerForm.api_path"
                   placeholder="/chat/completions"
@@ -938,17 +1017,54 @@ const toast = useToast()
                   " /></template
             ></AppField>
           </div>
+
+
+          <div>
+            <AppField class="w-full min-w-0">
+              <template #label><span class="block text-sm font-bold mb-1.5" style="color: var(--text-muted)">说明</span></template>
+              <template #default="{ id: fieldId }">
+                <textarea :id="fieldId" v-model="providerForm.description" :disabled="actionBusy || !canManage" rows="2"
+                  placeholder="记录供应商用途、线路或计费备注（不要填写密钥）"
+                  class="w-full rounded-xl px-4 py-2.5 text-sm outline-none border transition-colors resize-y"
+                  style="background-color: var(--bg-card-subtle); border-color: var(--border-subtle); color: var(--text-main)"></textarea>
+              </template>
+            </AppField>
+          </div>
         </div>
 
-        <!-- Save Button -->
-        <div class="pt-3 pb-16 flex justify-end">
-          <button :disabled="actionBusy || !canManage"
-            @click="saveProviderConfig"
-            class="px-6 py-2 rounded-xl text-sm font-bold transition-all cursor-pointer shadow-xs btn-primary-text"
-            style="background-color: #2563eb; color: #ffffff"
-          >
-            保存供应商配置
-          </button>
+        <!-- Connection test -->
+        <div class="rounded-xl border p-4 space-y-3" style="background-color: var(--bg-card-subtle); border-color: var(--border-subtle)">
+          <div>
+            <div class="font-bold text-sm" style="color: var(--text-main)">供应商可用性测试</div>
+            <div class="text-xs mt-1" style="color: var(--text-faint)">填写一个真实模型 ID，使用当前表单中的 Base URL、协议与临时 API Key 发起最小 PING 请求；测试不会保存表单。</div>
+          </div>
+          <div class="flex flex-col sm:flex-row gap-2">
+            <input v-model="providerTestModel" :disabled="actionBusy" list="provider-known-models" aria-label="测试模型 ID"
+              placeholder="例如：gpt-5-mini 或供应商返回的模型 ID"
+              class="flex-1 min-w-0 rounded-xl px-3.5 py-2 text-sm outline-none border font-sans"
+              style="background-color: var(--bg-card); border-color: var(--border-subtle); color: var(--text-main)" />
+            <datalist id="provider-known-models"><option v-for="model in selectedProvider.models || []" :key="model.id" :value="model.id" /></datalist>
+            <button type="button" @click="runProviderTest" :disabled="actionBusy || testLoading || !providerTestModel.trim()"
+              class="px-4 py-2 rounded-xl border text-sm font-bold cursor-pointer disabled:opacity-50"
+              style="background-color: var(--bg-card); border-color: var(--border-medium); color: var(--text-main)">
+              {{ testLoading ? '测试中...' : '测试可用性' }}
+            </button>
+          </div>
+          <div v-if="testResult" role="status" class="rounded-lg border px-3 py-2 text-sm"
+            :style="{ backgroundColor: testResult.ok ? 'var(--color-up-bg)' : 'var(--color-down-bg)', borderColor: testResult.ok ? 'var(--color-up-border)' : 'var(--color-down-border)', color: testResult.ok ? 'var(--color-up)' : 'var(--color-down)' }">
+            <span v-if="testResult.ok">可用 · HTTP {{ testResult.status_code }} · {{ testResult.latency_ms }}ms · {{ testResult.api_format_name || testResult.api_format }}</span>
+            <span v-else>{{ testResult.error || '模型测试失败' }}</span>
+          </div>
+        </div>
+
+        <!-- Save actions -->
+        <div class="pt-3 pb-16 flex flex-wrap justify-end gap-2">
+          <button :disabled="actionBusy || !canManage" @click="saveProviderConfig"
+            class="px-5 py-2 rounded-xl border text-sm font-bold transition-all cursor-pointer shadow-xs"
+            style="background-color: var(--bg-card-subtle); border-color: var(--border-medium); color: var(--text-main)">保存供应商配置</button>
+          <button :disabled="actionBusy || !canManage" @click="saveProviderAndOpenModels"
+            class="px-5 py-2 rounded-xl text-sm font-bold transition-all cursor-pointer shadow-xs btn-primary-text"
+            style="background-color: #2563eb; color: #ffffff">保存并获取模型</button>
         </div>
       </div>
 
@@ -1287,32 +1403,30 @@ const toast = useToast()
           <span class="text-xs" style="color: var(--text-faint)">探测 /models 兼容端点</span>
         </div>
 
-        <!-- Probe Configuration (仅当需要微调或端点无预存 Key 时作为高级选项展开) -->
-        <div
-          class="p-3 rounded-xl border space-y-2 shrink-0 text-sm"
-          style="background-color: var(--bg-card-subtle); border-color: var(--border-subtle)"
-        >
-          <div class="flex items-center justify-between">
-            <div class="flex items-center space-x-2">
-              <span class="font-bold text-xs" style="color: var(--text-main)">探测端点:</span>
-              <span class="font-sans text-xs text-blue-400">{{
-                customFetchUrl || selectedProvider?.base_url
-              }}</span>
-            </div>
-            <div class="flex items-center space-x-1.5">
-              <span v-if="selectedProvider?.has_key" class="text-xs text-emerald-400 font-bold">
-                ✓ 使用已存凭证
-              </span>
-              <button
-                @click="executeRemoteFetch"
-                :disabled="(fetchingRemote) || actionBusy"
-                class="flex items-center space-x-1.5 px-3 py-1 rounded-lg text-sm font-bold transition-all cursor-pointer shadow-xs btn-primary-text"
-                style="background-color: #2563eb; color: #ffffff"
-              >
-                <RefreshCw class="w-3.5 h-3.5" :class="fetchingRemote ? 'animate-spin' : ''" />
-                <span>{{ fetchingRemote ? '正在探测...' : '重新探测' }}</span>
-              </button>
-            </div>
+        <!-- Probe configuration -->
+        <div class="p-3 rounded-xl border space-y-3 shrink-0 text-sm" style="background-color: var(--bg-card-subtle); border-color: var(--border-subtle)">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <AppField label="模型列表 Base URL" hint="探测标准 /models 兼容端点" v-slot="field">
+              <input :id="field.id" v-model="customFetchUrl" :disabled="fetchingRemote || actionBusy"
+                placeholder="https://api.example.com/v1" class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
+                style="background-color: var(--bg-card); border-color: var(--border-subtle); color: var(--text-main)" />
+            </AppField>
+            <AppField label="临时 API Key" :hint="selectedProvider?.has_key ? '留空使用已保存凭证；填写则仅用于本次探测和测试' : '仅用于本次探测和测试，不会自动保存'" v-slot="field">
+              <input :id="field.id" v-model="customFetchKey" type="password" autocomplete="new-password"
+                :disabled="fetchingRemote || actionBusy" placeholder="留空使用已保存凭证"
+                class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
+                style="background-color: var(--bg-card); border-color: var(--border-subtle); color: var(--text-main)" />
+            </AppField>
+          </div>
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span v-if="selectedProvider?.has_key && !customFetchKey" class="text-xs text-emerald-400 font-bold">✓ 将使用已保存凭证</span>
+            <span v-else class="text-xs" style="color: var(--text-faint)">不会在结果、审计记录或页面中回显 API Key</span>
+            <button @click="executeRemoteFetch" :disabled="fetchingRemote || actionBusy || !customFetchUrl.trim()"
+              class="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-sm font-bold transition-all cursor-pointer shadow-xs btn-primary-text disabled:opacity-50"
+              style="background-color: #2563eb; color: #ffffff">
+              <RefreshCw class="w-3.5 h-3.5" :class="fetchingRemote ? 'animate-spin' : ''" />
+              <span>{{ fetchingRemote ? '正在获取...' : '获取模型列表' }}</span>
+            </button>
           </div>
         </div>
 
@@ -1372,30 +1486,27 @@ const toast = useToast()
             class="p-3 rounded-xl border flex items-center justify-between hover:border-[var(--border-strong)] transition-colors"
             style="background-color: var(--bg-card-subtle); border-color: var(--border-subtle)"
           >
-            <div>
-              <div class="font-bold text-sm" style="color: var(--text-main)">{{ rm.name }}</div>
-              <div class="text-xs font-sans text-blue-400">{{ rm.id }}</div>
+            <div class="min-w-0 pr-3">
+              <div class="font-bold text-sm truncate" style="color: var(--text-main)">{{ rm.name }}</div>
+              <div class="text-xs font-sans text-blue-400 break-all">{{ rm.id }}</div>
+              <div v-if="remoteTestResults[rm.id]" class="text-xs mt-1" :style="{ color: remoteTestResults[rm.id].ok ? 'var(--color-up)' : 'var(--color-down)' }">
+                <span v-if="remoteTestResults[rm.id].ok">可用 · {{ remoteTestResults[rm.id].latency_ms }}ms · HTTP {{ remoteTestResults[rm.id].status_code }}</span>
+                <span v-else>{{ remoteTestResults[rm.id].error || '测试失败' }}</span>
+              </div>
             </div>
 
-            <div class="flex items-center space-x-2 shrink-0">
-              <button :disabled="actionBusy || !canManage"
-                @click="importRemoteModel(rm, false)"
-                class="px-2.5 py-1 rounded-lg text-sm font-medium border cursor-pointer hover:bg-[var(--bg-card)] transition-colors"
-                style="
-                  background-color: var(--bg-card);
-                  border-color: var(--border-subtle);
-                  color: var(--text-main);
-                "
-              >
-                + 添加
+            <div class="flex flex-wrap items-center justify-end gap-2 shrink-0">
+              <button @click="runRemoteModelTest(rm)" :disabled="actionBusy || remoteTestingModelId === rm.id"
+                class="px-2.5 py-1 rounded-lg text-sm font-medium border cursor-pointer disabled:opacity-50"
+                style="background-color: var(--bg-card); border-color: var(--border-subtle); color: var(--text-main)">
+                {{ remoteTestingModelId === rm.id ? '测试中...' : '测试' }}
               </button>
-              <button :disabled="actionBusy || !canManage"
-                @click="importRemoteModel(rm, true)"
-                class="px-3 py-1 rounded-lg text-sm font-bold transition-all cursor-pointer shadow-xs btn-primary-text"
-                style="background-color: #2563eb; color: #ffffff"
-              >
-                添加并启用
-              </button>
+              <button :disabled="actionBusy || !canManage || !savedProviderId()" @click="importRemoteModel(rm, false)"
+                class="px-2.5 py-1 rounded-lg text-sm font-medium border cursor-pointer hover:bg-[var(--bg-card)] transition-colors disabled:opacity-50"
+                style="background-color: var(--bg-card); border-color: var(--border-subtle); color: var(--text-main)">+ 添加</button>
+              <button :disabled="actionBusy || !canManage || !savedProviderId()" @click="importRemoteModel(rm, true)"
+                class="px-3 py-1 rounded-lg text-sm font-bold transition-all cursor-pointer shadow-xs btn-primary-text disabled:opacity-50"
+                style="background-color: #2563eb; color: #ffffff">添加并启用</button>
             </div>
           </div>
         </div>
@@ -1410,7 +1521,7 @@ const toast = useToast()
             >
           </div>
           <div class="flex items-center space-x-2">
-            <button :disabled="actionBusy || !canManage"
+            <button :disabled="actionBusy || !canManage || !savedProviderId()"
               v-if="filteredRemoteModels.length"
               @click="importAllFilteredRemoteModels"
               class="px-3 py-1.5 rounded-xl border text-sm font-bold cursor-pointer transition-all hover:opacity-90"

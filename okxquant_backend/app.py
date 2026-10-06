@@ -1143,26 +1143,37 @@ def admin_test_llm(payload: LLMTestRequest, x_okxquant_session: str | None = Hea
 
     raw_config = load_llm_config(mask_keys=False)
     from okxquant_backend.llm_manager import select_model
+    provider_id = str(payload.provider_id or "").strip()
+    provider_entry = next((p for p in raw_config.get("providers", []) if p.get("id") == provider_id), None) if provider_id else None
+    if provider_id and not provider_entry:
+        raise HTTPException(status_code=400, detail="所选供应商不存在")
+
     try:
-        m_entry = select_model(raw_config, payload.model, payload.provider_id or "")
+        m_entry = select_model(raw_config, payload.model, provider_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if payload.provider_id and not m_entry:
-        raise HTTPException(status_code=400, detail="所选供应商下未找到模型")
+
     if m_entry:
         if not base_url:
             base_url = m_entry.get("base_url")
         if not api_key:
             api_key = m_entry.get("api_key")
-        if not payload.api_format or payload.api_format == "openai_chat":
+        if "api_format" not in payload.model_fields_set:
             api_format = m_entry.get("api_format", "openai_chat")
+    elif provider_entry:
+        if not base_url:
+            base_url = provider_entry.get("base_url")
+        if not api_key:
+            api_key = provider_entry.get("api_key")
+        if "api_format" not in payload.model_fields_set:
+            api_format = provider_entry.get("api_format", "openai_chat")
 
-    if not base_url:
+    if not base_url and not provider_id:
         active_runtime = get_active_llm_runtime()
         base_url = active_runtime.get("base_url")
         if not api_key:
             api_key = active_runtime.get("api_key")
-        if not payload.api_format:
+        if "api_format" not in payload.model_fields_set:
             api_format = active_runtime.get("api_format", "openai_chat")
 
     result = test_llm_connection(
@@ -1176,6 +1187,7 @@ def admin_test_llm(payload: LLMTestRequest, x_okxquant_session: str | None = Hea
     )
     audit_record("llm.connection.test", "success" if result.get("ok") else "failed", {
         "model": payload.model,
+        "provider_id": provider_id or None,
         "api_format": api_format,
         "latency_ms": result.get("latency_ms"),
         "status_code": result.get("status_code"),

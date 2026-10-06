@@ -439,6 +439,66 @@ class LLMMultiProviderTests(unittest.TestCase):
         self.assertEqual(del_p.status_code, 200)
         self.assertTrue(del_p.json()["deleted"])
 
+    def test_provider_group_and_type_round_trip(self):
+        headers = self.login()
+        response = self.client.post("/api/v1/admin/llm/providers", headers=headers, json={
+            "id": "grouped", "name": "Grouped", "type": "聚合网关", "group": "公司专线",
+            "base_url": "https://grouped.example/v1", "api_key": "secret-grouped",
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["type"], "聚合网关")
+        self.assertEqual(response.json()["group"], "公司专线")
+        loaded = self.client.get("/api/v1/admin/llm/models", headers=headers).json()
+        provider = next(item for item in loaded["providers"] if item["id"] == "grouped")
+        self.assertEqual(provider["type"], "聚合网关")
+        self.assertEqual(provider["group"], "公司专线")
+        self.assertNotIn("api_key", provider)
+
+    def test_unregistered_remote_model_can_use_saved_provider_credentials(self):
+        self.add_provider_model("alpha")
+        headers = self.login()
+        with patch.object(app_module, "test_llm_connection", return_value={"ok": True, "latency_ms": 4}) as probe:
+            response = self.client.post("/api/v1/admin/llm/test", headers=headers, json={
+                "model": "remote-only-model", "provider_id": "alpha",
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(probe.call_args.kwargs["base_url"], "https://alpha.example/v1")
+        self.assertEqual(probe.call_args.kwargs["api_key"], "test-alpha")
+        self.assertEqual(probe.call_args.kwargs["model"], "remote-only-model")
+
+    def test_connection_test_temporary_credentials_override_saved_provider(self):
+        self.add_provider_model("alpha")
+        headers = self.login()
+        with patch.object(app_module, "test_llm_connection", return_value={"ok": True}) as probe:
+            response = self.client.post("/api/v1/admin/llm/test", headers=headers, json={
+                "model": "remote-only-model", "provider_id": "alpha",
+                "base_url": "https://temporary.example/v1", "api_key": "temporary-secret",
+                "api_format": "openai_responses",
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(probe.call_args.kwargs["base_url"], "https://temporary.example/v1")
+        self.assertEqual(probe.call_args.kwargs["api_key"], "temporary-secret")
+        self.assertEqual(probe.call_args.kwargs["api_format"], "openai_responses")
+        self.assertNotIn("temporary-secret", response.text)
+
+    def test_connection_test_unknown_provider_fails_closed(self):
+        headers = self.login()
+        with patch.object(app_module, "test_llm_connection") as probe:
+            response = self.client.post("/api/v1/admin/llm/test", headers=headers, json={
+                "model": "anything", "provider_id": "missing-provider",
+                "base_url": "https://temporary.example/v1", "api_key": "temporary-secret",
+            })
+        self.assertEqual(response.status_code, 400)
+        probe.assert_not_called()
+        self.assertNotIn("temporary-secret", response.text)
+
+    def test_remote_model_fetch_without_provider_or_url_never_borrows_active_runtime(self):
+        with patch.object(llm_manager, "get_active_llm_runtime") as active:
+            result = llm_manager.fetch_remote_models()
+        self.assertFalse(result["ok"])
+        active.assert_not_called()
+
+
 
 if __name__ == "__main__":
     unittest.main()

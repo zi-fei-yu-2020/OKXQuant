@@ -743,7 +743,7 @@ def upsert_provider(provider_data: Dict[str, Any]) -> Dict[str, Any]:
             "models": [],
         })
     _atomic_write_json(LLM_CONFIG_FILE, config)
-    return {"id": pid, "name": name, "base_url": base_url}
+    return {"id": pid, "name": name, "type": p_type, "group": p_group, "base_url": base_url}
 
 
 def toggle_provider(provider_id: str, enabled: Optional[bool] = None) -> Dict[str, Any]:
@@ -800,19 +800,19 @@ def fetch_remote_models(
     """Fetch live models list from an OpenAI / OpenRouter / Anthropic compatible endpoint."""
     cleaned_url = str(base_url or "").strip().rstrip("/")
     config = init_llm_config()
-
-    if not cleaned_url and provider_id:
-        prov = next((p for p in config.get("providers", []) if p["id"] == provider_id), None)
-        if prov:
-            cleaned_url = prov.get("base_url", "").strip().rstrip("/")
-            if not api_key:
-                api_key = prov.get("api_key", "")
-
-    if not cleaned_url:
-        active = get_active_llm_runtime()
-        cleaned_url = active.get("base_url", "").strip().rstrip("/")
+    provider = None
+    if provider_id:
+        provider = next((p for p in config.get("providers", []) if p.get("id") == provider_id), None)
+        if not provider:
+            return {
+                "ok": False,
+                "error": "所选供应商不存在",
+                "recommendation": "请先保存供应商配置，或不传 provider_id 使用当前表单参数",
+            }
+        if not cleaned_url:
+            cleaned_url = str(provider.get("base_url", "")).strip().rstrip("/")
         if not api_key:
-            api_key = active.get("api_key", "")
+            api_key = provider.get("api_key", "")
 
     if not cleaned_url or not cleaned_url.startswith(("http://", "https://")):
         return {
@@ -820,11 +820,6 @@ def fetch_remote_models(
             "error": "Base URL 格式无效，必须以 http:// 或 https:// 开头",
             "recommendation": "请填写有效的供应商 Base URL",
         }
-
-    if not api_key and provider_id:
-        prov = next((p for p in config.get("providers", []) if p["id"] == provider_id), None)
-        if prov and prov.get("api_key"):
-            api_key = prov.get("api_key")
 
     if not api_key:
         prov = next((p for p in config.get("providers", []) if p.get("base_url", "").rstrip("/") == cleaned_url and p.get("api_key")), None)

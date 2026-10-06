@@ -314,3 +314,43 @@ test('engine lookup failure clears stale ready state and offers independent retr
   const s=page('PromptStudioPage',{api:async()=>{throw new Error('unavailable')}});s.engineStatus.value={environment:'live',status:'ready'}
   await s.loadEngineStatus();assert.equal(s.engineStatus.value,null);assert.equal(s.engineError.value,'unavailable');assert.equal(s.engineLoading.value,false)
 })
+
+
+test('LLM provider group/type save and model discovery use current editable form values',async()=>{
+  const provider={id:'fastai',name:'fastai',type:'OpenAI compatible',group:'custom',enabled:true,base_url:'https://saved.example/v1',api_format:'openai_chat',models:[],has_key:true}
+  const config={providers:[provider],active_provider_id:'',active_model_id:''}
+  const s=page('LlmPage',{api:async(path,options)=>{
+    if(path.endsWith('/models')&&(!options||!options.method))return config
+    if(path.endsWith('/providers'))return {id:'fastai'}
+    if(path.endsWith('/fetch-models'))return {ok:true,total:1,models:[{id:'remote-model',name:'Remote'}]}
+    if(path.endsWith('/test'))return {ok:true,status_code:200,latency_ms:7,api_format:'openai_chat'}
+    return {}
+  }})
+  s.cfg.value=config;s.selectProvider(provider)
+  s.providerForm.value.group='company-line';s.providerForm.value.type='gateway';s.providerForm.value.base_url='https://draft.example/v1';s.providerForm.value.api_key='temporary-key'
+  await s.saveProviderConfig()
+  const saved=s.calls.find(call=>call.path.endsWith('/providers')&&call.method==='POST')
+  assert.equal(saved.data.group,'company-line');assert.equal(saved.data.type,'gateway')
+  s.openFetchDialog();assert.equal(s.customFetchUrl.value,'https://draft.example/v1');assert.equal(s.fetchModalVisible.value,true)
+  assert.equal(s.calls.filter(call=>call.path.endsWith('/fetch-models')).length,0)
+  s.customFetchKey.value='probe-key';await s.executeRemoteFetch()
+  const fetched=s.calls.find(call=>call.path.endsWith('/fetch-models'))
+  assert.deepEqual(fetched.data,{base_url:'https://draft.example/v1',provider_id:'fastai',api_key:'probe-key'})
+  await s.runRemoteModelTest({id:'remote-model',api_format:'openai_chat'})
+  const tested=s.calls.find(call=>call.path.endsWith('/test'))
+  assert.equal(tested.data.model,'remote-model');assert.equal(tested.data.provider_id,'fastai');assert.equal(tested.data.base_url,'https://draft.example/v1');assert.equal(tested.data.api_key,'probe-key')
+})
+
+test('admin configuration pages do not present permanently disabled form controls as editable settings',()=>{
+  for(const name of readdirSync(new URL('../src/views/admin/',import.meta.url)).filter(name=>name.endsWith('.vue'))){
+    const source=read('views/admin/'+name)
+    for(const tag of ['input','select','textarea']){
+      for(const match of source.matchAll(new RegExp('<'+tag+'\\b[^>]*>','gs'))){
+        assert.doesNotMatch(match[0],/(?<!:)\b(?:disabled|readonly)(?=\s|>|\/)/,name+' has a permanently disabled '+tag)
+      }
+    }
+  }
+  const llm=read('views/admin/LlmPage.vue')
+  assert.match(llm,/v-model="providerForm\.group"/);assert.match(llm,/v-model="providerForm\.type"/)
+  assert.match(llm,/@click="executeRemoteFetch"/);assert.match(llm,/@click="runRemoteModelTest\(rm\)"/)
+})
