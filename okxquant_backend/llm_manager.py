@@ -187,6 +187,19 @@ def init_llm_config() -> Dict[str, Any]:
 
     existing_providers = data.get("providers", [])
     merged_providers: List[Dict[str, Any]] = []
+    # A custom provider that already owns the environment connection must keep
+    # that identity. Otherwise initialization silently relabels its endpoint/key
+    # as the built-in OpenAI provider and the admin UI loses the real channel.
+    environment_owner = next(
+        (
+            p for p in existing_providers
+            if p.get("id") != "openai"
+            and str(p.get("base_url", "")).rstrip("/") == str(cur_url).rstrip("/")
+            and (not cur_key or p.get("api_key") == cur_key)
+        ),
+        None,
+    )
+    hydrate_openai_from_environment = environment_owner is None
 
     for dp in DEFAULT_PROVIDERS:
         pid = dp["id"]
@@ -197,7 +210,7 @@ def init_llm_config() -> Dict[str, Any]:
             # Never overwrite models with global defaults if provider was already configured
             if "models" in found:
                 p_obj["models"] = list(found.get("models", []))
-            if pid == "openai":
+            if pid == "openai" and hydrate_openai_from_environment:
                 if not p_obj.get("api_key") and cur_key:
                     p_obj["api_key"] = cur_key
                 if not p_obj.get("base_url"):
@@ -205,7 +218,7 @@ def init_llm_config() -> Dict[str, Any]:
             merged_providers.append(p_obj)
         else:
             p_obj = copy.deepcopy(dp)
-            if pid == "openai":
+            if pid == "openai" and hydrate_openai_from_environment:
                 if cur_key:
                     p_obj["api_key"] = cur_key
                 if cur_url:

@@ -90,6 +90,31 @@ class LLMMultiProviderTests(unittest.TestCase):
             again = llm_manager.load_llm_config(mask_keys=True)
             self.assertEqual(sum(m['id'] == 'operator-demo-model' for m in again['models']), 1)
 
+    def test_custom_provider_keeps_ownership_of_matching_environment_connection(self):
+        from okxquant_backend.config import settings
+        llm_manager.LLM_CONFIG_FILE.write_text(json.dumps({
+            "active_provider_id": "fastai",
+            "active_model_id": "deepseek-v4.1-flash",
+            "active_reasoning_effort": "low",
+            "providers": [{
+                "id": "fastai", "name": "fastai", "enabled": True,
+                "base_url": "https://fastai.example/v1", "api_key": "FASTAI-KEY",
+                "api_format": "openai_chat",
+                "models": [{"id": "deepseek-v4.1-flash", "reasoning_effort": "low"}],
+            }],
+        }), encoding="utf-8")
+        with patch.object(settings, "llm_model", "deepseek-v4.1-flash"), \
+             patch.object(settings, "llm_base_url", "https://fastai.example/v1"), \
+             patch.object(settings, "llm_api_key", "FASTAI-KEY"), \
+             patch.object(settings, "llm_reasoning_effort", "low"):
+            config = llm_manager.init_llm_config()
+        self.assertEqual(config["active_provider_id"], "fastai")
+        fastai = next(p for p in config["providers"] if p["id"] == "fastai")
+        openai = next(p for p in config["providers"] if p["id"] == "openai")
+        self.assertEqual(fastai["api_key"], "FASTAI-KEY")
+        self.assertEqual(openai["base_url"], "https://api.openai.com/v1")
+        self.assertFalse(openai["api_key"])
+
     def test_build_request_spec_all_protocols(self):
         # 1. OpenAI Chat Completions Protocol
         url_chat, headers_chat, payload_chat = llm_manager.build_request_spec(
