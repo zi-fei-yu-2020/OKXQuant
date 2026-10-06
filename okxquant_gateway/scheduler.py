@@ -47,12 +47,12 @@ JOBS = (
 )
 
 
-def _run_process(command: list[str], *, timeout: int) -> subprocess.CompletedProcess:
+def _run_process(command: list[str], *, timeout: int, env_overrides: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     """A timeout owns the entire job process group, not just its Python parent."""
     process = subprocess.Popen(
         command, cwd=ROOT, text=True, encoding="utf-8", errors="replace",
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
-        env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
+        env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", **(env_overrides or {})},
     )
     try:
         stdout, stderr = process.communicate(timeout=timeout)
@@ -125,7 +125,8 @@ def scheduler_snapshot(store: GatewayStore) -> dict[str, Any]:
             "timezone": "Asia/Shanghai",
             "overdue": bool(spec.interval_seconds and last and (now - last).total_seconds() > spec.interval_seconds * 2),
         })
-    return {"jobs": jobs, "recent_runs": store.job_runs(30), "manual_requests": store.job_requests(30)}
+    return {"jobs": jobs, "recent_runs": store.job_runs(30), "manual_requests": store.job_requests(30),
+            "ai_recoveries": store.ai_recoveries(30)}
 
 
 class GatewayScheduler:
@@ -235,6 +236,70 @@ class GatewayScheduler:
         if request is not None:
             self._run_job(spec, int(request["run_id"]), manual=True)
 
+    def _execute_recovery(self, recovery: dict[str, Any]) -> None:
+        recovery_id = int(recovery["id"])
+        claimed = self.store.claim_ai_recovery(recovery_id)
+        if claimed is None:
+            return
+        trader = next((job for job in current_jobs() if job.name == "trader"), None)
+        if trader is None:
+            self.store.finish_ai_recovery(recovery_id, 1, "automatic trader disabled before recovery launch")
+            return
+        result = None
+        try:
+            command = [sys.executable, str(SCRIPTS / trader.script)]
+            result = _run_process(
+                command, timeout=trader.timeout_seconds,
+                env_overrides={
+                    "OKXQUANT_AI_RECOVERY": "1",
+                    "OKXQUANT_RECOVERY_ID": str(recovery_id),
+                    "OKXQUANT_RECOVERY_ACCOUNT_SCOPE": str(claimed["account_scope"]),
+                    "OKXQUANT_RECOVERY_SLOT_START": str(claimed["slot_start"]),
+                },
+            )
+            output = result.stderr if result.returncode else result.stdout
+            detail = output[-2000:]
+            model_succeeded = self.store.successful_recovery_call(recovery_id)
+            if result.returncode == 0 and model_succeeded:
+                self.store.finish_ai_recovery(recovery_id, 0, detail or "503 recovery produced a validated model response")
+            else:
+                reason = detail or "recovery ended without a successful model decision"
+                self.store.finish_ai_recovery(recovery_id, result.returncode or 1, reason)
+        except subprocess.TimeoutExpired as exc:
+            self.store.finish_ai_recovery(recovery_id, 124, f"timeout after {trader.timeout_seconds}s: {exc}")
+        except Exception as exc:
+            self.store.finish_ai_recovery(recovery_id, 1, f"{type(exc).__name__}")
+
+    def _launch_due_recovery(self, now: datetime, launched: list[str]) -> None:
+        trader_busy = "trader" in self.running
+        trader_enabled = any(job.name == "trader" for job in current_jobs())
+        now_text = now.strftime("%Y-%m-%d %H:%M:%S")
+        for recovery in self.store.due_ai_recoveries(now_text):
+            recovery_id = int(recovery["id"])
+            try:
+                slot = datetime.strptime(str(recovery["slot_start"]), "%Y-%m-%d %H:%M:%S").replace(tzinfo=BJ_TZ)
+                expires = datetime.strptime(str(recovery["expires_at"]), "%Y-%m-%d %H:%M:%S").replace(tzinfo=BJ_TZ)
+            except ValueError:
+                self.store.cancel_ai_recovery(recovery_id, "invalid persisted recovery time")
+                continue
+            slot_end = slot + timedelta(seconds=15 * 60)
+            if not trader_enabled:
+                self.store.cancel_ai_recovery(recovery_id, "automatic trader disabled")
+                continue
+            if now >= expires or not (slot <= now < slot_end):
+                self.store.cancel_ai_recovery(recovery_id, "recovery safety window expired")
+                continue
+            if self.store.successful_model_call_in_slot(
+                slot.strftime("%Y-%m-%d %H:%M:%S"), slot_end.strftime("%Y-%m-%d %H:%M:%S")
+            ):
+                self.store.cancel_ai_recovery(recovery_id, "slot already has a successful model decision")
+                continue
+            if trader_busy:
+                continue
+            self.running["trader"] = self.trader_executor.submit(self._execute_recovery, recovery)
+            launched.append("trader_recovery")
+            return
+
     def _run_job(self, spec: JobSpec, run_id: int, *, manual: bool = False, previous: str = "") -> None:
         result = None
         try:
@@ -289,6 +354,9 @@ class GatewayScheduler:
                 # One broken job must not starve the jobs later in the registry.
                 self.store.set_state(f"job.error.{spec.name}", type(exc).__name__)
                 self.retry_after[spec.name] = time.monotonic() + 30
+        # A natural 15-minute trader slot always has precedence over delayed
+        # recovery. Recovery uses the same single-worker lane and running key.
+        self._launch_due_recovery(now, launched)
         # Scheduled work keeps precedence; manual review uses the same running
         # map/executor, so it cannot overlap the scheduled self-improvement job.
         for request in self.store.pending_job_requests():
@@ -315,7 +383,9 @@ class GatewayScheduler:
                 "timezone": "Asia/Shanghai",
                 "overdue": bool(spec.interval_seconds and last and (now - last).total_seconds() > spec.interval_seconds * 2),
             })
-        return {"jobs": result, "recent_runs": self.store.job_runs(30), "manual_requests": self.store.job_requests(30)}
+        return {"jobs": result, "recent_runs": self.store.job_runs(30),
+                "manual_requests": self.store.job_requests(30),
+                "ai_recoveries": self.store.ai_recoveries(30)}
 
     def shutdown(self) -> None:
         executors = (self.guard_executor, self.ledger_executor, self.trader_executor,

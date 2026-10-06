@@ -2210,24 +2210,42 @@ def single_trader_cycle(func):
             return None
         try:
             now_slot = int(time.time()) // 900
+            recovery_requested = os.environ.get("OKXQUANT_AI_RECOVERY") == "1"
+            recovery = None
+            if recovery_requested:
+                from okxquant_gateway.ai_recovery import authorized_environment
+                recovery = authorized_environment()
+                if recovery is None:
+                    print("[Trader Recovery] Abort: recovery authorization is missing or stale")
+                    return None
+                recovery_slot = int(datetime.datetime.strptime(
+                    str(recovery["slot_start"]), "%Y-%m-%d %H:%M:%S"
+                ).replace(tzinfo=datetime.timezone(datetime.timedelta(hours=8))).timestamp()) // 900
+                if recovery_slot != now_slot:
+                    print("[Trader Recovery] Abort: recovery slot is no longer current")
+                    return None
             if os.path.exists(TRADER_SLOT_FILE):
                 try:
                     with open(TRADER_SLOT_FILE, "r", encoding="utf-8") as f:
                         slot_state = json.load(f)
                     same_slot = int(slot_state.get("slot", -1)) == now_slot
                     recently_started = int(time.time()) - int(slot_state.get("started_at", 0) or 0) < 120
-                    if same_slot and recently_started:
+                    if same_slot and recently_started and recovery is None:
                         print("[Trader] Skip: duplicate trigger detected in this 15-minute slot")
                         return None
                 except Exception:
                     pass
             with open(TRADER_SLOT_FILE, "w", encoding="utf-8") as f:
-                json.dump({"slot": now_slot, "started_at": int(time.time()), "pid": os.getpid()}, f)
+                json.dump({"slot": now_slot, "started_at": int(time.time()), "pid": os.getpid(),
+                           "recovery_id": int(recovery["id"]) if recovery else None}, f)
             lock_handle.seek(0)
             lock_handle.truncate()
             lock_handle.write(str(os.getpid()))
             lock_handle.flush()
             cycle_environment = freeze_okx_environment()
+            if recovery is not None and cycle_environment.identity != recovery["account_scope"]:
+                print("[Trader Recovery] Abort: account scope changed after the rejected request")
+                return None
             print(f"[Trader] OKX environment frozen for cycle: {cycle_environment.mode.upper()} / {cycle_environment.identity}")
             return func(*args, **kwargs)
         finally:

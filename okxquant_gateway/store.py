@@ -79,6 +79,24 @@ CREATE TABLE IF NOT EXISTS model_calls (
   error_type TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_model_calls_caller ON model_calls(caller, id DESC);
+CREATE TABLE IF NOT EXISTS ai_recovery_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_scope TEXT NOT NULL,
+  slot_start TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','success','failed','cancelled')),
+  scheduled_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  started_at TEXT NOT NULL DEFAULT '',
+  finished_at TEXT NOT NULL DEFAULT '',
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts BETWEEN 0 AND 1),
+  failure_fingerprint TEXT NOT NULL,
+  original_model_call_id INTEGER REFERENCES model_calls(id),
+  run_id INTEGER REFERENCES job_runs(id),
+  detail TEXT NOT NULL DEFAULT '',
+  UNIQUE(account_scope, slot_start)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_recovery_due ON ai_recovery_jobs(status, scheduled_at);
 """
 
 
@@ -174,6 +192,11 @@ class GatewayStore:
                 "UPDATE manual_job_requests SET status='failed',finished_at=? WHERE status='running'",
                 (datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S"),),
             )
+            connection.execute(
+                "UPDATE ai_recovery_jobs SET status='failed',finished_at=?, "
+                "detail='gateway restarted; recovery outcome unknown' WHERE status='running'",
+                (datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S"),),
+            )
 
     def request_job(self, job_name: str, *, actor: str = "") -> dict[str, Any]:
         """Persist one review-only request; pending/running clicks are idempotent.
@@ -259,6 +282,120 @@ class GatewayStore:
         with self.connect() as connection:
             rows = connection.execute("SELECT * FROM job_runs ORDER BY id DESC LIMIT ?", (max(1, min(limit, 200)),)).fetchall()
         return [dict(row) for row in rows]
+
+    def enqueue_ai_recovery(self, *, account_scope: str, slot_start: str, scheduled_at: str,
+                            expires_at: str, failure_fingerprint: str,
+                            original_model_call_id: int | None) -> dict[str, Any]:
+        now = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """INSERT OR IGNORE INTO ai_recovery_jobs(
+                     account_scope,slot_start,scheduled_at,expires_at,created_at,
+                     failure_fingerprint,original_model_call_id)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (account_scope, slot_start, scheduled_at, expires_at, now,
+                 failure_fingerprint, original_model_call_id),
+            )
+            row = connection.execute(
+                "SELECT * FROM ai_recovery_jobs WHERE account_scope=? AND slot_start=?",
+                (account_scope, slot_start),
+            ).fetchone()
+        return dict(row)
+
+    def ai_recovery(self, recovery_id: int) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM ai_recovery_jobs WHERE id=?", (recovery_id,)).fetchone()
+        return dict(row) if row else None
+
+    def ai_recoveries(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM ai_recovery_jobs ORDER BY id DESC LIMIT ?",
+                (max(1, min(limit, 200)),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def due_ai_recoveries(self, now: str) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM ai_recovery_jobs WHERE status='pending' AND scheduled_at<=? ORDER BY id",
+                (now,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def cancel_ai_recovery(self, recovery_id: int, detail: str) -> None:
+        now = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        with self.connect() as connection:
+            connection.execute(
+                "UPDATE ai_recovery_jobs SET status='cancelled',finished_at=?,detail=? "
+                "WHERE id=? AND status='pending'",
+                (now, detail[:1000], recovery_id),
+            )
+
+    def claim_ai_recovery(self, recovery_id: int) -> dict[str, Any] | None:
+        now = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM ai_recovery_jobs WHERE id=? AND status='pending' AND attempts=0",
+                (recovery_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            cursor = connection.execute(
+                "INSERT INTO job_runs(job_name,status,started_at) VALUES ('trader_recovery','running',?)",
+                (now,),
+            )
+            run_id = int(cursor.lastrowid)
+            connection.execute(
+                "UPDATE ai_recovery_jobs SET status='running',started_at=?,attempts=1,run_id=? WHERE id=?",
+                (now, run_id, recovery_id),
+            )
+            claimed = connection.execute("SELECT * FROM ai_recovery_jobs WHERE id=?", (recovery_id,)).fetchone()
+        return dict(claimed)
+
+    def finish_ai_recovery(self, recovery_id: int, return_code: int, detail: str) -> None:
+        now = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        status = "success" if return_code == 0 else "failed"
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT run_id FROM ai_recovery_jobs WHERE id=? AND status='running'",
+                (recovery_id,),
+            ).fetchone()
+            if row is None:
+                return
+            connection.execute(
+                "UPDATE ai_recovery_jobs SET status=?,finished_at=?,detail=? WHERE id=?",
+                (status, now, detail[:1000], recovery_id),
+            )
+            connection.execute(
+                "UPDATE job_runs SET status=?,finished_at=?,return_code=?,detail=? WHERE id=?",
+                (status, now, return_code, detail[-2000:], row["run_id"]),
+            )
+
+    def successful_model_call_in_slot(self, slot_start: str, slot_end: str) -> bool:
+        with self.connect() as connection:
+            row = connection.execute(
+                """SELECT 1 FROM model_calls
+                   WHERE caller IN ('trading_brain','trading_brain_recovery')
+                     AND status='success' AND started_at>=? AND started_at<? LIMIT 1""",
+                (slot_start, slot_end),
+            ).fetchone()
+        return row is not None
+
+    def successful_recovery_call(self, recovery_id: int) -> bool:
+        raw_call_id = self.get_state(f"ai_recovery.model_success.{recovery_id}")
+        if not raw_call_id.isdigit():
+            return False
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM model_calls WHERE id=? AND caller='trading_brain_recovery' "
+                "AND status='success' LIMIT 1",
+                (int(raw_call_id),),
+            ).fetchone()
+        return row is not None
 
     def record_model_call(self, record: dict[str, Any]) -> int:
         columns = (

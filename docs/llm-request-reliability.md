@@ -42,3 +42,12 @@ The single-model trading scheduler now has a hard budget of one model HTTP reque
 The prompt transport also replaces the duplicated human-readable market matrix with an explicit reference to `facts` and caps the model-visible `changed_refs` subset at 12 per instrument. Durable WAIT validation still retains the complete changed-reference set, so compaction does not relax evidence checks.
 
 Failed inference cycles are appended to AI history as `status=failed` audit rows with no macro assessment, no opportunities, and no executable decision. This keeps the decision page current without allowing a timeout record to masquerade as fresh market analysis.
+
+
+## 2026-10-06 delayed recovery for explicit CPU-overload 503 responses
+
+The primary trading request still has one HTTP attempt. Read timeouts, interrupted connections, malformed JSON, incomplete WAIT audits, and ambiguous outcomes are never replayed. A durable recovery is created only when all of these are true: HTTP 503, `provider_error_code=system_cpu_overloaded`, one attempt, and rejection in less than 10 seconds. Other 5xx responses and other overload codes are not eligible.
+
+The account scope and 15-minute slot form the idempotency key. Gateway waits a random 45-90 seconds, then starts the complete Trader again. That process re-reads positions, pending orders, balance, and market data and rebuilds the prompt; it does not reuse the failed request's snapshot or decision. The recovery request still has one HTTP attempt, is recorded as `trading_brain_recovery`, and can never enqueue another recovery.
+
+Before launch, Gateway requires the original slot to remain current, at least four minutes before the next slot, no successful model decision in the slot, automatic trading still enabled, and the single Trader lane idle. The child also verifies the durable recovery id, slot, and account scope. A new natural slot, account switch, existing success, expired task, or unknown outcome after a Gateway restart cancels or terminates the old recovery rather than replaying it. Model success still does not authorize an order without the unchanged output-contract, position, cost, risk, and final execution checks.

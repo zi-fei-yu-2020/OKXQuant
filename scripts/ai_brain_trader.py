@@ -790,8 +790,14 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
         execute_llm_request = None
 
     json_report = {}
+    telemetry_caller = "trading_brain_recovery" if os.environ.get("OKXQUANT_AI_RECOVERY") == "1" else "trading_brain"
+    recovery_slot_epoch = int(time.time()) // (15 * 60) * (15 * 60)
+    recovery_slot = datetime.datetime.fromtimestamp(
+        recovery_slot_epoch, datetime.timezone(datetime.timedelta(hours=8))
+    ).strftime("%Y-%m-%d %H:%M:%S")
     telemetry = ModelCallTelemetry(
-        "trading_brain", model_name, str(effort), effective_system_prompt, prompt
+        telemetry_caller, model_name, str(effort), effective_system_prompt, prompt,
+        recovery_context={"account_scope": market._selected().identity, "slot_start": recovery_slot},
     )
     try:
         t0 = time.time()

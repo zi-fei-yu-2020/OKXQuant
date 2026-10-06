@@ -2,6 +2,7 @@
 from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import hashlib
+import os
 import time
 from typing import Any
 
@@ -12,7 +13,8 @@ BJ_TZ = timezone(timedelta(hours=8))
 
 
 class ModelCallTelemetry:
-    def __init__(self, caller: str, model: str, reasoning_effort: str, system_prompt: str, user_prompt: str):
+    def __init__(self, caller: str, model: str, reasoning_effort: str, system_prompt: str, user_prompt: str,
+                 recovery_context: dict[str, Any] | None = None):
         self.caller = caller
         self.model = model
         self.reasoning_effort = reasoning_effort
@@ -21,8 +23,9 @@ class ModelCallTelemetry:
         self.prompt_fingerprint = hashlib.sha256(fingerprint_source).hexdigest()[:16]
         self.started_at = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
         self.started = time.monotonic()
+        self.recovery_context = dict(recovery_context or {})
 
-    def finish(self, status: str, response: dict[str, Any] | None = None, output_chars: int = 0, error: Exception | None = None) -> None:
+    def finish(self, status: str, response: dict[str, Any] | None = None, output_chars: int = 0, error: Exception | None = None) -> int | None:
         usage = (response or {}).get("usage", {}) if isinstance(response, dict) else {}
         record = {
             "caller": self.caller,
@@ -40,7 +43,27 @@ class ModelCallTelemetry:
             "total_tokens": usage.get("total_tokens"),
             "error_type": type(error).__name__ if error else "",
         }
+        call_id = None
         try:
-            GatewayStore(DB_PATH).record_model_call(record)
+            store = GatewayStore(DB_PATH)
+            call_id = store.record_model_call(record)
+            recovery_id = os.environ.get("OKXQUANT_RECOVERY_ID", "")
+            if status == "success" and self.caller == "trading_brain_recovery" and recovery_id.isdigit():
+                store.set_state(f"ai_recovery.model_success.{recovery_id}", str(call_id))
         except Exception:
             pass
+        if status == "failed" and error is not None and self.caller == "trading_brain":
+            try:
+                from okxquant_backend.llm_transport import public_failure
+                from okxquant_gateway.ai_recovery import schedule
+                schedule(
+                    failure=public_failure(error),
+                    duration_ms=record["duration_ms"],
+                    recovery_context=self.recovery_context,
+                    original_model_call_id=call_id,
+                )
+            except Exception:
+                # Recovery scheduling is best-effort and must never turn a safe
+                # inference failure into a trading-process failure.
+                pass
+        return call_id
