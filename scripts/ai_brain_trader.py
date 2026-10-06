@@ -80,6 +80,21 @@ def atomic_write_json(path: str, payload: Any) -> None:
             os.unlink(tmp_path)
 
 
+def append_ai_history(record: Dict[str, Any]) -> None:
+    """Append a success or failure audit row without publishing a decision."""
+    history_list = []
+    if os.path.exists(AI_DECISION_HISTORY_FILE):
+        try:
+            with open(AI_DECISION_HISTORY_FILE, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, list):
+                history_list = loaded
+        except (OSError, ValueError, TypeError):
+            history_list = []
+    history_list.insert(0, record)
+    atomic_write_json(AI_DECISION_HISTORY_FILE, history_list[:50])
+
+
 def single_brain_cycle(func):
     """Prevent overlapping cron runs from overwriting the shared decision cache."""
     def wrapped(*args, **kwargs):
@@ -824,7 +839,10 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                         reasoning_effort=effort,
                         temperature=0.2,
                         response_format={"type": "json_object"},
-                        timeout=160.0, attempt_timeout=75.0, max_attempts=2,
+                        # A slow reasoning request can continue upstream after a client-side
+                        # socket timeout and still be billed. Use one sufficiently long attempt
+                        # instead of abandoning it and launching a duplicate request.
+                        timeout=180.0, max_attempts=1,
                         require_complete=True,
                     )
                     raw_res = {"usage": usage_dict} if isinstance(usage_dict, dict) else {}
@@ -1114,6 +1132,7 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
         full_prompt_text = f"【SYSTEM PROMPT】：\n{effective_system_prompt.strip()}\n\n{'='*70}\n【USER PROMPT ({time_str})】：\n{prompt.strip()}"
         history_record = {
             "time": time_str,
+            "status": "success",
             "macro_assessment": macro_summary,
             "prompt_composition": prompt_bundle.manifest,
             "output_validation": brain_output["validation"],
@@ -1139,18 +1158,7 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
             ]
         }
 
-        history_list = []
-        if os.path.exists(AI_DECISION_HISTORY_FILE):
-            try:
-                with open(AI_DECISION_HISTORY_FILE, "r", encoding="utf-8") as f:
-                    history_list = json.load(f)
-            except Exception:
-                pass
-
-        history_list.insert(0, history_record)
-        history_list = history_list[:50] # Keep recent 50 rounds
-
-        atomic_write_json(AI_DECISION_HISTORY_FILE, history_list)
+        append_ai_history(history_record)
 
         latency = round(time.time() - t0, 2)
         telemetry.finish("success", raw_res, output_chars=output_chars)
@@ -1182,6 +1190,22 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                 {**failure,'caller':'trading_brain','frame_time':time_str,'model':model_name})
         if json_report:
             strategy_evidence.best_effort(market._selected().identity, 'model_json_response', json_report)
+        try:
+            append_ai_history({
+                'time': time_str,
+                'status': 'failed',
+                'macro_assessment': '',
+                'failure_reason': LAST_INFERENCE_ERROR,
+                'model_failure': failure,
+                'prompt_composition': prompt_bundle.manifest,
+                'prompt_fingerprint': str(getattr(telemetry, 'prompt_fingerprint', '') or ''),
+                'input_chars': getattr(telemetry, 'input_chars', None) if isinstance(getattr(telemetry, 'input_chars', None), int) else len(effective_system_prompt) + len(prompt),
+                'position_management': [],
+                'council_transcript': None,
+                'top_opportunities': [],
+            })
+        except (OSError, ValueError, TypeError):
+            print('[AI Brain Batch] Failed to persist inference failure history')
         telemetry.finish('failed', error=e)
         print(f'[AI Brain Batch] Error in batch inference: {LAST_INFERENCE_ERROR}')
         return None

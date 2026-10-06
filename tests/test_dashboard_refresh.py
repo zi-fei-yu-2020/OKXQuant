@@ -46,8 +46,9 @@ class DashboardRefreshTests(unittest.TestCase):
         cached={
             **self.snapshot(),
             'ai_last_prompt':'FULL PROMPT' * 1000,
-            'ai_brain_history':[{'time':'x','ai_last_prompt':'HISTORIC PROMPT' * 1000,
-                                 'macro_assessment':'summary',
+            'ai_brain_history':[{'time':'x','status':'failed','failure_reason':'request timeout',
+                                 'model_failure':{'category':'request_timeout','attempts':1},
+                                 'ai_last_prompt':'HISTORIC PROMPT' * 1000,'macro_assessment':'summary',
                                  'council_transcript':{'advisors':{'risk':{'role_name':'risk','content':'FULL TRANSCRIPT' * 1000}}}}],
             'review':{'original':'FULL REVIEW','ai_last_prompt':'EMBEDDED PROMPT' * 1000},
             'state_snapshot':{'data':'KEEP'},
@@ -68,6 +69,9 @@ class DashboardRefreshTests(unittest.TestCase):
         self.assertNotIn('holding_observations', value['trades'][0])
         self.assertNotIn('ai_last_prompt', value['ai_brain_history'][0])
         self.assertNotIn('content', value['ai_brain_history'][0]['council_transcript']['advisors']['risk'])
+        self.assertEqual(value['ai_brain_history'][0]['status'],'failed')
+        self.assertEqual(value['ai_brain_history'][0]['failure_reason'],'request timeout')
+        self.assertEqual(value['ai_brain_history'][0]['model_failure']['attempts'],1)
         self.assertLess(len(response.body), 20_000)
 
     def test_deferred_prompt_and_ai_history_details_remain_available(self):

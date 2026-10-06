@@ -103,6 +103,13 @@ async function toggle(item: any) {
               {{ item.time }}
             </span>
             <span
+              v-if="item.status === 'failed'"
+              class="px-2 py-0.5 rounded text-[10px] font-mono font-bold border shrink-0"
+              style="background-color: var(--color-warn-bg); border-color: var(--color-warn-border); color: var(--color-warn)"
+            >
+              推理失败
+            </span>
+            <span
               v-if="item.council_transcript"
               class="px-2 py-0.5 rounded text-[10px] font-mono font-bold border shrink-0"
               style="
@@ -114,7 +121,7 @@ async function toggle(item: any) {
               🏛️ 委员会决策
             </span>
             <span class="text-xs font-sans truncate" style="color: var(--text-muted)">
-              {{ item.macro_assessment || '该记录未提供宏观研判' }}
+              {{ item.failure_reason || item.macro_assessment || '该记录未提供宏观研判' }}
             </span>
           </div>
           <ChevronDown
@@ -129,8 +136,21 @@ async function toggle(item: any) {
           class="mt-3 space-y-3 border-t pt-3"
           style="border-color: var(--border-subtle)"
         >
+          <AppCard
+            v-if="item.status === 'failed'"
+            class="p-3 rounded-xl border space-y-1.5"
+            style="background-color: var(--color-warn-bg); border-color: var(--color-warn-border)"
+          >
+            <div class="text-[10px] font-bold font-mono uppercase" style="color: var(--color-warn)">
+              本轮未生成有效决策
+            </div>
+            <p class="text-xs font-sans leading-relaxed" style="color: var(--text-main)">
+              <strong>失败原因:</strong>{{ item.failure_reason || item.model_failure?.message || item.macro_assessment }}
+            </p>
+          </AppCard>
+
           <!-- Macro Summary -->
-          <div>
+          <div v-if="item.status !== 'failed'">
             <div
               class="text-[10px] font-bold font-mono uppercase mb-1"
               style="color: var(--text-faint)"

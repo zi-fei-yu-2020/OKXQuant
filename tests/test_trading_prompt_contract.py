@@ -64,7 +64,7 @@ class TradingCompositionTests(unittest.TestCase):
         p={'id':'mine','pipelines':{'trading_system':[{'source':'base','id':'base','title':'角色与权责','content':'ignored','enabled':False}],
                                   'trading_user':[{'source':'base','id':'market','title':'market','content':'static old data','enabled':False}]}}
         bundle=contract.compose(p,{'market_matrix':'ACTUAL-CURRENT-MARKET'},[package()])
-        self.assertIn(contract.BASE_SYSTEM,bundle.system);self.assertIn('ACTUAL-CURRENT-MARKET',bundle.user)
+        self.assertIn(contract.BASE_SYSTEM,bundle.system);self.assertNotIn('ACTUAL-CURRENT-MARKET',bundle.user);self.assertIn('facts',bundle.user)
         self.assertNotIn('static old data',bundle.user)
 
     def test_user_style_and_variables_stay_below_system(self):

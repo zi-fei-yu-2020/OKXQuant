@@ -33,7 +33,7 @@ class ConstraintTests(unittest.TestCase):
         compact=payload['runtime_data']['previous_wait_reviews'][INST]
         self.assertEqual(runtime,before)
         self.assertEqual(bundle.previous_wait_reviews,before['previous_wait_reviews'])
-        self.assertEqual(payload['runtime_data']['market_matrix'],runtime['market_matrix'])
+        self.assertIn('facts',payload['runtime_data']['market_matrix'])
         reconstructed=copy.deepcopy(compact)
         for key,refpath in reconstructed.pop('shared_evidence_refs').items():
             value=payload
@@ -42,6 +42,20 @@ class ConstraintTests(unittest.TestCase):
             reconstructed[key]=value
         self.assertEqual(reconstructed,prior)
         self.assertLess(len(json.dumps(compact)),len(json.dumps(prior)))
+
+    def test_prompt_changed_refs_are_bounded_but_validation_keeps_full_state(self):
+        refs=['/price','/macro_4h']+[f'/news/articles/{i}/title' for i in range(30)]
+        prior={'required':True,'review_id':'prior-id','changed_refs':refs,
+               'previous_conditions':{'long':{'conditions':[{'ref':'/price','op':'gt','value':100}]},
+                                      'short':{'conditions':[{'ref':'/macro_4h','op':'ne','value':'4H_MACRO_BULL'}]}}}
+        bundle=contract.compose({'id':'test'},{'previous_wait_reviews':{INST:prior},'market_matrix':'x'*20000},[package()])
+        payload=json.JSONDecoder().raw_decode(bundle.user)[0]
+        sent=payload['wait_constraints'][INST]['changed_refs']
+        self.assertLessEqual(len(sent),contract.PROMPT_CHANGED_REF_LIMIT)
+        self.assertEqual(sent[:2],['/price','/macro_4h'])
+        self.assertEqual(bundle.previous_wait_reviews[INST]['changed_refs'],refs)
+        self.assertLess(len(payload['runtime_data']['market_matrix']),200)
+        self.assertEqual(bundle.manifest['prompt_compaction']['full_changed_ref_counts'][INST],len(refs))
 
     def test_macro_constraint_is_valid_for_the_blocked_direction_without_positions(self):
         for macro in ('4H_MACRO_BULL','4H_MACRO_BEAR'):

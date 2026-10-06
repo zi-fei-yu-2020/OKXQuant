@@ -155,9 +155,12 @@ test('signal prompt cannot claim an unsupported cycle linkage or invent risk ass
   assert.match(read('components/FactorDetailModal.vue'), /未核验与本条信号的轮次关联/)
 })
 test('AI history has truthful missing assessments, stable expansion and accessible load-more', async () => {
-  const data = { ai_brain_history: Array.from({ length: 26 }, (_, i) => ({ time: `record-${i}` })) }
+  const data = { ai_brain_history: Array.from({ length: 26 }, (_, i) => i === 0
+    ? ({ time: `record-${i}`, status: 'failed', failure_reason: '模型请求超时' })
+    : ({ time: `record-${i}` })) }
   const html = await render('AiBrainHistory.vue', {}, { data })
   assert.match(html, /该记录未提供宏观研判/); assert.doesNotMatch(html, /宏观中性震荡/)
+  assert.match(html, /推理失败/); assert.match(html, /模型请求超时/)
   assert.match(html, /加载更多历史记录（剩余 2 条）/)
   assert.equal((html.match(/aria-expanded="false"/g) || []).length, 24)
   assert.match(read('components/AiBrainHistory.vue'), /expanded.has\(historyKey\(item\)\)/)

@@ -32,3 +32,11 @@ model_calls 表仍保留原结构，详细原因从上述证据事件读取。
 离线回归覆盖首轮耗时后重试、剩余预算、迟到响应、参数透传、提示词无损去重和错误落盘。
 上线后应检查下一轮自然调度的 model_calls 与证据；HTTP 成功不等于输出校验成功，
 输出校验成功也不等于必然形成可执行候选。不通过校验的响应与过期信号仍不授权下单。
+
+## 2026-10-06 production timeout correction
+
+The trading-brain primary request now uses one 180-second HTTP attempt. A reasoning request that has already consumed a long socket wait is not replayed automatically: the upstream provider may continue computing and bill the abandoned request even after the client times out. JSON regeneration and WAIT-only repair remain separately identified calls and stay bounded to one attempt.
+
+The prompt transport also replaces the duplicated human-readable market matrix with an explicit reference to `facts` and caps the model-visible `changed_refs` subset at 12 per instrument. Durable WAIT validation still retains the complete changed-reference set, so compaction does not relax evidence checks.
+
+Failed inference cycles are appended to AI history as `status=failed` audit rows with no macro assessment, no opportunities, and no executable decision. This keeps the decision page current without allowing a timeout record to masquerade as fresh market analysis.

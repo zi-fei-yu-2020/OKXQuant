@@ -118,6 +118,9 @@ def _public_history_row(item):
         "history_id": _history_id(item),
         "time": item.get("time") or item.get("timestamp") or "",
         "macro_assessment": item.get("macro_assessment") or "",
+        "status": item.get("status") or "success",
+        "failure_reason": item.get("failure_reason") or "",
+        "model_failure": item.get("model_failure"),
         "position_management": item.get("position_management") or [],
         "details_available": True,
     }

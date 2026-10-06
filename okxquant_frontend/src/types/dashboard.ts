@@ -244,7 +244,15 @@ export interface AiBrainHistoryItem {
   history_id?: string
   details_available?: boolean
   time: string
+  status?: 'success' | 'failed'
   macro_assessment?: string
+  failure_reason?: string
+  model_failure?: {
+    category?: string
+    http_status?: number | null
+    attempts?: number
+    message?: string
+  } | null
   ai_last_prompt?: string
   council_transcript?: {
     council_mode?: boolean

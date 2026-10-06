@@ -1,6 +1,7 @@
 """Regression tests for OKXQuant mathematical foundations and prompt contracts."""
 from __future__ import annotations
 import sys
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -70,9 +71,21 @@ class PromptMathFoundationsTests(unittest.TestCase):
         missing = "/tmp/okxquant-test-file-does-not-exist"
         with patch.object(ai_brain_trader, "NEWS_SENTIMENT_FILE", missing), patch.object(ai_brain_trader, "AI_MEMORY_MD_FILE", missing), patch.object(ai_brain_trader, "AI_MEMORY_FILE", missing):
             prompt = ai_brain_trader.construct_full_market_prompt([self.package()], current_time_str="2026-09-01 12:00:00", usdt_available=4000)
-        for required in ("1H:v=0.61,a=0.27,j=0.18,I=1.12", "E=1.44,A=0.82", "P续=73.5%", "VaR=1.36%,CVaR=1.82%"):
-            self.assertIn(required, prompt)
-        self.assertIn("路径偏离面积积分", prompt)
+        payload=json.JSONDecoder().raw_decode(prompt)[0]
+        facts=payload['facts']['BTC-USDT-SWAP']
+        expected={
+            '/calculus/timeframes/1H/velocity':0.61,
+            '/calculus/timeframes/1H/acceleration':0.27,
+            '/calculus/timeframes/1H/jerk':0.18,
+            '/calculus/timeframes/1H/impulse':1.12,
+            '/calculus/timeframes/1H/definite_integrals/energy_integral':1.44,
+            '/calculus/timeframes/1H/definite_integrals/deviation_area_integral':0.82,
+            '/calculus/timeframes/1H/probability_theory/continuation_prob_pct':73.5,
+            '/calculus/timeframes/1H/probability_theory/var_95_pct':1.36,
+            '/calculus/timeframes/1H/probability_theory/cvar_95_pct':1.82,
+        }
+        for ref,value in expected.items():
+            self.assertEqual(facts[ref]['value'],value)
         self.assertNotIn("VWAP偏离面积分", prompt)
         self.assertIn("无可验证新闻输入", prompt)
 

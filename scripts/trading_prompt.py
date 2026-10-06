@@ -279,6 +279,45 @@ class PromptBundle:
     risk_contract: dict = field(default_factory=dict)
 
 
+PROMPT_CHANGED_REF_LIMIT = 12
+_CHANGED_REF_PRIORITY = (
+    '/price', '/bidPx', '/askPx', '/macro_4h', '/structure_1h',
+    '/adx_1h', '/rsi_1h', '/rsi_15m', '/vwap_bias', '/vol_ratio',
+    '/atr_1h', '/fundingRate', '/oiUsd', '/takerNetUsd', '/lsRatio',
+)
+
+
+def prompt_changed_refs(prior):
+    """Bound cross-cycle evidence hints without weakening server validation.
+
+    The durable WAIT state retains every changed reference. The model only needs
+    a representative, exact subset in order to explain why a triggered review
+    remains a WAIT. Sending every candle/calculus/news ref duplicated tens of
+    thousands of characters on each cycle and made timeout billing more likely.
+    """
+    if not isinstance(prior, dict):
+        return []
+    source = [ref for ref in prior.get('changed_refs', []) if isinstance(ref, str)]
+    source_set = set(source)
+    ordered = []
+    for side in ('long', 'short'):
+        conditions = ((prior.get('previous_conditions') or {}).get(side) or {}).get('conditions') or []
+        for condition in conditions:
+            ref = condition.get('ref') if isinstance(condition, dict) else None
+            if ref in source_set and ref not in ordered:
+                ordered.append(ref)
+    for ref in _CHANGED_REF_PRIORITY:
+        if ref in source_set and ref not in ordered:
+            ordered.append(ref)
+    for ref in source:
+        if ref not in ordered and not ref.startswith('/news/articles/'):
+            ordered.append(ref)
+    for ref in source:
+        if ref not in ordered:
+            ordered.append(ref)
+    return ordered[:PROMPT_CHANGED_REF_LIMIT]
+
+
 def compose(profile,runtime,packages,*,override='',positions=None,pending=None,risk_contract=None):
     positions=positions or [];pending=pending or []
     layers,warnings,allow=preference_layers(copy.deepcopy(profile),override)
@@ -293,9 +332,17 @@ def compose(profile,runtime,packages,*,override='',positions=None,pending=None,r
     if not allow:system+='\n偏好或输入未通过准入检查：本轮禁止开仓/加仓，decisions 必须全部 WAIT；独立保护仍继续。'
     from scripts.entry_candidates import catalog as entry_catalog
     entry_plans={p['instId']:entry_catalog(p,constraints) for p in packages}
-    wait_constraints={inst:wait_audit.constraints(catalog,(runtime.get('previous_wait_reviews') or {}).get(inst)) for inst,catalog in facts.items()}
+    full_previous = runtime.get('previous_wait_reviews') or {}
+    prompt_previous = copy.deepcopy(full_previous)
+    for prior in prompt_previous.values():
+        if isinstance(prior, dict):
+            prior['changed_refs'] = prompt_changed_refs(prior)
+    wait_constraints={inst:wait_audit.constraints(catalog,prompt_previous.get(inst)) for inst,catalog in facts.items()}
     # Serialize duplicated historical evidence once; validation retains the full context.
     rendered_runtime=copy.deepcopy(runtime)
+    rendered_runtime['previous_wait_reviews'] = prompt_previous
+    if 'market_matrix' in rendered_runtime:
+        rendered_runtime['market_matrix'] = 'See facts for structured market evidence; see entry_candidates for executable drafts.'
     # Preferences reference USER data, never expand news/memory into instructions.
     # Use this inference's profile and packages, not the editor's default context.
     import os
@@ -328,7 +375,10 @@ def compose(profile,runtime,packages,*,override='',positions=None,pending=None,r
               'layers':['base_system','style_preset','user_preferences','runtime_data','output_validation'],
               'system_hash':fingerprint(system),'user_hash':fingerprint(user),'allow_open':allow,'warnings':warnings,
               'wait_audit_version':wait_audit.VERSION,'fact_counts':{k:len(v) for k,v in facts.items()},
-              'news_snapshot':news_snapshot}
+              'news_snapshot':news_snapshot,
+              'prompt_compaction':{'market_matrix':'facts_reference','changed_refs_limit':PROMPT_CHANGED_REF_LIMIT,
+                                   'full_changed_ref_counts':{k:len((v or {}).get('changed_refs') or []) for k,v in full_previous.items() if isinstance(v,dict)},
+                                   'prompt_changed_ref_counts':{k:len((v or {}).get('changed_refs') or []) for k,v in prompt_previous.items() if isinstance(v,dict)}}}
     return PromptBundle(system,user,manifest,allow,runtime.get('previous_wait_reviews',{}),constraints)
 
 

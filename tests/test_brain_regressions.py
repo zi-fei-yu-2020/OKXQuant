@@ -183,9 +183,8 @@ class BrainRegressions(unittest.TestCase):
                 self.assertFalse(result[INST]["smart_money"]["valid"])
                 data = self.prompt_data()
                 self.assertFalse(any(k.startswith("/smart_money/") for k in data["facts"][INST]))
-                self.assertIn("加权做多占比=UNKNOWN", data["runtime_data"]["market_matrix"])
-                self.assertIn("当前多空净名义敞口=UNKNOWN", data["runtime_data"]["market_matrix"])
-                self.assertNotIn("24H净流入=", data["runtime_data"]["market_matrix"])
+                self.assertIn("facts", data["runtime_data"]["market_matrix"])
+                self.assertLess(len(data["runtime_data"]["market_matrix"]), 200)
         self.llm.assert_not_called()
 
     def test_smart_money_reference_is_checked_again_in_actual_cycle(self):
@@ -209,16 +208,22 @@ class BrainRegressions(unittest.TestCase):
 
     def test_main_transport_budget_and_durable_failure_reason(self):
         self.council_config.return_value={'enabled':False}
-        self.llm.side_effect=LLMRequestError(0,2,'request_timeout')
+        self.llm.side_effect=LLMRequestError(0,1,'request_timeout')
         result=self.brain.execute_batch_ai_brain_cycle(active_positions_detail=[],usdt_available=1000)
         self.assertIsNone(result)
-        self.assertEqual(self.llm.call_args.kwargs['timeout'],160)
-        self.assertEqual(self.llm.call_args.kwargs['attempt_timeout'],75)
-        self.assertEqual(self.llm.call_args.kwargs['max_attempts'],2)
+        self.assertEqual(self.llm.call_args.kwargs['timeout'],180)
+        self.assertNotIn('attempt_timeout', self.llm.call_args.kwargs)
+        self.assertEqual(self.llm.call_args.kwargs['max_attempts'],1)
         report=json.loads((self.root/'trading_output_validation.json').read_text(encoding='utf-8'))
         self.assertEqual(report['reason'],self.brain.get_last_inference_error())
         self.assertIn('超时',report['reason'])
-        self.assertEqual(report['model_failure']['attempts'],2)
+        self.assertEqual(report['model_failure']['attempts'],1)
+        history=json.loads(Path(self.brain.AI_DECISION_HISTORY_FILE).read_text(encoding='utf-8'))
+        self.assertEqual(history[0]['status'],'failed')
+        self.assertEqual(history[0]['macro_assessment'],'')
+        self.assertEqual(history[0]['failure_reason'],self.brain.get_last_inference_error())
+        self.assertEqual(history[0]['top_opportunities'],[])
+        self.assertNotIn('ai_last_prompt',history[0])
         events=[c for c in self.evidence.best_effort.call_args_list if c.args[1]=='model_request_failure']
         self.assertEqual(len(events),1)
         self.assertEqual(events[0].args[2]['category'],'request_timeout')
