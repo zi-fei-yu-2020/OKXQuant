@@ -1,5 +1,6 @@
 """Gateway Scheduler timing and migration tests."""
 from __future__ import annotations
+from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
@@ -48,6 +49,19 @@ class GatewaySchedulerTests(unittest.TestCase):
         self.store.set_state("job.last.news", self.now.isoformat())
         reopened = GatewayStore(self.store.path)
         self.assertEqual(reopened.get_state("job.last.news"), self.now.isoformat())
+
+    def test_self_improvement_is_deferred_around_trader_slots(self):
+        trader = next(spec for spec in JOBS if spec.name == "trader")
+        review = next(spec for spec in JOBS if spec.name == "self_improvement")
+        self.assertEqual(review.timeout_seconds, 480)
+        jobs = (trader, review)
+        with patch("okxquant_gateway.scheduler.current_jobs", return_value=jobs):
+            running = Future()
+            self.scheduler.running["trader"] = running
+            self.assertFalse(self.scheduler._self_improvement_window_open(self.now, review))
+            self.scheduler.running.clear()
+            self.assertTrue(self.scheduler._self_improvement_window_open(self.now.replace(minute=3), review))
+            self.assertFalse(self.scheduler._self_improvement_window_open(self.now.replace(minute=7), review))
 
 
 if __name__ == "__main__":

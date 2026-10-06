@@ -27,6 +27,7 @@ class ReviewPromptTests(unittest.TestCase):
         self.assertEqual(result,reply)
         kwargs=request.call_args.kwargs
         self.assertEqual((kwargs['timeout'],kwargs['attempt_timeout'],kwargs['max_attempts']),(180.,80.,2))
+        self.assertEqual(kwargs['max_tokens'],6144)
         self.assertTrue(kwargs['require_complete'])
         user=kwargs['messages'][1]['content'];marker='【完整运行证据 JSON】\n'
         payload=json.JSONDecoder().raw_decode(user.split(marker,1)[1])[0]

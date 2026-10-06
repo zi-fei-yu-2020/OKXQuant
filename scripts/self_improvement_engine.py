@@ -284,6 +284,7 @@ decision_evidence 只来自同账户真实成交 → 客户端订单意图 → �
                 temperature=0.2,
                 response_format={"type": "json_object"},
                 timeout=REVIEW_TIMEOUT, attempt_timeout=REVIEW_ATTEMPT_TIMEOUT, max_attempts=REVIEW_MAX_ATTEMPTS,
+                max_tokens=6144,
                 require_complete=True,
             )
             raw_res = {"usage": usage_dict} if isinstance(usage_dict, dict) else {}
@@ -295,7 +296,8 @@ decision_evidence 只来自同账户真实成交 → 客户端订单意图 → �
                     {"role": "user", "content": effective_evolution_user}
                 ],
                 "temperature": 0.2,
-                "response_format": {"type": "json_object"}
+                "response_format": {"type": "json_object"},
+                "max_tokens": 6144
             }
             if effort not in ("none", "auto"):
                 payload["reasoning_effort"] = effort

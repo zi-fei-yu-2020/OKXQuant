@@ -53,6 +53,7 @@ CANCEL 仅针对当前确实存在的指定挂单，并给出当前失效证据�
 
 【输出与审计纪律】
 只输出遵守 trading-evidence-v1 的 JSON 对象，包含 contract_version、macro_assessment、position_management、pending_orders_management、decisions。
+输出必须紧凑：不得输出思维过程、Markdown 或复述输入；macro_assessment 不超过 600 字，每个 reason、summary_reason、interpretation、uncertainty 不超过 120 字；每个方向只保留满足契约所需的 2~4 条最强证据。
 覆盖输入标的；字段引用必须来自输入 facts，且 value 与该引用一致，不能引用其他标的或其他周期的数值冒充当前证据。
 无效候选降级 WAIT；无证据的持仓调整降级 HOLD，无证据撤单降级 KEEP。不要尝试替换输出契约。
 """

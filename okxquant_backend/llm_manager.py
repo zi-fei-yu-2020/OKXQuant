@@ -932,6 +932,8 @@ def build_request_spec(
     max_tokens: int = 4096,
 ) -> Tuple[str, Dict[str, str], Dict[str, Any]]:
     """Build endpoint URL, headers, and request payload according to the specific API protocol format."""
+    if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or not 1 <= max_tokens <= 65536:
+        raise ValueError("max_tokens must be an integer between 1 and 65536")
     cleaned_url = base_url.rstrip("/")
     m_lower = model.lower()
     rtype = reasoning_type if reasoning_type != "auto" else _detect_reasoning_type(model)
@@ -1002,6 +1004,7 @@ def build_request_spec(
         payload: Dict[str, Any] = {
             "model": model,
             "input": messages,
+            "max_output_tokens": max_tokens,
         }
         if response_format and response_format.get("type") == "json_object":
             payload["text"] = {"format": {"type": "json_object"}}
@@ -1028,6 +1031,17 @@ def build_request_spec(
             "model": model,
             "messages": messages,
         }
+
+        # OpenAI's newer reasoning/chat families renamed the output budget,
+        # while DeepSeek/GLM and most compatible gateways still use max_tokens.
+        # Always send one explicit budget so a malformed or overly verbose
+        # response cannot consume tens of thousands of completion tokens.
+        uses_completion_budget = (
+            m_lower.startswith(("o1", "o3", "o4", "gpt-5", "gpt-6"))
+            or "/o1" in m_lower or "/o3" in m_lower or "/o4" in m_lower
+            or "/gpt-5" in m_lower or "/gpt-6" in m_lower
+        )
+        payload["max_completion_tokens" if uses_completion_budget else "max_tokens"] = max_tokens
 
         # Temperature handling for reasoning models vs normal models
         is_reasoning_model = (
@@ -1091,6 +1105,7 @@ def execute_llm_request(
     max_attempts: Optional[int] = None,
     require_complete: bool = False,
     attempt_timeout: Optional[float] = None,
+    max_tokens: int = 4096,
 ) -> Tuple[str, str, Dict[str, Any], int]:
     """Unified executor for LLM calls across all 3 protocols.
     Returns: (content, reasoning_content, usage_dict, latency_ms)
@@ -1113,6 +1128,7 @@ def execute_llm_request(
         temperature=temperature,
         response_format=response_format,
         reasoning_type=target_rtype,
+        max_tokens=max_tokens,
     )
 
     retry_options = {"max_attempts": max_attempts} if max_attempts is not None else {}
@@ -1202,6 +1218,7 @@ def test_llm_connection(
         reasoning_effort=reasoning_effort,
         temperature=0.1,
         reasoning_type=reasoning_type,
+        max_tokens=64,
     )
 
     t0 = time.perf_counter()

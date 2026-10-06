@@ -308,7 +308,10 @@ class SchedulerSafetyTests(SchedulerFixture):
             stack.enter_context(patch.object(sched, 'current_jobs', return_value=jobs))
             stack.enter_context(patch.object(sched, 'load_schedule', return_value={}))
             self.scheduler.tick(self.now)
-            for name in ['executor','trader_executor','guard_executor','scalp_executor']:
+            # The review job is deliberately deferred at a trader boundary; the
+            # latency-sensitive trader and guard/scalp jobs must still launch.
+            self.assertEqual(len(recorders['executor'].calls), 0)
+            for name in ['trader_executor','guard_executor','scalp_executor']:
                 self.assertEqual(len(recorders[name].calls), 1)
 
     def test_obsolete_queued_spec_does_not_spawn(self):

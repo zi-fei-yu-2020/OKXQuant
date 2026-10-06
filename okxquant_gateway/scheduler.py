@@ -43,7 +43,7 @@ JOBS = (
     JobSpec("market_observations", "market_observations.py", 60, 55),
     JobSpec("news", "news_sentiment_harvester.py", 10 * 60, 300),
     JobSpec("daily_briefing", "daily_summary_and_backup.py", None, 600, "briefing_times", ("08:00", "20:00")),
-    JobSpec("self_improvement", "self_improvement_engine.py", None, 1200, "self_improvement_time", ("02:00", "08:00", "14:00", "20:00")),
+    JobSpec("self_improvement", "self_improvement_engine.py", None, 480, "self_improvement_time", ("02:00", "08:00", "14:00", "20:00")),
 )
 
 
@@ -229,6 +229,22 @@ class GatewayScheduler:
         self.store.set_state(f"job.last.{spec.name}", now.isoformat())
         self._run_job(spec, run_id, previous=previous)
 
+    def _self_improvement_window_open(self, now: datetime, spec: JobSpec) -> bool:
+        """Run costly review inference only between protected trader slots."""
+        trader = next((job for job in current_jobs() if job.name == "trader"), None)
+        if trader is None:
+            return True
+        trader_future = self.running.get("trader")
+        if trader_future is not None and not trader_future.done():
+            return False
+        interval = int(trader.interval_seconds or 0)
+        if interval <= 0:
+            return True
+        seconds_until_trader = interval - (int(now.timestamp()) % interval)
+        # The subprocess group is killed at the job timeout. Keep an additional
+        # minute so cleanup/persistence cannot spill into the next trading slot.
+        return seconds_until_trader > spec.timeout_seconds + 60
+
     def _execute_manual(self, spec: JobSpec, request_id: int) -> None:
         if spec.name not in MANUAL_JOBS or spec not in JOBS:
             raise ValueError("Manual job is not allowlisted")
@@ -344,6 +360,8 @@ class GatewayScheduler:
             try:
                 if spec.name in self.running or time.monotonic() < self.retry_after.get(spec.name, 0) or not self.due(spec, now, schedule):
                     continue
+                if spec.name == "self_improvement" and not self._self_improvement_window_open(now, spec):
+                    continue
                 executor = {"position_guard": self.guard_executor, "ledger_sync": self.ledger_executor,
                             "trader": self.trader_executor, "demo_scalp": self.scalp_executor}.get(spec.name, self.executor)
                 if spec.schedule_key.startswith("backup_job:"):
@@ -364,6 +382,8 @@ class GatewayScheduler:
             if name not in MANUAL_JOBS or name in self.running:
                 continue
             spec = next(job for job in JOBS if job.name == name)
+            if name == "self_improvement" and not self._self_improvement_window_open(now, spec):
+                continue
             self.running[name] = self.executor.submit(self._execute_manual, spec, int(request["request_id"]))
             launched.append(name)
         return launched
