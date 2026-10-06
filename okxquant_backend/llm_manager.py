@@ -1057,11 +1057,15 @@ def build_request_spec(
             if "gemini" in m_lower and temperature is not None:
                 payload["temperature"] = temperature
 
-        # Standard reasoning effort parameter (supports max, xhigh, high, medium, low, minimal, none)
-        if rtype == "standard_effort" or (rtype == "auto" and ("gemini" in m_lower or m_lower.startswith(("o1", "o3", "o4", "gpt-5", "gpt-6")) or "gpt-5" in m_lower or "gpt-6" in m_lower)):
+        # Standard reasoning effort parameter (supports max, xhigh, high, medium, low, minimal, none).
+        # fastai's DeepSeek Flash family accepts this OpenAI-compatible control even
+        # when model discovery reports reasoning_type=auto. Sending low prevents its
+        # hidden reasoning from consuming the entire bounded completion budget.
+        deepseek_flash = "deepseek" in m_lower and "flash" in m_lower
+        if rtype == "standard_effort" or (rtype == "auto" and (deepseek_flash or "gemini" in m_lower or m_lower.startswith(("o1", "o3", "o4", "gpt-5", "gpt-6")) or "gpt-5" in m_lower or "gpt-6" in m_lower)):
             if effort in ("max", "xhigh", "high", "medium", "low", "minimal"):
                 payload["reasoning_effort"] = effort
-            elif effort == "none" and ("gemini" in m_lower or "gpt" in m_lower):
+            elif effort == "none" and (deepseek_flash or "gemini" in m_lower or "gpt" in m_lower):
                 payload["reasoning_effort"] = "none"
 
         if response_format and rtype != "deepseek_reasoner":

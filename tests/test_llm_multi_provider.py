@@ -152,9 +152,11 @@ class LLMMultiProviderTests(unittest.TestCase):
             messages=[{"role": "user", "content": "json"}],
             base_url="https://gateway.example/v1",
             api_format="openai_chat",
+            reasoning_effort="low",
             max_tokens=8192,
         )
         self.assertEqual(payload["max_tokens"], 8192)
+        self.assertEqual(payload["reasoning_effort"], "low")
         self.assertNotIn("max_completion_tokens", payload)
         for invalid in (0, -1, True, 65537):
             with self.assertRaises(ValueError):
