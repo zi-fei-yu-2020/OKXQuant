@@ -17,6 +17,8 @@ ROOT=Path(__file__).resolve().parents[1]
 for p in (ROOT,ROOT/'scripts'):
     if str(p) not in sys.path:sys.path.insert(0,str(p))
 DATA=ROOT/'data'
+ACTIVE_INTERVAL_SECONDS=60
+IDLE_INTERVAL_SECONDS=300
 
 def load(name,default):
     try:return json.loads((DATA/name).read_text(encoding='utf-8'))
@@ -113,7 +115,11 @@ def should_run(last_run,now=None):
         return now-last_run>=5
     if status.get('pending_settlements',0) and now-(status.get('pending_since') or 0)<120:
         return now-last_run>=10
-    return now-last_run>=60
+    rows=load('trading_ledger.json',[])
+    active=isinstance(rows,list) and any(
+        isinstance(row,dict) and row.get('status') in {'holding','closed_pending'} for row in rows
+    )
+    return now-last_run>=(ACTIVE_INTERVAL_SECONDS if active else IDLE_INTERVAL_SECONDS)
 
 def sync_once():
     from scripts.okx_runtime import selected_environment

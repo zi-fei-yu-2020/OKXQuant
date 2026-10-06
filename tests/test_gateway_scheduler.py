@@ -36,6 +36,16 @@ class GatewaySchedulerTests(unittest.TestCase):
         self.assertTrue(self.scheduler.due(trader, boundary, {}))
         self.assertFalse(self.scheduler.due(trader, boundary.replace(second=11), {}))
 
+    def test_minute_jobs_are_staggered_away_from_the_trader_boundary(self):
+        factors = next(spec for spec in JOBS if spec.name == "factor_library")
+        market = next(spec for spec in JOBS if spec.name == "market_observations")
+        boundary = self.now.replace(minute=15, second=0)
+        for spec in (factors, market):
+            self.store.set_state(f"job.last.{spec.name}", boundary.replace(minute=14).isoformat())
+            self.assertFalse(self.scheduler.due(spec, boundary, {}))
+            phased = boundary + timedelta(seconds=spec.phase_seconds)
+            self.assertTrue(self.scheduler.due(spec, phased, {}))
+
     def test_daily_job_runs_once_per_time_slot(self):
         briefing = next(spec for spec in JOBS if spec.name == "daily_briefing")
         schedule = {"briefing_times": ["08:00", "20:00"]}

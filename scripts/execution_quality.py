@@ -14,6 +14,28 @@ import time
 ROOT=Path(__file__).resolve().parents[1]
 VERSION='execution-quality-v1'
 HORIZONS=(1,5,30,60,300)
+HOT_INTERVAL_SECONDS=5
+IDLE_INTERVAL_SECONDS=60
+HOT_WINDOW_SECONDS=max(HORIZONS)+60
+
+
+def _recent_time_sensitive_work(now):
+    """Cheap local preflight; no exchange request and no database scan."""
+    from scripts.strategy_evidence import execution_quality_marker
+    try:
+        age=float(now)-execution_quality_marker().stat().st_mtime
+        return 0 <= age <= HOT_WINDOW_SECONDS
+    except (OSError,TypeError,ValueError):
+        # A missing marker must not permanently disable reconciliation; the
+        # conservative idle poll still discovers fills once per minute.
+        return False
+
+
+def should_run(last_run,now=None):
+    now=time.time() if now is None else float(now)
+    elapsed=max(0.,now-float(last_run or 0))
+    interval=HOT_INTERVAL_SECONDS if _recent_time_sensitive_work(now) else IDLE_INTERVAL_SECONDS
+    return elapsed>=interval
 
 
 def _number(value,positive=False):

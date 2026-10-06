@@ -107,7 +107,13 @@ class MonitorTests(unittest.TestCase):
         monitor.atomic('ledger_sync_status.json', {'pending_settlements': 1, 'pending_since': 100})
         self.assertTrue(monitor.should_run(100, 110))
         self.assertFalse(monitor.should_run(220, 230))
-        self.assertTrue(monitor.should_run(220, 280))
+        self.assertFalse(monitor.should_run(220, 280))
+        self.assertTrue(monitor.should_run(220, 520))
+
+    def test_active_lifecycle_keeps_minute_reconciliation(self):
+        monitor.atomic('trading_ledger.json',[self.row])
+        self.assertFalse(monitor.should_run(100,159))
+        self.assertTrue(monitor.should_run(100,160))
 
     def test_worker_no_notify_and_failed_sync_preserves_ledger(self):
         from scripts import sync_full_ledger

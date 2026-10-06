@@ -55,7 +55,8 @@ ERROR_LABELS = {
     'connection_error': '模型连接失败', 'dns_error': '模型地址解析失败',
     'certificate_error': '模型连接证书校验失败', 'deadline_exceeded': '模型调用总时限已耗尽',
     'invalid_response': '模型网关响应格式无效', 'invalid_json_response': '模型网关返回的内容不是有效JSON',
-    'empty_model_output': '模型返回空正文', 'http_error': '模型接口请求失败',
+    'empty_model_output': '模型返回空正文', 'truncated_model_output': '?????JSON???????',
+    'http_error': '模型接口请求失败',
 }
 
 

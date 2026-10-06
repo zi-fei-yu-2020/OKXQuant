@@ -114,6 +114,10 @@ PROTECTED_TITLES = {'角色与权责','层级与信任边界','证据与不确�
 class ContractError(ValueError): pass
 
 
+class TruncatedResponseError(ContractError):
+    """The provider returned a non-empty JSON document that ends mid-value."""
+
+
 def canonical(value):
     return json.dumps(value,ensure_ascii=False,sort_keys=True,allow_nan=False,separators=(',',':'))
 
@@ -402,7 +406,16 @@ def parse_response(content):
     try:obj=json.loads(content,object_pairs_hook=pairs,parse_constant=invalid,parse_float=finite_float)
     except ContractError:raise
     except json.JSONDecodeError as exc:
-        raise ContractError(f'JSON语法错误（第{exc.lineno}行，第{exc.colno}列，位置{exc.pos}）：{exc.msg}') from exc
+        # Only classify failures that are demonstrably at the response tail as
+        # truncation. Mid-document syntax errors remain ordinary contract
+        # failures and are never replayed automatically.
+        stripped=content.rstrip()
+        tail_error=exc.pos>=max(0,len(stripped)-1) and exc.msg in {
+            'Expecting value',"Expecting ',' delimiter",'Expecting property name enclosed in double quotes',
+            "Expecting ':' delimiter",
+        }
+        error_type=TruncatedResponseError if exc.msg=='Unterminated string starting at' or tail_error else ContractError
+        raise error_type(f'JSON语法错误（第{exc.lineno}行，第{exc.colno}列，位置{exc.pos}）：{exc.msg}') from exc
     except (ValueError,RecursionError) as exc:raise ContractError('JSON结构过深或数值不合法') from exc
     if not isinstance(obj,dict):raise ContractError('Response root must be an object')
     return obj

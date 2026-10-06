@@ -1,8 +1,9 @@
 ﻿"""Durable, fail-closed recovery scheduling for narrowly safe inference failures.
 
-Only a fast HTTP 503 admission rejection or an HTTP-200 response with no final
-model answer is eligible. Ambiguous network failures, timeouts and malformed
-non-empty output are never replayed because upstream completion may be unknown.
+Only a fast HTTP 503 admission rejection, an HTTP-200 response with no final
+model answer, or a demonstrably tail-truncated JSON answer is eligible.
+Ambiguous network failures, timeouts and arbitrary malformed non-empty output
+are never replayed because upstream completion may be unknown.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ MIN_DELAY_SECONDS = 45
 MAX_DELAY_SECONDS = 90
 MAX_ADMISSION_REJECT_DURATION_MS = 10_000
 MAX_EMPTY_OUTPUT_DURATION_MS = 90_000
+MAX_TRUNCATED_OUTPUT_DURATION_MS = 180_000
 
 
 def slot_start(now: datetime | None = None) -> datetime:
@@ -58,7 +60,13 @@ def eligible_failure(failure: dict[str, Any] | None, duration_ms: int) -> bool:
         and not failure.get("provider_error_code")
         and 0 <= elapsed < MAX_EMPTY_OUTPUT_DURATION_MS
     )
-    return cpu_rejected or empty_completion
+    truncated_completion = (
+        failure.get("category") == "truncated_model_output"
+        and failure.get("http_status") == 200
+        and not failure.get("provider_error_code")
+        and 0 <= elapsed < MAX_TRUNCATED_OUTPUT_DURATION_MS
+    )
+    return cpu_rejected or empty_completion or truncated_completion
 
 
 def _test_write_allowed() -> bool:

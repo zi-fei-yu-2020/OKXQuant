@@ -49,6 +49,11 @@ class AIRecoveryTests(unittest.TestCase):
     def failure(self, status=503, category="http_error", provider="system_cpu_overloaded"):
         return public_failure(LLMRequestError(status, 1, category, provider))
 
+    def test_tail_truncation_is_eligible_but_bounded(self):
+        truncated = self.failure(status=200, category="truncated_model_output", provider="")
+        self.assertTrue(ai_recovery.eligible_failure(truncated, 90_000))
+        self.assertFalse(ai_recovery.eligible_failure(truncated, 180_000))
+
     def enqueue(self, scheduled="2026-10-06 13:31:00"):
         return self.store.enqueue_ai_recovery(
             account_scope="demo:fixture", slot_start=self.slot,

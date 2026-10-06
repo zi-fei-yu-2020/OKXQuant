@@ -9,6 +9,18 @@ import time
 import uuid
 
 DB_PATH = Path(__file__).resolve().parents[1] / 'data' / 'strategy_evidence.db'
+
+
+def execution_quality_marker():
+    return Path(DB_PATH).with_name('.execution-quality-hot')
+
+
+def _mark_execution_quality_hot(kind):
+    if kind not in {'entry_submission','execution_receipt'}:return
+    try:
+        marker=execution_quality_marker();marker.parent.mkdir(parents=True,exist_ok=True)
+        marker.touch(exist_ok=True);marker.chmod(0o600)
+    except OSError:pass
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, scope TEXT NOT NULL, kind TEXT NOT NULL, at REAL NOT NULL, payload TEXT NOT NULL, digest TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS events_scope ON events(scope,kind,at);
@@ -48,6 +60,7 @@ def append(scope, kind, payload, event_id=None):
         old = db.execute('SELECT scope,kind,digest FROM events WHERE id=?',(identity,)).fetchone()
         if old and old != (scope,kind,digest): raise ValueError('Evidence identity collision')
         db.execute('INSERT OR IGNORE INTO events VALUES (?,?,?,?,?,?)',(identity,scope,kind,time.time(),clean,digest))
+    _mark_execution_quality_hot(kind)
     return identity
 
 def append_batch(scope, kind, items):
@@ -60,6 +73,7 @@ def append_batch(scope, kind, items):
             old=db.execute('SELECT scope,kind,digest FROM events WHERE id=?',(identity,)).fetchone()
             if old and old!=(scope,kind,digest):raise ValueError('Evidence identity collision')
             db.execute('INSERT OR IGNORE INTO events VALUES (?,?,?,?,?,?)',(identity,scope,kind,time.time(),clean,digest))
+    _mark_execution_quality_hot(kind)
 
 
 def best_effort(scope, kind, payload, event_id=None):

@@ -4,7 +4,7 @@ JSON; downstream must run the full trading validator and final live risk gateway
 """
 import hashlib
 import time
-from scripts.trading_prompt import ContractError, parse_response
+from scripts.trading_prompt import ContractError, TruncatedResponseError, parse_response
 
 BUDGET_SECONDS = 20.0
 
@@ -85,12 +85,23 @@ def decode_with_regeneration(initial, regenerate=None, *, report=None, clock=tim
             diagnostic = {'reason': str(exc)[:300], 'chars': len(text) if isinstance(text, str) else 0}
             if isinstance(text, str):
                 diagnostic['sha256'] = hashlib.sha256(text.encode()).hexdigest()
+            if isinstance(exc, TruncatedResponseError):
+                diagnostic['category'] = 'truncated_model_output'
             report['failures'].append(diagnostic)
             raise
     try:
         obj = decode(initial)
         report['status'] = 'valid'
         return obj
+    except TruncatedResponseError as exc:
+        if regenerate is None:
+            # A complete HTTP response arrived, but its non-empty final
+            # answer ended mid-JSON. Convert it to an allowlisted model
+            # failure so the scheduler may perform one delayed, fail-closed
+            # fresh generation for this 15-minute slot.
+            report['status'] = 'rejected'
+            from okxquant_backend.llm_transport import LLMRequestError
+            raise LLMRequestError(200, 1, 'truncated_model_output') from exc
     except ContractError:
         if regenerate is None:
             report['status'] = 'rejected'

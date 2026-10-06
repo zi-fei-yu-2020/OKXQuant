@@ -46,6 +46,18 @@ class ModelJsonTests(unittest.TestCase):
         for proto,response in [('claude_messages',{'stop_reason':'max_tokens'}),('openai_responses',{'status':'incomplete'})]:
             with self.assertRaises(ContractError):verify_completion(response,proto)
 
+    def test_tail_truncated_json_is_classified_for_one_delayed_recovery(self):
+        from okxquant_backend.llm_transport import LLMRequestError
+        report={}
+        with self.assertRaises(LLMRequestError) as caught:
+            decode_with_regeneration(lambda:'{"macro_assessment":"unfinished',report=report)
+        self.assertEqual(caught.exception.category,'truncated_model_output')
+        self.assertEqual(report['failures'][0]['category'],'truncated_model_output')
+
+    def test_mid_document_json_error_is_not_classified_as_truncation(self):
+        with self.assertRaises(ContractError):
+            decode_with_regeneration(lambda:'{"a": nope, "b": 2}')
+
     def test_regeneration_is_not_contract_approval(self):
         from scripts.trading_prompt import validate_response
         result=decode_with_regeneration(lambda:'bad',lambda **kw:'{"decisions":{"FAKE":{"action":"BUY_LONG"}}}')

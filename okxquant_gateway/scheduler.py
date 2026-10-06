@@ -30,17 +30,22 @@ class JobSpec:
     timeout_seconds: int = 600
     schedule_key: str = ""
     default_times: tuple[str, ...] = ()
+    phase_seconds: int | None = None
 
 
 JOBS = (
     JobSpec("position_guard", "position_guard.py", 60, 240),
     JobSpec("evidence_sync", "evidence_sync.py", 300, 60),
+    # Keep a five-second hot path after local submissions/fills, but let the
+    # job's lightweight due check back off while there is nothing to sample.
     JobSpec("execution_quality", "execution_quality.py", 5, 20),
     JobSpec("ledger_sync", "ledger_monitor.py", 60, 50),
     JobSpec("trader", "ai_factor_trader.py", 15 * 60, 840),
     JobSpec("demo_scalp", "demo_scalp.py", 60, 120),
-    JobSpec("factor_library", "factor_library.py", 60, 55),
-    JobSpec("market_observations", "market_observations.py", 60, 55),
+    # Stagger non-critical research jobs so Python imports and indicator work
+    # do not all hit the CPU at the trader/guard boundary.
+    JobSpec("factor_library", "factor_library.py", 60, 55, phase_seconds=25),
+    JobSpec("market_observations", "market_observations.py", 60, 55, phase_seconds=45),
     JobSpec("news", "news_sentiment_harvester.py", 10 * 60, 300),
     JobSpec("daily_briefing", "daily_summary_and_backup.py", None, 600, "briefing_times", ("08:00", "20:00")),
     JobSpec("self_improvement", "self_improvement_engine.py", None, 480, "self_improvement_time", ("02:00", "08:00", "14:00", "20:00")),
@@ -173,11 +178,19 @@ class GatewayScheduler:
         if spec.name == "ledger_sync":
             from scripts.ledger_monitor import should_run
             return should_run(last.timestamp() if last else 0, now.timestamp())
+        if spec.name == "execution_quality":
+            from scripts.execution_quality import should_run
+            return should_run(last.timestamp() if last else 0, now.timestamp())
         if spec.interval_seconds:
             if spec.name == "trader":
                 slot = int(now.timestamp()) // spec.interval_seconds
                 last_slot = int(last.timestamp()) // spec.interval_seconds if last else -1
                 return slot > last_slot and int(now.timestamp()) % spec.interval_seconds < 10
+            if spec.phase_seconds is not None:
+                shifted=int(now.timestamp())-spec.phase_seconds
+                slot=shifted//spec.interval_seconds
+                last_slot=(int(last.timestamp())-spec.phase_seconds)//spec.interval_seconds if last else -1
+                return slot>last_slot and shifted%spec.interval_seconds<10
             return not last or (now - last).total_seconds() >= spec.interval_seconds
         if spec.name == "self_improvement":
             # A manual review can overlap a scheduled slot. Catch up that slot
