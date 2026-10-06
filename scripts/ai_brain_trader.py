@@ -849,7 +849,7 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                         # socket timeout and still be billed. Use one sufficiently long attempt
                         # instead of abandoning it and launching a duplicate request.
                         timeout=180.0, max_attempts=1,
-                        max_tokens=8192,
+                        max_tokens=12288,
                         require_complete=True,
                     )
                     raw_res = {"usage": usage_dict} if isinstance(usage_dict, dict) else {}
@@ -862,7 +862,7 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                         ],
                         "temperature": 0.2,
                         "response_format": {"type": "json_object"},
-                        "max_tokens": 8192
+                        "max_tokens": 12288
                     }
                     if effort not in ("none", "auto"):
                         payload["reasoning_effort"] = effort

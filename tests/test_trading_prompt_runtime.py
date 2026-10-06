@@ -48,6 +48,7 @@ class PromptRuntimeTests(unittest.TestCase):
         checked=self.exercise(response(),texts=['{"decisions":'])
         self.assertEqual(checked['llm_calls'],1)
         self.assertTrue(checked['llm_args'][0]['require_complete'])
+        self.assertEqual(checked['llm_args'][0]['max_tokens'],12288)
         self.assertEqual(checked['validation']['json_response']['status'],'rejected')
         self.assertIsNone(checked['result'])
         self.assertEqual(checked['cache'],{})
