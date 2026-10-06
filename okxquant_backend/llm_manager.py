@@ -1194,9 +1194,9 @@ def execute_llm_request(
         reasoning_content = str(msg.get("reasoning_content") or "").strip()
 
     if not content:
-        if require_complete:
-            from scripts.trading_prompt import ContractError
-            raise ContractError("模型响应内容为空，未提供决策JSON")
+        # HTTP 200 with no final answer is a transport-level empty completion,
+        # not a malformed trading contract. This classification permits one
+        # delayed, fail-closed recovery generation for the same time slot.
         raise LLMRequestError(200, attempts, "empty_model_output")
     return content, reasoning_content, usage, latency_ms
 

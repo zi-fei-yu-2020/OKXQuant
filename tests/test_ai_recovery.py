@@ -71,6 +71,9 @@ class AIRecoveryTests(unittest.TestCase):
         self.assertFalse(ai_recovery.eligible_failure(self.failure(status=500), 100))
         self.assertFalse(ai_recovery.eligible_failure(self.failure(category="request_timeout", status=0, provider=""), 100))
         self.assertFalse(ai_recovery.eligible_failure(self.failure(provider="system_memory_overloaded"), 100))
+        empty = self.failure(status=200, category="empty_model_output", provider="")
+        self.assertTrue(ai_recovery.eligible_failure(empty, 89_999))
+        self.assertFalse(ai_recovery.eligible_failure(empty, 90_000))
 
     def test_schedule_is_durable_and_idempotent_per_account_slot(self):
         context = {"account_scope": "demo:fixture", "slot_start": self.slot}

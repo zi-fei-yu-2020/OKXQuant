@@ -1,9 +1,8 @@
-﻿"""Durable, fail-closed recovery scheduling for pre-inference CPU overload rejects.
+﻿"""Durable, fail-closed recovery scheduling for narrowly safe inference failures.
 
-Only the exact, fast HTTP 503 admission rejection is eligible.  Ambiguous
-network failures, timeouts, malformed model output and completed inference are
-never replayed here because the upstream billing/execution outcome may be
-unknown.
+Only a fast HTTP 503 admission rejection or an HTTP-200 response with no final
+model answer is eligible. Ambiguous network failures, timeouts and malformed
+non-empty output are never replayed because upstream completion may be unknown.
 """
 from __future__ import annotations
 
@@ -24,6 +23,7 @@ MIN_NEXT_SLOT_MARGIN_SECONDS = 4 * 60
 MIN_DELAY_SECONDS = 45
 MAX_DELAY_SECONDS = 90
 MAX_ADMISSION_REJECT_DURATION_MS = 10_000
+MAX_EMPTY_OUTPUT_DURATION_MS = 90_000
 
 
 def slot_start(now: datetime | None = None) -> datetime:
@@ -43,14 +43,22 @@ def context(account_scope: str, now: datetime | None = None) -> dict[str, str]:
 
 
 def eligible_failure(failure: dict[str, Any] | None, duration_ms: int) -> bool:
-    return bool(
-        isinstance(failure, dict)
-        and failure.get("category") == "http_error"
+    if not isinstance(failure, dict) or failure.get("attempts") != 1:
+        return False
+    elapsed = int(duration_ms)
+    cpu_rejected = (
+        failure.get("category") == "http_error"
         and failure.get("http_status") == 503
         and failure.get("provider_error_code") == "system_cpu_overloaded"
-        and failure.get("attempts") == 1
-        and 0 <= int(duration_ms) < MAX_ADMISSION_REJECT_DURATION_MS
+        and 0 <= elapsed < MAX_ADMISSION_REJECT_DURATION_MS
     )
+    empty_completion = (
+        failure.get("category") == "empty_model_output"
+        and failure.get("http_status") == 200
+        and not failure.get("provider_error_code")
+        and 0 <= elapsed < MAX_EMPTY_OUTPUT_DURATION_MS
+    )
+    return cpu_rejected or empty_completion
 
 
 def _test_write_allowed() -> bool:
