@@ -870,23 +870,10 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                         content = text_content(res["choices"][0]["message"]["content"])
                         raw_res = res
                 return content
-            def regenerate_json(*, timeout, max_attempts):
-                nonlocal content
-                messages = [{"role":"system", "content":effective_system_prompt},
-                    {"role":"user", "content":prompt + "\n上一次响应不是完整合法JSON。请基于同一冻结输入重新输出完整JSON对象；不要输出代码围栏、解释、注释、尾逗号或省略字段。理由保持简洁，不改变风险契约。"}]
-                meter = ModelCallTelemetry('trading_json_regeneration', model_name, str(effort), messages[0]['content'], messages[1]['content'])
-                try:
-                    content, _, usage, _ = execute_llm_request(messages=messages, model=model_name,
-                        base_url=base_url, api_key=api_key, api_format=api_format, reasoning_effort=effort,
-                        temperature=0.2, response_format={'type':'json_object'}, timeout=timeout,
-                        max_attempts=max_attempts, require_complete=True)
-                    meter.finish('success', {'usage':usage}, output_chars=len(content))
-                    return content
-                except Exception as exc:
-                    meter.finish('failed', error=exc)
-                    raise
-            brain_output = decode_with_regeneration(initial_json,
-                regenerate_json if execute_llm_request else None, report=json_report)
+            # The trading scheduler has a hard one-request budget per cycle. Invalid
+            # JSON is rejected fail-closed instead of launching a second billable
+            # generation after the provider may already have completed the first.
+            brain_output = decode_with_regeneration(initial_json, report=json_report)
         original_brain_output = brain_output
         # Shared boundary for single-model and council output, before any model-directed write.
         brain_output = trading_prompt.validate_response(brain_output, packages,
@@ -894,20 +881,11 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
             allow_open=prompt_bundle.allow_open and not brain_output.get('prompt_conflicts'),
             previous_wait_reviews=prompt_bundle.previous_wait_reviews, risk_contract=prompt_bundle.risk_contract)
         from scripts import wait_repair
-        def request_wait_correction(*, messages, timeout, max_attempts):
-            meter = ModelCallTelemetry('wait_audit_repair', model_name, str(effort), messages[0]['content'], messages[1]['content'])
-            try:
-                repaired_text, _, usage, _ = execute_llm_request(
-                    messages=messages, model=model_name, base_url=base_url, api_key=api_key,
-                    api_format=api_format, reasoning_effort=effort, temperature=0.2,
-                    response_format={'type':'json_object'}, timeout=timeout, max_attempts=max_attempts, require_complete=True)
-            except Exception as exc:
-                meter.finish('failed', error=exc)
-                raise
-            meter.finish('success', {'usage':usage}, output_chars=len(repaired_text))
-            return repaired_text
+        # WAIT audit repair is local-only. Missing cross-cycle review metadata can
+        # be reconstructed from frozen facts; every other invalid WAIT remains
+        # incomplete. Never spend a second model request on audit wording.
         brain_output, repair_report = wait_repair.attempt(original_brain_output, brain_output, packages,
-            request=request_wait_correction if execute_llm_request and not json_report.get("attempted") else None, positions=active_positions_detail,
+            request=None, positions=active_positions_detail,
             previous_wait_reviews=prompt_bundle.previous_wait_reviews, risk_contract=prompt_bundle.risk_contract)
         if repair_report['targets']:
             strategy_evidence.best_effort(market._selected().identity, 'wait_audit_repair',

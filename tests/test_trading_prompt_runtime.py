@@ -44,31 +44,22 @@ class PromptRuntimeTests(unittest.TestCase):
                 'manifest':json.loads((root/'trading_prompt_manifest.json').read_text()),
                 'validation':json.loads((root/'trading_output_validation.json').read_text())}
 
-    def test_invalid_json_regenerates_once_then_runs_original_entry_validator(self):
-        checked=self.exercise(response(),texts=['{"decisions":',json.dumps(response())])
-        self.assertEqual(checked['llm_calls'],2)
-        self.assertEqual(checked['llm_args'][1]['max_attempts'],1)
-        self.assertEqual(checked['llm_args'][1]['timeout'],20)
+    def test_invalid_json_is_rejected_without_second_model_request(self):
+        checked=self.exercise(response(),texts=['{"decisions":'])
+        self.assertEqual(checked['llm_calls'],1)
         self.assertTrue(checked['llm_args'][0]['require_complete'])
-        self.assertEqual(checked['validation']['json_response']['status'],'regenerated')
-        self.assertEqual(checked['result']['BTC-USDT-SWAP']['decision']['action'],'BUY_LONG')
-        self.assertEqual(len(checked['calls']),1)  # pending read only; no new order retries
-
-    def test_bad_second_response_clears_old_signals_and_retains_diagnostics(self):
-        checked=self.exercise(response(),texts=['not json','{"decisions":'])
-        self.assertIsNone(checked['result']);self.assertEqual(checked['cache'],{})
-        self.assertEqual(checked['llm_calls'],2)
-        self.assertEqual(len(checked['validation']['json_response']['failures']),2)
         self.assertEqual(checked['validation']['json_response']['status'],'rejected')
+        self.assertIsNone(checked['result'])
+        self.assertEqual(checked['cache'],{})
         self.assertEqual(len(checked['calls']),1)
 
-    def test_json_regeneration_does_not_stack_wait_correction(self):
-        from test_wait_audit import valid_wait
-        output=response(valid_wait());output['decisions']['BTC-USDT-SWAP']['wait_audit']['long']['code']='made_up'
-        checked=self.exercise(output,texts=['not json',json.dumps(output)])
-        self.assertEqual(checked['llm_calls'],2)
-        self.assertEqual(checked['result']['BTC-USDT-SWAP']['decision']['action'],'WAIT')
-        self.assertFalse(checked['result']['BTC-USDT-SWAP']['decision']['contract_valid'])
+    def test_malformed_json_never_launches_wait_or_json_repair(self):
+        checked=self.exercise(response(),texts=['not json'])
+        self.assertIsNone(checked['result']);self.assertEqual(checked['cache'],{})
+        self.assertEqual(checked['llm_calls'],1)
+        self.assertEqual(len(checked['validation']['json_response']['failures']),1)
+        self.assertEqual(checked['validation']['json_response']['status'],'rejected')
+        self.assertEqual(len(checked['calls']),1)
 
     def test_single_profile_same_messages_and_validated_candidate_reaches_cache(self):
         checked=self.exercise(response())

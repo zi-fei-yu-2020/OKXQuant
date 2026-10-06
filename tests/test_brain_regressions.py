@@ -229,35 +229,41 @@ class BrainRegressions(unittest.TestCase):
         self.assertEqual(events[0].args[2]['category'],'request_timeout')
         self.writer.assert_not_called();self.barrier.assert_not_called()
 
-    def test_invalid_wait_gets_one_bounded_correction_before_any_write(self):
-        from test_wait_repair import macro_wait
-        fixed=macro_wait();bad=copy.deepcopy(fixed);bad['wait_audit']['short']['code']='position_constraint'
-        initial=proposal();initial['decisions'][INST]=bad
-        self.council_config.return_value={'enabled':False}
-        self.llm.side_effect=[(json.dumps(initial),'',{},1),(json.dumps({'decisions':{INST:fixed}}),'',{},1)]
-        result=self.run_cycle()
-        self.assertEqual(result[INST]['decision']['decision_status'],'audited_wait')
-        self.assertEqual(result[INST]['decision']['wait_repair']['status'],'corrected')
-        self.assertEqual(self.llm.call_count,2)
-        self.assertEqual(self.llm.call_args.kwargs['max_attempts'],1)
-        self.assertEqual(self.llm.call_args.kwargs['timeout'],35)
-        self.writer.assert_not_called();self.barrier.assert_not_called()
-        events=[c for c in self.evidence.best_effort.call_args_list if c.args[1]=='wait_audit_repair']
-        self.assertEqual(len(events),1)
-        self.assertEqual(events[0].args[2]['report']['original_waits'][INST]['value'],bad)
-
-    def test_correction_transport_failure_keeps_incomplete_without_call_loop(self):
+    def test_invalid_wait_never_spends_a_second_model_request(self):
         from test_wait_repair import macro_wait
         bad=macro_wait();bad['wait_audit']['short']['code']='position_constraint'
         initial=proposal();initial['decisions'][INST]=bad
         self.council_config.return_value={'enabled':False}
-        self.llm.side_effect=[(json.dumps(initial),'',{},1),LLMRequestError(0,1,'request_timeout')]
+        self.llm.return_value=(json.dumps(initial),'',{},1)
         result=self.run_cycle()
         self.assertEqual(result[INST]['decision']['decision_status'],'incomplete')
-        self.assertEqual(result[INST]['decision']['wait_repair']['status'],'failed')
+        self.assertEqual(result[INST]['decision']['wait_repair']['status'],'unavailable')
+        self.llm.assert_called_once()
+        self.writer.assert_not_called();self.barrier.assert_not_called()
         events=[c for c in self.evidence.best_effort.call_args_list if c.args[1]=='wait_audit_repair']
-        self.assertEqual(events[0].args[2]['report']['model_failure']['category'],'request_timeout')
-        self.assertEqual(self.llm.call_count,2)
+        self.assertEqual(len(events),1)
+        self.assertFalse(events[0].args[2]['report']['attempted'])
+
+    def test_missing_previous_review_is_repaired_locally_without_model_call(self):
+        from test_wait_repair import macro_wait
+        fixed=macro_wait();initial=proposal();initial['decisions'][INST]=fixed
+        prior={INST:{'required':True,'review_id':'prior-review','changed_refs':['/price'],
+            'trigger_checks':{'long':'met','short':'not_met'},
+            'previous_conditions':{
+                'long':copy.deepcopy(fixed['wait_audit']['long']['reconsider']),
+                'short':copy.deepcopy(fixed['wait_audit']['short']['reconsider'])}}}
+        wait_audit.prepare.return_value=prior
+        self.council_config.return_value={'enabled':False}
+        self.llm.return_value=(json.dumps(initial),'',{},1)
+        result=self.run_cycle()
+        decision=result[INST]['decision']
+        self.assertEqual(decision['decision_status'],'audited_wait')
+        self.assertEqual(decision['wait_repair']['status'],'corrected')
+        self.assertFalse(decision['wait_repair']['attempted'])
+        self.assertEqual(decision['wait_audit']['previous_review']['review_id'],'prior-review')
+        self.llm.assert_called_once()
+        events=[c for c in self.evidence.best_effort.call_args_list if c.args[1]=='wait_audit_repair']
+        self.assertEqual(events[0].args[2]['report']['local_corrected'],[INST])
         self.writer.assert_not_called();self.barrier.assert_not_called()
 
     def test_invalid_council_output_is_rejected_before_model_directed_writes(self):

@@ -30,6 +30,68 @@ def snapshot(value, limit=32000):
             **({'preview': text[:limit]} if len(text) > limit else {'value': copy.deepcopy(value)})}
 
 
+def _deterministic_previous_review(original, validated_row, package, position, prior, risk_contract):
+    """Fill only verifiable cross-cycle review metadata without another model call.
+
+    We only bind the exact previous review id and current values of fields that
+    the durable state says changed. The complete WAIT is then run through the
+    normal validator again, so this helper can never authorize an entry.
+    """
+    if not validated_row.get('validation_reason'):
+        return None
+    if not isinstance(prior, dict) or prior.get('context_error'):
+        return None
+    review_id = prior.get('review_id')
+    if not isinstance(review_id, str) or not review_id:
+        return None
+    repaired = copy.deepcopy(original)
+    audit = repaired.get('wait_audit')
+    if not isinstance(audit, dict):
+        return None
+    previous_conditions = prior.get('previous_conditions') or {}
+    shifted = bool(previous_conditions) and any(
+        (((audit.get(side) or {}).get('reconsider') or {}).get('conditions')) !=
+        (((previous_conditions.get(side) or {}).get('conditions')))
+        for side in ('long', 'short')
+    )
+    existing = audit.get('previous_review')
+    required = bool(prior.get('required')) or shifted or existing is not None
+    if not required:
+        return None
+    if isinstance(existing, dict) and existing.get('review_id') == review_id and existing.get('reason'):
+        return None
+    facts = contract.facts_for(package, position)
+    refs = [ref for ref in contract.prompt_changed_refs(prior) if ref in facts]
+    if not refs:
+        refs = [ref for ref in prior.get('changed_refs', []) if isinstance(ref, str) and ref in facts]
+    if not refs:
+        return None
+    checks = prior.get('trigger_checks') or {}
+    check_text = ', '.join(f'{side}={checks.get(side)}' for side in ('long', 'short') if side in checks) or 'required_review'
+    audit['previous_review'] = {
+        'review_id': review_id,
+        'reason': f'Previous review state was {check_text}. Current changed facts were rechecked; the new reconsider conditions remain unmet, so WAIT continues without authorizing a trade.',
+        'evidence': [
+            {'ref': ref, 'value': facts[ref]['value'],
+             'interpretation': 'This fact changed since the previous review and is bound to its current observed value.'}
+            for ref in refs[:3]
+        ],
+    }
+    checked = contract.candidate(package, repaired, facts, allow_open=False,
+                                 previous_wait_review=prior, risk_contract=risk_contract)
+    if checked.get('contract_valid') and checked.get('decision_status') == 'audited_wait' and checked.get('action') == 'WAIT':
+        return checked
+    return None
+
+
+def _finalize(result, report):
+    errors = {inst: row.get('validation_reason') for inst, row in result['decisions'].items()
+              if row.get('decision_status') == 'incomplete'}
+    result['validation']['rejected_candidates'] = errors
+    result['validation']['status'] = 'incomplete' if errors else 'validated'
+    return result, report
+
+
 def attempt(raw, validated, packages, *, request=None, positions=None, previous_wait_reviews=None, risk_contract=None):
     result = copy.deepcopy(validated)
     originals = raw.get('decisions', {})
@@ -40,7 +102,7 @@ def attempt(raw, validated, packages, *, request=None, positions=None, previous_
                if row.get('decision_status') == 'incomplete' and isinstance(originals.get(inst), dict)
                and str(originals[inst].get('action', '')).upper() == 'WAIT' and inst in package_map]
     report = {'version': VERSION, 'status': 'not_needed', 'attempted': False, 'max_http_attempts': 1,
-              'timeout_seconds': TIMEOUT, 'targets': targets, 'corrected': [], 'remaining_errors': {},
+              'timeout_seconds': TIMEOUT, 'targets': targets, 'corrected': [], 'local_corrected': [], 'remaining_errors': {},
               'original_errors': {inst: validated['decisions'][inst].get('validation_reason') for inst in targets},
               'original_waits': {inst: snapshot(originals[inst]) for inst in targets}}
     if not targets:
@@ -51,11 +113,29 @@ def attempt(raw, validated, packages, *, request=None, positions=None, previous_
     if actionable:
         report.update(status='deferred_for_actions', requested_symbols=[])
         return result, report  # Never delay valid entries or protective actions for audit wording.
-    eligible = [inst for inst in targets if not previous.get(inst, {}).get('context_error')][:MAX_TARGETS]
+    # The common missing-previous-review case is data binding, not new market
+    # reasoning. Repair it deterministically from frozen facts before considering
+    # any optional external correction transport.
+    for inst in targets:
+        prior = previous.get(inst, {})
+        if prior.get('context_error'):
+            continue
+        checked = _deterministic_previous_review(
+            originals[inst], validated['decisions'][inst], package_map[inst],
+            position_map.get(inst), prior, risk_contract)
+        if checked is not None:
+            result['decisions'][inst] = checked
+            report['corrected'].append(inst)
+            report['local_corrected'].append(inst)
+    remaining = [inst for inst in targets if inst not in report['corrected']]
+    if not remaining:
+        report.update(status='corrected', requested_symbols=[])
+        return _finalize(result, report)
+    eligible = [inst for inst in remaining if not previous.get(inst, {}).get('context_error')][:MAX_TARGETS]
     report['requested_symbols'] = eligible if request else []
     if not request or not eligible:
-        report['status'] = 'unavailable'
-        return result, report
+        report['status'] = 'partial' if report['corrected'] else 'unavailable'
+        return _finalize(result, report)
     facts = {inst: contract.facts_for(package_map[inst], position_map.get(inst)) for inst in eligible}
     payload = {'requested_symbols': eligible, 'frozen_facts': facts,
                'wait_constraints': {inst: wait_audit.constraints(facts[inst], previous.get(inst)) for inst in eligible},
@@ -102,16 +182,13 @@ def attempt(raw, validated, packages, *, request=None, positions=None, previous_
         code = getattr(exc, 'status_code', None)
         report['http_status'] = code if type(code) is int and 0 <= code <= 599 else None
         # No retry, management edits, new entry or invalid-audit promotion.
-    errors = {inst: row.get('validation_reason') for inst, row in result['decisions'].items() if row.get('decision_status') == 'incomplete'}
-    result['validation']['rejected_candidates'] = errors
-    result['validation']['status'] = 'incomplete' if errors else 'validated'
-    return result, report
+    return _finalize(result, report)
 
 
 def public_report(report, inst=None):
     """Small display projection. Raw rejected text stays in the scoped evidence DB."""
     if inst is None:
-        return {key: report.get(key) for key in ('version','status','attempted','targets','corrected','original_errors','remaining_errors','error_type','http_status','latency_ms','model_failure')}
+        return {key: report.get(key) for key in ('version','status','attempted','targets','corrected','local_corrected','original_errors','remaining_errors','error_type','http_status','latency_ms','model_failure')}
     if inst not in report.get('targets', []):
         return None
     attempted = bool(report['attempted']) and inst in report.get('requested_symbols', [])

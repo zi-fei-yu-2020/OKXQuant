@@ -149,6 +149,26 @@ class RepairTests(unittest.TestCase):
         fixed=macro_wait();fixed['wait_audit']['previous_review']={'review_id':'prior','reason':'价格变化后仍需重新确认其他约束','evidence':[ref('/price',100)]}
         result,_,_=self.call({'decisions':{INST:fixed}},previous_wait_reviews=prior)
         self.assertTrue(result['decisions'][INST]['contract_valid'])
+    def test_missing_previous_review_is_bound_locally_without_transport(self):
+        raw=response(macro_wait())
+        prior={INST:{'required':True,'review_id':'prior-review','changed_refs':['/price'],
+            'trigger_checks':{'long':'met','short':'not_met'},
+            'previous_conditions':{
+                'long':copy.deepcopy(raw['decisions'][INST]['wait_audit']['long']['reconsider']),
+                'short':copy.deepcopy(raw['decisions'][INST]['wait_audit']['short']['reconsider'])}}}
+        validated=contract.validate_response(raw,[self.p],previous_wait_reviews=prior)
+        callback=Mock(side_effect=AssertionError('transport must not run'))
+        result,report=wait_repair.attempt(raw,validated,[self.p],request=callback,previous_wait_reviews=prior)
+        callback.assert_not_called()
+        self.assertEqual(report['status'],'corrected')
+        self.assertEqual(report['local_corrected'],[INST])
+        self.assertFalse(report['attempted'])
+        row=result['decisions'][INST]
+        self.assertTrue(row['contract_valid'])
+        self.assertEqual(row['decision_status'],'audited_wait')
+        self.assertEqual(row['wait_audit']['previous_review']['review_id'],'prior-review')
+        self.assertEqual(row['wait_audit']['previous_review']['evidence'][0]['value'],100.)
+
     def test_correction_cannot_claim_insufficient_rr_when_geometry_passes_policy(self):
         fixed=macro_wait();fixed['wait_audit']['long'].update(code='net_rr_below_minimum',reason='该方案净盈亏比不足',geometry={'entry_price':100,'stop_loss_price':99,'take_profit_price':110,'evidence':[ref('/price',100)]})
         result,_,_=self.call({'decisions':{INST:fixed}})
