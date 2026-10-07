@@ -33,13 +33,13 @@ class Config:
     version: str = VERSION
     enabled: bool = True
     environment: str = "demo"
-    scalp_daily_filled_limit: int = 10
-    scalp_per_instrument_daily_limit: int = 2
-    scalp_active_position_limit: int = 1
-    total_active_slot_limit: int = 2
+    scalp_daily_filled_limit: int = 18
+    scalp_per_instrument_daily_limit: int = 4
+    scalp_active_position_limit: int = 2
+    total_active_slot_limit: int = 4
     swing_reserved_slots: int = 1
-    scalp_risk_budget_cap_usdt: float = 5.0
-    swing_risk_budget_cap_usdt: float = 15.0
+    scalp_risk_budget_cap_usdt: float = 8.0
+    swing_risk_budget_cap_usdt: float = 20.0
 
 
 def _bool(value, default=False):
@@ -74,13 +74,13 @@ def load_config(mode, values=None):
     config = Config(
         enabled=enabled,
         environment=mode,
-        scalp_daily_filled_limit=_integer(values, "OKXQUANT_SCALP_DAILY_FILLED_LIMIT", 10, 1),
-        scalp_per_instrument_daily_limit=_integer(values, "OKXQUANT_SCALP_INSTRUMENT_DAILY_LIMIT", 2, 1),
-        scalp_active_position_limit=_integer(values, "OKXQUANT_SCALP_ACTIVE_LIMIT", 1, 1),
-        total_active_slot_limit=_integer(values, "OKXQUANT_HORIZON_TOTAL_SLOTS", 2, 1),
+        scalp_daily_filled_limit=_integer(values, "OKXQUANT_SCALP_DAILY_FILLED_LIMIT", 18, 1),
+        scalp_per_instrument_daily_limit=_integer(values, "OKXQUANT_SCALP_INSTRUMENT_DAILY_LIMIT", 4, 1),
+        scalp_active_position_limit=_integer(values, "OKXQUANT_SCALP_ACTIVE_LIMIT", 2, 1),
+        total_active_slot_limit=_integer(values, "OKXQUANT_HORIZON_TOTAL_SLOTS", 4, 1),
         swing_reserved_slots=_integer(values, "OKXQUANT_SWING_RESERVED_SLOTS", 1, 0),
-        scalp_risk_budget_cap_usdt=_amount(values, "OKXQUANT_SCALP_RISK_CAP_USDT", 5),
-        swing_risk_budget_cap_usdt=_amount(values, "OKXQUANT_SWING_RISK_CAP_USDT", 15),
+        scalp_risk_budget_cap_usdt=_amount(values, "OKXQUANT_SCALP_RISK_CAP_USDT", 8),
+        swing_risk_budget_cap_usdt=_amount(values, "OKXQUANT_SWING_RISK_CAP_USDT", 20),
     )
     if config.swing_reserved_slots >= config.total_active_slot_limit:
         raise RiskRejected("Swing reserved slots must be below total horizon slots")
@@ -99,12 +99,12 @@ def effective_config(mode, total_slot_limit=None, values=None):
     try:external=int(total_slot_limit)
     except (TypeError,ValueError):external=0
     if external<=0 or external==config.total_active_slot_limit:return config
-    config=Config(**{**asdict(config),"total_active_slot_limit":min(config.total_active_slot_limit,external)})
-    if config.swing_reserved_slots>=config.total_active_slot_limit:
+    total=min(config.total_active_slot_limit,external)
+    available_scalp_slots=total-config.swing_reserved_slots
+    if available_scalp_slots<1:
         raise RiskRejected("Execution preset has no room for reserved swing slot")
-    if config.scalp_active_position_limit>config.total_active_slot_limit-config.swing_reserved_slots:
-        raise RiskRejected("Execution preset cannot preserve the configured swing slot")
-    return config
+    return Config(**{**asdict(config),"total_active_slot_limit":total,
+                     "scalp_active_position_limit":min(config.scalp_active_position_limit,available_scalp_slots)})
 
 
 def current_signature(mode, total_slot_limit=None, values=None):

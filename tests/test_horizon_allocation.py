@@ -34,35 +34,41 @@ class HorizonAllocationTests(unittest.TestCase):
                   positions=[],pending=[],now=self.now,ledger_rows=[],trackers={},intents={},durable_intents={})
         data.update(kwargs);return allocation.admit(self.env,**data)
 
-    def test_tenth_scalp_is_allowed_and_eleventh_is_rejected(self):
-        rows=[self.row(i,inst=f'I{i}-USDT-SWAP') for i in range(9)]
+    def test_eighteenth_scalp_is_allowed_and_nineteenth_is_rejected(self):
+        rows=[self.row(i,inst=f'I{i}-USDT-SWAP') for i in range(17)]
         result=self.admit(ledger_rows=rows)
-        self.assertEqual(result['outcome'],'admitted');self.assertEqual(result['adjusted_budget_usdt'],5)
+        self.assertEqual(result['outcome'],'admitted');self.assertEqual(result['adjusted_budget_usdt'],8)
         with self.assertRaisesRegex(RiskRejected,'daily filled/reserved limit'):
-            self.admit(ledger_rows=rows+[self.row(10,inst='OTHER-USDT-SWAP')])
+            self.admit(ledger_rows=rows+[self.row(18,inst='OTHER-USDT-SWAP')])
 
-    def test_third_scalp_for_same_instrument_is_rejected(self):
-        rows=[self.row(i,inst='ETH-USDT-SWAP') for i in range(2)]
+    def test_fifth_scalp_for_same_instrument_is_rejected(self):
+        rows=[self.row(i,inst='ETH-USDT-SWAP') for i in range(4)]
         with self.assertRaisesRegex(RiskRejected,'instrument daily limit'):
             self.admit(ledger_rows=rows)
 
     def test_active_scalp_limit_blocks_new_scalp(self):
-        position={'instId':'BTC-USDT-SWAP','posSide':'long','pos':'1','cTime':str(int(self.now*1000))}
-        trackers={'BTC-USDT-SWAP_long':{'horizon':'scalp'}}
+        positions=[
+            {'instId':'BTC-USDT-SWAP','posSide':'long','pos':'1','cTime':str(int(self.now*1000))},
+            {'instId':'ETH-USDT-SWAP','posSide':'short','pos':'1','cTime':str(int(self.now*1000))},
+        ]
+        trackers={'BTC-USDT-SWAP_long':{'horizon':'scalp'},'ETH-USDT-SWAP_short':{'horizon':'scalp'}}
         with self.assertRaisesRegex(RiskRejected,'active/pending limit'):
-            self.admit(positions=[position],trackers=trackers)
+            self.admit(inst_id='SUI-USDT-SWAP',positions=positions,trackers=trackers)
 
     def test_unknown_active_position_is_conservative_for_scalp_only(self):
-        position={'instId':'BTC-USDT-SWAP','posSide':'long','pos':'1','cTime':str(int(self.now*1000))}
+        positions=[
+            {'instId':'BTC-USDT-SWAP','posSide':'long','pos':'1','cTime':str(int(self.now*1000))},
+            {'instId':'SOL-USDT-SWAP','posSide':'short','pos':'1','cTime':str(int(self.now*1000))},
+        ]
         with self.assertRaisesRegex(RiskRejected,'active/pending limit'):
-            self.admit(positions=[position])
-        result=self.admit(horizon='swing',positions=[position],requested_budget=30)
-        self.assertEqual(result['outcome'],'admitted');self.assertEqual(result['adjusted_budget_usdt'],15)
+            self.admit(inst_id='SUI-USDT-SWAP',positions=positions)
+        result=self.admit(horizon='swing',positions=positions,requested_budget=30)
+        self.assertEqual(result['outcome'],'admitted');self.assertEqual(result['adjusted_budget_usdt'],20)
 
     def test_swing_is_not_blocked_by_scalp_daily_cap(self):
-        rows=[self.row(i,inst=f'I{i}-USDT-SWAP') for i in range(12)]
+        rows=[self.row(i,inst=f'I{i}-USDT-SWAP') for i in range(20)]
         result=self.admit(horizon='swing',ledger_rows=rows,requested_budget=20)
-        self.assertEqual(result['adjusted_budget_usdt'],15)
+        self.assertEqual(result['adjusted_budget_usdt'],20)
 
     def test_live_is_disabled_by_default(self):
         env=SimpleNamespace(mode='live',identity='okx:live:test')
@@ -81,17 +87,23 @@ class HorizonAllocationTests(unittest.TestCase):
         self.assertEqual(result['outcome'],'admitted')
 
     def test_pending_reservation_prevents_concurrent_limit_bypass(self):
-        rows=[self.row(i,inst=f'I{i}-USDT-SWAP') for i in range(9)]
+        rows=[self.row(i,inst=f'I{i}-USDT-SWAP') for i in range(17)]
         pending={'instId':'BTC-USDT-SWAP','posSide':'long','sz':'1','accFillSz':'0','clOrdId':'c1'}
         durable={'c1':{'horizon':'scalp'}}
         with self.assertRaisesRegex(RiskRejected,'daily filled/reserved limit'):
             self.admit(ledger_rows=rows,pending=[pending],durable_intents=durable)
 
     def test_recent_durable_intent_counts_as_reservation_without_pending_snapshot(self):
-        rows=[self.row(i,inst=f'I{i}-USDT-SWAP') for i in range(9)]
+        rows=[self.row(i,inst=f'I{i}-USDT-SWAP') for i in range(17)]
         durable={'c1':{'instId':'BTC-USDT-SWAP','side':'long','horizon':'scalp','_intent_at':self.now-10}}
         with self.assertRaisesRegex(RiskRejected,'daily filled/reserved limit'):
             self.admit(ledger_rows=rows,durable_intents=durable)
+
+    def test_small_execution_profile_clamps_active_scalp_slots(self):
+        config=allocation.effective_config('demo',2,values={})
+        self.assertEqual(config.total_active_slot_limit,2)
+        self.assertEqual(config.scalp_active_position_limit,1)
+        self.assertEqual(config.swing_reserved_slots,1)
 
     def test_beijing_day_boundary(self):
         prior=self.row(1);prior['open_time']='2026-10-06 23:59:59'
