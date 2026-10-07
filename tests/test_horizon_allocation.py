@@ -87,6 +87,12 @@ class HorizonAllocationTests(unittest.TestCase):
         with self.assertRaisesRegex(RiskRejected,'daily filled/reserved limit'):
             self.admit(ledger_rows=rows,pending=[pending],durable_intents=durable)
 
+    def test_recent_durable_intent_counts_as_reservation_without_pending_snapshot(self):
+        rows=[self.row(i,inst=f'I{i}-USDT-SWAP') for i in range(9)]
+        durable={'c1':{'instId':'BTC-USDT-SWAP','side':'long','horizon':'scalp','_intent_at':self.now-10}}
+        with self.assertRaisesRegex(RiskRejected,'daily filled/reserved limit'):
+            self.admit(ledger_rows=rows,durable_intents=durable)
+
     def test_beijing_day_boundary(self):
         prior=self.row(1);prior['open_time']='2026-10-06 23:59:59'
         current=self.row(2);current['open_time']='2026-10-07 00:00:01'

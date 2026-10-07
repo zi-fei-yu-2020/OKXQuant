@@ -227,13 +227,13 @@ def _durable_intents(scope):
         if not path.exists():return {},None
         db=sqlite3.connect(path.resolve().as_uri()+"?mode=ro",uri=True,timeout=.5)
         try:
-            rows=db.execute("SELECT id,payload FROM intents WHERE scope=? AND state IN ('unknown','acknowledged','pending')",(scope,)).fetchall()
+            rows=db.execute("SELECT id,at,state,payload FROM intents WHERE scope=? AND state IN ('unknown','acknowledged','pending')",(scope,)).fetchall()
         finally:
             db.close()
         result={}
-        for identity,raw in rows:
+        for identity,created_at,state,raw in rows:
             payload=json.loads(raw)
-            if isinstance(payload,dict):result[str(identity)]=payload
+            if isinstance(payload,dict):result[str(identity)]={**payload,"_client_id":str(identity),"_intent_at":created_at,"_intent_state":state}
         return result,None
     except Exception as exc:
         return {},type(exc).__name__
@@ -308,8 +308,16 @@ def admit(env, *, horizon, inst_id, side, requested_budget, positions, pending,
         if item["kind"]!="position" or item["horizon"] not in {"scalp","unknown"}:continue
         pos_id=str(item["row"].get("posId") or "")
         if not pos_id or pos_id not in daily["position_ids"]:unledgered_positions.append(item)
-    reservations=len({(x["instId"],x["side"]) for x in pending_reservations+unledgered_positions})
-    inst_reservations=len({(x["instId"],x["side"]) for x in pending_reservations+unledgered_positions if x["instId"]==inst_id})
+    reservation_keys={(x["instId"],x["side"]) for x in pending_reservations+unledgered_positions}
+    today=datetime.fromtimestamp(now,BEIJING).date()
+    for saved in durable_intents.values():
+        if not isinstance(saved,dict) or _row_horizon(saved) not in {"scalp","unknown"}:continue
+        created=_timestamp(saved.get("intent_created_at") or saved.get("_intent_at"))
+        if created is None or datetime.fromtimestamp(created,BEIJING).date()!=today:continue
+        saved_inst=str(saved.get("instId") or "");saved_side=str(saved.get("side") or saved.get("posSide") or "unknown").lower()
+        if saved_inst:reservation_keys.add((saved_inst,saved_side))
+    reservations=len(reservation_keys)
+    inst_reservations=len({key for key in reservation_keys if key[0]==inst_id})
     snapshot={"day":daily["day"],"filled_today":daily["filled"],
               "scalp_per_instrument":daily["scalp_per_instrument"],"scalp_reservations":reservations,
               "instrument_reservations":inst_reservations,"active_positions":len(active),"pending_entries":len(orders),
@@ -323,6 +331,7 @@ def admit(env, *, horizon, inst_id, side, requested_budget, positions, pending,
 
     if horizon=="scalp":
         if ledger_error:reject("scalp_ledger_unavailable","Scalp allocation ledger unavailable; swing entries remain eligible")
+        if durable_error:reject("scalp_reservation_state_unavailable","Scalp durable reservation state unavailable; swing entries remain eligible")
         if (tracker_error or intent_error) and classified:
             reject("scalp_horizon_state_unavailable","Scalp horizon state unavailable while exposure exists")
         used=daily["filled"]["scalp"]+reservations
