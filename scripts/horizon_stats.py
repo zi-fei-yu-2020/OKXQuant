@@ -58,7 +58,14 @@ def rebuild(rows, *, scope=None):
     return result
 
 def write(rows, *, scope=None):
-    payload=rebuild(rows, scope=scope); DATA.mkdir(parents=True,exist_ok=True); fd,tmp=tempfile.mkstemp(prefix=".horizon-stats-",suffix=".tmp",dir=DATA)
+    payload=rebuild(rows, scope=scope)
+    if scope is not None:
+        from scripts.horizon_funnel import rebuild as rebuild_funnel
+        from scripts.horizon_allocation import public_status
+        mode='live' if ':live:' in scope else 'demo'
+        payload['funnel']=rebuild_funnel(rows,scope=scope)
+        payload['allocation']=public_status(scope,mode,rows=rows)
+    DATA.mkdir(parents=True,exist_ok=True); fd,tmp=tempfile.mkstemp(prefix=".horizon-stats-",suffix=".tmp",dir=DATA)
     try:
         with os.fdopen(fd,"w",encoding="utf-8") as f: json.dump(payload,f,ensure_ascii=False,indent=2); f.flush(); os.fsync(f.fileno())
         os.replace(tmp,PATH)

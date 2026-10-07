@@ -264,6 +264,12 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     positions=_request('GET','/api/v5/account/positions',{'instType':'SWAP'},env)
     pending=_request('GET','/api/v5/trade/orders-pending',{'instType':'SWAP'},env)
     reconcile_intents(env,pending_orders=pending)
+    from scripts import horizon_allocation
+    horizon_admission=horizon_allocation.admit(
+        env,horizon=horizon,inst_id=inst_id,side=side,requested_budget=budget,
+        positions=positions,pending=pending,
+        total_slot_limit=active_execution['execution'].get('max_active_instruments'))
+    budget=horizon_admission['adjusted_budget_usdt']
     balances=_request('GET','/api/v5/account/balance',{},env)
     if len(balances)!=1: raise risk.RiskRejected('Invalid account balance snapshot')
     observed_equity=equity_guard(env,balances[0],policy)
@@ -353,15 +359,18 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
         return sorted((str(p.get('instId')),str(p.get('posSide')),str(p.get('posId')),str(p.get('cTime')),str(p.get('pos')),str(p.get('avgPx'))) for p in rows if abs(risk.number(p.get('pos') or 0))>0)
     if identities(latest_positions)!=identities(positions):
         raise risk.RiskRejected('Positions changed during preflight; defer to a fresh decision cycle')
-    if allocation.enabled or minute_engine:
+    if allocation.enabled or minute_engine or horizon_admission['enabled']:
         fresh_pending=_request('GET','/api/v5/trade/orders-pending',{'instType':'SWAP'},env)
         def pending_identity(rows):
             return sorted((str(r.get('ordId')),str(r.get('instId')),str(r.get('posSide')),str(r.get('sz')),str(r.get('accFillSz')),str(r.get('px'))) for r in capital_pool.entry_orders(rows))
         if pending_identity(fresh_pending)!=pending_identity(pending):raise risk.RiskRejected('Pending reservations changed during pool preflight')
     if capital_pool.config_signature()!=allocation.config_signature:raise risk.RiskRejected('Capital pool configuration changed during preflight; no order authorized')
+    if horizon_allocation.current_signature(env.mode,active_execution['execution'].get('max_active_instruments'))!=horizon_admission['config_signature']:
+        raise risk.RiskRejected('Horizon allocation configuration changed during preflight')
     if execution_runtime()['signature']!=active_execution['signature']:
         raise risk.RiskRejected('Execution preset changed during preflight')
     plan['execution_profile']=active_execution
+    plan['horizon_allocation']=horizon_admission
     plan['horizon'] = horizon if horizon in {'scalp','swing'} else 'swing'
     plan['portfolio_before']=portfolio
     plan['decision_id']=decision_id

@@ -2703,7 +2703,10 @@ def cache(resource: str, x_okxquant_admin_token: str | None = Header(default=Non
         if resource=='horizon-stats':
             from scripts.horizon_stats import rebuild
             from scripts.dashboard_stats import scoped_rows
+            cached=payload if isinstance(payload,dict) else {}
             payload=rebuild(scoped_rows(read_json('trading_ledger.json',[]),scope),scope=scope)
+            for key in ('funnel','allocation'):
+                if key in cached:payload[key]=cached[key]
         else:
             payload=_scoped_cached_payload(payload,scope)
     return JSONResponse(payload,headers={'Cache-Control':'no-store'})
