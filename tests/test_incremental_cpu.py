@@ -195,7 +195,7 @@ class IncrementalLedgerIntegrationTests(unittest.TestCase):
                           'close_order_ids':['close'],'close_order_sources':[],'exit_evidence':'fixture','attribution_note':''}
         self.stack.enter_context(patch.object(ledger,'close_inputs',return_value={'orders':[],'algos':[],'executions':[]}))
         self.stack.enter_context(patch.object(ledger,'read_fill_archive',side_effect=lambda _:FillArchive('available',{self.inst:self.fills})))
-        self.stack.enter_context(patch('scripts.strategy_origin.index',side_effect=lambda _:self.origins))
+        self.stack.enter_context(patch('scripts.strategy_origin.index',side_effect=lambda _,**kwargs:self.origins))
         self.stack.enter_context(patch('scripts.trade_quality.observation_index',side_effect=lambda _:self.observations))
         self.attribution_calls=self.stack.enter_context(patch.object(ledger,'close_reason',side_effect=lambda *a,**kw:dict(self.attribution)))
         self.reconcile=self.stack.enter_context(patch.object(ledger,'reconcile_fill_fees',wraps=ledger.reconcile_fill_fees))

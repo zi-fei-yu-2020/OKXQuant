@@ -9,6 +9,18 @@ from scripts import public_market
 from okxquant_backend.okx_trade_service import _request
 
 
+def check_correlation(scope, slot, inst_id, side, *, exempt_client=None):
+    cluster={'BTC','ETH','SOL','DOGE','SUI','XRP'}
+    with evidence.connection() as db:
+        peers=db.execute('SELECT id,payload FROM intents WHERE scope=? AND at>=? AND at<? AND state NOT IN ("not_submitted","not_found")',
+                         (scope,slot*900,(slot+1)*900)).fetchall()
+    for peer_id,raw in peers:
+        if peer_id==exempt_client:continue
+        peer=json.loads(raw)
+        if inst_id.split('-')[0] in cluster and str(peer.get('instId','')).split('-')[0] in cluster and peer.get('side')==side:
+            raise risk.RiskRejected('Correlated same-direction entry already reserved in this 15M window')
+
+
 def reconcile_intents(env, *, pending_orders=None):
     from scripts.entry_reconciliation import locate, recoverable_intents
     pending=recoverable_intents(env.identity)
@@ -169,6 +181,12 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
         recorded=db.execute("SELECT payload FROM events WHERE id=? AND scope=? AND kind='decision'",(decision_id,env.identity)).fetchone()
     if not recorded: raise risk.RiskRejected('Decision evidence not found for this account')
     record=json.loads(recorded[0])
+    fallback_parent=None
+    if execution_mode=='bounded_fallback':
+        from scripts.maker_fallback import validated_parent
+        fallback_parent=validated_parent(record,env.identity,inst_id,side)
+    elif record.get('fallback_parent'):
+        raise risk.RiskRejected('Fallback decision cannot be used outside its bounded route')
     if getattr(env,'connection_id','') and (record.get('connection_id')!=env.connection_id or record.get('binding_version')!=env.binding_version):
         raise risk.RiskRejected('Account binding changed after decision; fresh inference required')
     decision=record.get('decision',{})
@@ -395,14 +413,7 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
         plan['entry_engine']='demo_scalp_v2'
         plan['entry_execution_mode']=execution_mode
         plan['correlation_slot']=slot
-        cluster={'BTC','ETH','SOL','DOGE','SUI','XRP'}
-        with evidence.connection() as db:
-            peers=db.execute('SELECT payload FROM intents WHERE scope=? AND at>=? AND at<? AND state NOT IN ("not_submitted","not_found")',
-                             (env.identity,slot*900,(slot+1)*900)).fetchall()
-        for (raw,) in peers:
-            peer=json.loads(raw)
-            if inst_id.split('-')[0] in cluster and str(peer.get('instId','')).split('-')[0] in cluster and peer.get('side')==side:
-                raise risk.RiskRejected('Correlated same-direction entry already reserved in this 15M window')
+        check_correlation(env.identity,slot,inst_id,side,exempt_client=fallback_parent)
     actual_leverage=apply_leverage(env,inst_id,side,target_leverage,current_leverage,decision_id,_request,horizon=horizon)
     if time.time() >= float(decision.get('valid_until') or 0):
         raise risk.RiskRejected('Candidate expired during leverage confirmation')

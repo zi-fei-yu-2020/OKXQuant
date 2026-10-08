@@ -15,6 +15,7 @@ if _project_root not in _sys.path:
 
 from okx_runtime import selected_environment, replace_cli_prefix as okx_private_command
 import subprocess
+import hashlib
 import json
 import os
 import datetime
@@ -106,7 +107,9 @@ def build_lifecycle_ledger(*, notify=True):
 
     from scripts import strategy_evidence
     for receipt in pos_history:
-        strategy_evidence.best_effort(env.identity, "position_receipt", receipt)
+        # Archive an immutable receipt revision once, not 100 duplicates every minute.
+        receipt_id="position-receipt:"+hashlib.sha256((env.identity+":"+strategy_evidence.canonical(receipt)).encode()).hexdigest()
+        strategy_evidence.best_effort(env.identity, "position_receipt", receipt, receipt_id)
 
     # API overlap or updated settlement receipts are snapshots, not new trades.
     latest = {}
@@ -118,6 +121,7 @@ def build_lifecycle_ledger(*, notify=True):
         elif receipt.get('uTime') == prior.get('uTime') and receipt != prior:
             raise ValueError('Conflicting lifecycle receipts; existing ledger preserved')
     pos_history = list(latest.values())
+    metrics['history_latest_ms']=max((int(r.get('uTime') or 0) for r in pos_history),default=0)
 
     attribution_complete=True
     try:
@@ -130,7 +134,19 @@ def build_lifecycle_ledger(*, notify=True):
     replaced_rows = set()
 
     from scripts.strategy_origin import index as strategy_index, resolve as strategy_origin
-    origins=strategy_index(env.identity)
+    # Only receipts being rebuilt and current positions need decision feature blobs.
+    # Older canonical ledger rows retain their original evidence unchanged.
+    origin_order_ids=None
+    if fill_archive.status=='available':
+        try:
+            starts=[float(p['cTime']) for p in pos_history+pos_data if p.get('cTime')]
+            if starts:
+                earliest=min(starts)
+                origin_order_ids={str(f['ordId']) for fills in fill_archive.by_instrument.values()
+                                  for f in fills if float(f.get('ts') or 0)>=earliest and f.get('ordId')}
+        except (TypeError,ValueError,OverflowError):
+            origin_order_ids=None  # Missing bounds take the conservative full path.
+    origins=strategy_index(env.identity,order_ids=origin_order_ids)
     from scripts.trade_quality import observation_index, annotate
     observations=observation_index(env.identity)
     from scripts.ledger_incremental import ClosedReceiptRevisions, reusable, stamp

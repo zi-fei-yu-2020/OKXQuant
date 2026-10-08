@@ -669,6 +669,7 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
         except Exception:
             pass
 
+    fallback_geometry=(effective_px,effective_sl,effective_tp)
     maker_first = horizon == 'scalp'
     # Use the current top-of-book only for a small favorable maker adjustment.
     # If the book is unavailable or too far away, keep the original price so
@@ -764,7 +765,10 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
             return {'status': 'unknown', 'detail': 'Entry acknowledged but journal update failed; read-only reconciliation required'}
         return {'status': 'accepted', 'order_id': str(order_ref), 'size': attempt_size}
 
+    fallback_proof=None
     attempt = dispatch_attempt(plan, client_id, 'post_only' if maker_first else 'limit')
+    if attempt['status']=='fallback_allowed':
+        fallback_proof={'kind':'explicit_business_rejection','exchange_code':(attempt.get('failure') or {}).get('exchange_code')}
     if attempt['status'] == 'accepted' and maker_first:
         try:
             wait_once()
@@ -779,10 +783,17 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
             if state == 'live':
                 cancel(_request, env, inst_id, attempt['order_id'])
                 after_cancel = status_row(_request, env, inst_id, attempt['order_id'])
+                if str(after_cancel.get('state') or '')=='filled':
+                    return True,attempt['order_id']
                 if str(after_cancel.get('state') or '') not in {'canceled', 'mmp_canceled'}:
                     raise RuntimeError('Maker order did not reach canceled state')
+                row=after_cancel
             elif state not in {'canceled', 'mmp_canceled'}:
                 raise RuntimeError('Unknown Maker order state')
+            from scripts.maker_fallback import canceled_fill_size
+            if canceled_fill_size(row)>0:
+                return True,attempt['order_id']  # Partial fill raced cancel; never send full size again.
+            fallback_proof=row
             strategy_evidence.finish_intent(client_id, 'canceled', {
                 'order_id': attempt['order_id'], 'maker_first': True, 'fallback': True})
             strategy_evidence.best_effort(env.identity, 'maker_fallback', {
@@ -798,15 +809,29 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
     if attempt['status'] not in {'fallback_allowed'}:
         return (attempt['status'] == 'accepted', attempt.get('order_id') or attempt.get('detail', 'Entry rejected'))
 
-    # Re-run final preflight and create a new durable intent for exactly one fallback.
+    # Preflight failure is NOT an unknown exchange write. No dispatch has occurred.
     try:
+        from scripts.maker_fallback import create_decision
+        fallback_decision_id=create_decision(env.identity,client_id,decision_id,inst_id,pos_side,fallback_proof or {})
+        fallback_px,fallback_sl,fallback_tp=fallback_geometry
         plan, fallback_client_id = entry_gateway.prepare(env, inst_id=inst_id, side=pos_side,
-            entry=effective_px, stop=effective_sl, take_profit=effective_tp, requested_size=size,
-            budget=risk_budget_usdt, decision_id=decision_id, decision_at=decision_at, horizon=horizon, execution_mode='bounded_fallback')
+            entry=fallback_px, stop=fallback_sl, take_profit=fallback_tp, requested_size=size,
+            budget=risk_budget_usdt, decision_id=fallback_decision_id, decision_at=decision_at, horizon=horizon, execution_mode='bounded_fallback')
+    except Exception as exc:
+        reason=f'Fallback preflight rejected: {type(exc).__name__}: {exc}'
+        strategy_evidence.best_effort(env.identity,'entry_rejection',{
+            'instrument':inst_id,'decision_id':decision_id,'client_id':client_id,
+            'reason':'fallback_preflight_rejected','details':{'error_type':type(exc).__name__,'message':str(exc)[:500]},
+            'exchange_write_attempted':False,'at':time.time()})
+        strategy_evidence.best_effort(env.identity,'maker_fallback',{
+            'instrument':inst_id,'decision_id':decision_id,'stage':'fallback_preflight_rejected',
+            'error_type':type(exc).__name__,'fallback':False,'exchange_write_attempted':False})
+        return False,reason
+    try:
         plan['entry_execution_mode']='bounded_fallback'
         plan['fallback_allowed']=False
         LAST_ENTRY_PLAN.clear(); LAST_ENTRY_PLAN.update(plan)
-        save_horizon_intent(inst_id, pos_side, horizon, decision_id, strategy_mode=plan.get('strategy_mode'), setup=plan.get('setup'), entry_context=plan.get('entry_context'), execution_mode='bounded_fallback', order_type='limit')
+        save_horizon_intent(inst_id, pos_side, horizon, fallback_decision_id, strategy_mode=plan.get('strategy_mode'), setup=plan.get('setup'), entry_context=plan.get('entry_context'), execution_mode='bounded_fallback', order_type='limit')
         fallback = dispatch_attempt(plan, fallback_client_id, 'limit')
         strategy_evidence.best_effort(env.identity, 'maker_fallback', {
             'instrument': inst_id, 'decision_id': decision_id, 'client_id': fallback_client_id,

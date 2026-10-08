@@ -131,5 +131,8 @@ def unresolved(scope):
 
 def export_events(scope, kind=None):
     with connection() as db:
-        rows = db.execute('SELECT id,kind,at,payload,digest FROM events WHERE scope=? AND (? IS NULL OR kind=?) ORDER BY at,id',(scope,kind,kind)).fetchall()
+        if kind is None:
+            rows=db.execute('SELECT id,kind,at,payload,digest FROM events WHERE scope=? ORDER BY at,id',(scope,)).fetchall()
+        else:
+            rows=db.execute('SELECT id,kind,at,payload,digest FROM events WHERE scope=? AND kind=? ORDER BY at,id',(scope,kind)).fetchall()
     return [{'id':r[0],'kind':r[1],'at':r[2],'payload':json.loads(r[3]),'digest':r[4]} for r in rows]

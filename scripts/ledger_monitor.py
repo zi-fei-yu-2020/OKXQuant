@@ -125,6 +125,29 @@ def should_run(last_run,now=None):
     except (OSError,ValueError,TypeError):active=False
     return now-last_run>=(ACTIVE_INTERVAL_SECONDS if active else IDLE_INTERVAL_SECONDS)
 
+def settlement_diagnostics(rows, scope, history_latest_ms=0, now=None):
+    """Show known openings separately from settled receipts; never estimate PnL."""
+    now=time.time() if now is None else float(now)
+    today=datetime.fromtimestamp(now,timezone(timedelta(hours=8))).strftime('%Y-%m-%d')
+    scoped=[r for r in rows if r.get('environment_id')==scope]
+    opened=[r for r in scoped if str(r.get('open_time','')).startswith(today)]
+    pending=[r for r in scoped if r.get('status')=='closed_pending']
+    latest=float(history_latest_ms or 0)/1000
+    unmatched_newer=0
+    for row in pending:
+        try:
+            opened_at=datetime.strptime(str(row.get('open_time')),'%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone(timedelta(hours=8))).timestamp()
+            unmatched_newer+=int(opened_at>latest)
+        except (TypeError,ValueError):pass
+    return {'day':today,'known_opened_today':len(opened),
+            'opened_today_pending_settlement':sum(r.get('status')=='closed_pending' for r in opened),
+            'settled_closes_today':sum(r.get('status')=='closed' and str(r.get('close_time','')).startswith(today) for r in scoped),
+            'latest_position_history_ms':int(history_latest_ms or 0),
+            'pending_opened_after_latest_history':unmatched_newer,
+            'status':'history_gap_observed' if unmatched_newer else 'pending_settlement' if pending else 'reconciled',
+            'pnl_estimated':False}
+
+
 def sync_once():
     from scripts.okx_runtime import selected_environment
     from scripts import sync_full_ledger
@@ -148,6 +171,8 @@ def sync_once():
             'mirror_seconds':round(time.perf_counter()-build_finished,3),
             'total_cpu_seconds':round(time.process_time()-cpu_started,3),
             'reconciliation':getattr(sync_full_ledger,'LAST_RECONCILIATION_METRICS',{})}
+        state['settlement_diagnostics']=settlement_diagnostics(rows,env.identity,
+            state['performance']['reconciliation'].get('history_latest_ms',0))
         atomic('ledger_sync_status.json',state);return state
     except Exception as exc:
         previous=load('ledger_sync_status.json',{})

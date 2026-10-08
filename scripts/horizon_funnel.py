@@ -18,6 +18,15 @@ def _horizon(payload):
     return "unknown"
 
 
+def _project_event(payload):
+    """Only funnel facts; never retain candle arrays/prompts in the hot projection."""
+    decision=payload.get("decision") if isinstance(payload.get("decision"),dict) else {}
+    return {"horizon":_horizon(payload), "decision_id":payload.get("decision_id"),
+            "decision_status":decision.get("decision_status"),
+            "transport_ok":payload.get("transport_ok") is True,
+            "failure":bool(payload.get("failure"))}
+
+
 def _stamp(value):
     if value in (None,"","--"):return None
     if isinstance(value,(int,float)):
@@ -65,24 +74,20 @@ def rebuild(rows, *, scope, now=None, db_path=None):
     path=Path(db_path)
     if path.exists():
         try:
-            db=sqlite3.connect(path.resolve().as_uri()+"?mode=ro",uri=True,timeout=1)
-            try:
-                events=db.execute("SELECT id,kind,at,payload FROM events WHERE scope=? AND kind IN ('decision','entry_rejection','entry_submission') AND at>=? ORDER BY at,id",(scope,starts["7d"])).fetchall()
-            finally:
-                db.close()
-            decisions={};parsed=[]
-            for identity,kind,at,raw in events:
-                payload=json.loads(raw);parsed.append((identity,kind,float(at),payload))
-                if kind=="decision":decisions[str(identity)]=_horizon(payload)
+            from scripts.evidence_projection import projected_events
+            parsed=projected_events(path, scope=scope, since=starts["7d"],
+                kinds=("decision","entry_rejection","entry_submission"),
+                namespace="horizon-funnel-v1", project=_project_event)
+            decisions={identity:payload["horizon"] for identity,kind,at,payload in parsed if kind=="decision"}
             for identity,kind,at,payload in parsed:
-                horizon=_horizon(payload)
+                horizon=payload["horizon"]
                 if horizon=="unknown" and payload.get("decision_id"):horizon=decisions.get(str(payload["decision_id"]),"unknown")
                 for name,start in starts.items():
                     if at<start:continue
                     bucket=result[name][horizon]
                     if kind=="decision":
                         bucket["decisions"]+=1
-                        decision=payload.get("decision") or {};status=decision.get("decision_status")
+                        status=payload.get("decision_status")
                         if status in {"audited_wait","incomplete","entry_candidate"}:bucket[status]+=1
                     elif kind=="entry_rejection":bucket["risk_rejected"]+=1
                     elif kind=="entry_submission" and payload.get("transport_ok") is True and not payload.get("failure"):bucket["submitted"]+=1

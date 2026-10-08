@@ -5,7 +5,7 @@ import json,sqlite3
 from pathlib import Path
 
 
-def index(scope):
+def index(scope, *, order_ids=None):
     from scripts.strategy_evidence import DB_PATH
     try:
         with sqlite3.connect(Path(DB_PATH).resolve().as_uri()+'?mode=ro',uri=True,timeout=.5) as db:
@@ -18,6 +18,7 @@ def index(scope):
                 if isinstance(response,dict):response=response.get('data') or [response]
                 if isinstance(response,dict):response=[response]
                 ids=[str(x['ordId']) for x in response if isinstance(x,dict) and x.get('ordId') and str(x.get('sCode','0'))=='0']
+                if order_ids is not None:ids=[oid for oid in ids if oid in order_ids]
                 if not ids:continue
                 row=db.execute("SELECT payload FROM events WHERE id=? AND scope=? AND kind='decision'",(did,scope)).fetchone()
                 if not row:continue
