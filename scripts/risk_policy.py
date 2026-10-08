@@ -3,6 +3,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_FLOOR
 import math
+from scripts.json_projection_cache import VersionedJsonProjection
+
+
+def _settled_ledger_projection(rows):
+    if not isinstance(rows,list):raise ValueError('Invalid lifecycle ledger')
+    keys=('environment_id','account_source_id','status','close_time','net_pnl','pnl')
+    return [{key:row[key] for key in keys if key in row}
+            for row in rows if isinstance(row,dict) and row.get('status')=='closed']
+
+
+_SETTLED_LEDGER_CACHE=VersionedJsonProjection(_settled_ledger_projection)
 
 class RiskRejected(ValueError): pass
 
@@ -117,7 +128,7 @@ def ledger_daily_drawdown(policy=None, *, now=None, rows=None, initial_capital=N
                 return {'blocked':False,'drawdown':None,'net_pnl':None,'threshold':policy.daily_drawdown_pct,
                         'day':day,'reason':'equity_day_anchor_unavailable'}
         if rows is None:
-            rows=json.loads((root/'data'/'trading_ledger.json').read_text(encoding='utf-8'))
+            rows=_SETTLED_LEDGER_CACHE.read(root/'data'/'trading_ledger.json')
         if scope is not None:
             from scripts.dashboard_stats import scoped_rows
             rows=scoped_rows(rows,scope)

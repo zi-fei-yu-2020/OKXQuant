@@ -118,9 +118,12 @@ def _write_rows(rows, *, superseded=()):
             cursor.execute('DELETE FROM trades WHERE bill_id=?', (identity,))
         for row in rows:
             cursor.execute("""
-            INSERT OR REPLACE INTO trades
+            INSERT INTO trades
             (bill_id, time, inst, action, direction, size, price, fee, gross_pnl, pnl, comment)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(bill_id) DO UPDATE SET
+            time=excluded.time, inst=excluded.inst, action=excluded.action, direction=excluded.direction, size=excluded.size, price=excluded.price, fee=excluded.fee, gross_pnl=excluded.gross_pnl, pnl=excluded.pnl, comment=excluded.comment
+            WHERE trades.time IS NOT excluded.time OR trades.inst IS NOT excluded.inst OR trades.action IS NOT excluded.action OR trades.direction IS NOT excluded.direction OR trades.size IS NOT excluded.size OR trades.price IS NOT excluded.price OR trades.fee IS NOT excluded.fee OR trades.gross_pnl IS NOT excluded.gross_pnl OR trades.pnl IS NOT excluded.pnl OR trades.comment IS NOT excluded.comment
             """, row)
             if cursor.rowcount > 0:
                 inserted += 1
@@ -131,12 +134,15 @@ def _reject_json_constant(value):
     raise ValueError(f"Invalid JSON constant: {value}")
 
 
-def sync_json_to_sqlite(ledger_path=None):
-    try:
-        with open(LEDGER_JSON_FILE if ledger_path is None else ledger_path, "r", encoding="utf-8") as f:
-            trades = json.load(f, parse_constant=_reject_json_constant)
-    except FileNotFoundError:
-        return 0
+def sync_json_to_sqlite(ledger_path=None, *, trades=None):
+    # The reconciler already holds validated rows in memory; don't decode the
+    # just-written multi-MB ledger again. Other callers keep the file contract.
+    if trades is None:
+        try:
+            with open(LEDGER_JSON_FILE if ledger_path is None else ledger_path, "r", encoding="utf-8") as f:
+                trades = json.load(f, parse_constant=_reject_json_constant)
+        except FileNotFoundError:
+            return 0
     # Do not turn a corrupt/unreadable ledger into an apparently successful sync.
     # Validate the entire input before opening the database; SQL errors during
     # the subsequent batch are handled by the single write transaction.

@@ -63,8 +63,13 @@ def read_snapshot(env, path, command, params):
     return read_cli_list(okx_private_command(command), environment=env)
 
 
+LAST_RECONCILIATION_METRICS={}
+
+
 @ledger_monitor.serialized
 def build_lifecycle_ledger(*, notify=True):
+    metrics={'closed_reused':0,'closed_rebuilt':0,'json_written':False}
+    LAST_RECONCILIATION_METRICS.clear();LAST_RECONCILIATION_METRICS.update(metrics)
     env=selected_environment()
     from okxquant_backend.account_baseline import load_account_baseline
     reset_time=load_account_baseline(scope=env.identity, path=INITIAL_STATE_FILE)['reset_time']
@@ -114,9 +119,11 @@ def build_lifecycle_ledger(*, notify=True):
             raise ValueError('Conflicting lifecycle receipts; existing ledger preserved')
     pos_history = list(latest.values())
 
+    attribution_complete=True
     try:
         attribution_inputs=close_inputs(env,orders_history)
     except Exception:
+        attribution_complete=False
         attribution_inputs={'orders':orders_history,'algos':[],'executions':[]}
     fill_archive = read_fill_archive(env.identity)
     trades_lifecycle = []
@@ -126,6 +133,18 @@ def build_lifecycle_ledger(*, notify=True):
     origins=strategy_index(env.identity)
     from scripts.trade_quality import observation_index, annotate
     observations=observation_index(env.identity)
+    from scripts.ledger_incremental import ClosedReceiptRevisions, reusable, stamp
+    revisions=ClosedReceiptRevisions(env.identity,reset_time,TARGET_INSTRUMENTS,fill_archive,
+        origins,observations,attribution_inputs,pos_history,pos_data,complete=attribution_complete)
+    old_by_instrument={}
+    for old in old_trades:old_by_instrument.setdefault(old.get('instId'),[]).append(old)
+    # Opening IDs are immutable links; build once, not a full archive flatten/scan
+    # for every one of the exchange's up-to-100 historical position receipts.
+    trade_ids_by_order={}
+    for fills in fill_archive.by_instrument.values():
+        for fill in fills:
+            if isinstance(fill,dict) and fill.get('tradeId'):
+                trade_ids_by_order.setdefault(str(fill.get('ordId') or ''),set()).add(str(fill['tradeId']))
 
     live_lifecycles = {lifecycle_id(p, env.identity) for p in pos_data if abs(float(p.get('pos') or 0)) > 0}
     partial_receipts = {lifecycle_id(h, env.identity): h for h in pos_history
@@ -242,8 +261,7 @@ def build_lifecycle_ledger(*, notify=True):
         # Strategy tag
         # Strategy source is resolved after complete lifecycle fill reconciliation.
         
-        attribution=close_reason(h,attribution_inputs['orders'],algos=attribution_inputs['algos'],executions=attribution_inputs['executions'],scope=env.identity)
-        matching_previous = [row for row in old_trades if matches_lifecycle(row, h, env.identity)]
+        matching_previous = [row for row in old_by_instrument.get(inst_id,[]) if matches_lifecycle(row, h, env.identity)]
         replaced_rows.update(id(row) for row in matching_previous)
         previous = max((row for row in matching_previous if row.get('status') == 'closed'),
                        key=lambda row: int((row.get('exit_snapshot') or {}).get('uTime') or 0), default={})
@@ -252,6 +270,15 @@ def build_lifecycle_ledger(*, notify=True):
             trades_lifecycle.append(previous)
             continue
         exit_snapshot = {k: h.get(k) for k in ("instId", "direction", "posId", "openAvgPx", "closeAvgPx", "closeTotalPos", "lever", "cTime", "uTime", "pnl", "fee", "fundingFee", "realizedPnl") if h.get(k) is not None}
+        revision=revisions.for_receipt(h)
+        known_aliases={previous.get('id'),*(previous.get('superseded_ledger_ids') or [])}
+        aliases_unchanged=all(row.get('id') in known_aliases for row in matching_previous)
+        if aliases_unchanged and reusable(previous,revision):
+            trades_lifecycle.append(previous)
+            metrics['closed_reused']+=1
+            continue
+        metrics['closed_rebuilt']+=1
+        attribution=close_reason(h,attribution_inputs['orders'],algos=attribution_inputs['algos'],executions=attribution_inputs['executions'],scope=env.identity)
         tier={'unknown':0,'partial':1,'corroborated':2,'mixed':3,'verified':3}
         if previous.get('exit_snapshot') == exit_snapshot and tier.get(previous.get('attribution_status'),0)>tier.get(attribution['attribution_status'],0):
             for field in ('exit_reason','exit_source','exit_evidence','attribution_status','close_order_ids','close_order_sources','attribution_note'):
@@ -261,9 +288,7 @@ def build_lifecycle_ledger(*, notify=True):
         origin = strategy_origin(h,fill_archive,origins,allocation.get("fee_reconciliation"))
         strat_tag = origin["strategy"]
         opening_order_ids = list((allocation.get("fee_reconciliation") or {}).get("opening_order_ids") or [])
-        archived_fills = [fill for rows in fill_archive.by_instrument.values() for fill in rows]
-        opening_trade_ids = [str(f.get("tradeId")) for f in archived_fills if isinstance(f, dict)
-                             and str(f.get("ordId") or "") in set(opening_order_ids) and f.get("tradeId")]
+        opening_trade_ids = [trade_id for oid in opening_order_ids for trade_id in trade_ids_by_order.get(str(oid),())]
         linked_decisions = [origin.get("decision_id")] if origin.get("decision_id") else []
         evidence_status = "complete" if origin.get("strategy_evidence") == "opening_fill_order_decision_link" and opening_order_ids and linked_decisions else "partial"
         trades_lifecycle.append({
@@ -330,6 +355,7 @@ def build_lifecycle_ledger(*, notify=True):
             trades_lifecycle[-1]['superseded_ledger_ids'] = sorted(aliases)
         retain_verified_evidence(trades_lifecycle[-1], previous, fill_archive.status)
         annotate(trades_lifecycle[-1],h,observations,attribution_inputs['executions'])
+        stamp(trades_lifecycle[-1],revision)
 
     # Preserve old finalized history; replace stale holding rows only with verified data.
     fresh_ids={row['id'] for row in trades_lifecycle}
@@ -343,16 +369,18 @@ def build_lifecycle_ledger(*, notify=True):
     trades_lifecycle=ledger_monitor.project_rows(trades_lifecycle,env.identity,positions=pos_data)
     trades_lifecycle.sort(key=lambda row:(row.get('status')=='holding',row.get('confirmed_close_at') or row.get('close_time') or row.get('open_time') or ''),reverse=True)
 
-    fd, tmp_path = tempfile.mkstemp(prefix=".ledger-", suffix=".tmp", dir=DATA_DIR)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(trades_lifecycle, f, ensure_ascii=False, indent=2, allow_nan=False)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, LEDGER_JSON_FILE)
-    finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+    if trades_lifecycle != old_trades:
+        metrics['json_written']=True
+        fd, tmp_path = tempfile.mkstemp(prefix=".ledger-", suffix=".tmp", dir=DATA_DIR)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(trades_lifecycle, f, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, LEDGER_JSON_FILE)
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
 
     try:
         from scripts.horizon_stats import write as write_horizon_stats
@@ -360,6 +388,7 @@ def build_lifecycle_ledger(*, notify=True):
     except Exception:
         pass
 
+    LAST_RECONCILIATION_METRICS.update(metrics)
     # The monitoring worker never emits trade notifications.
     if not notify:
         return trades_lifecycle

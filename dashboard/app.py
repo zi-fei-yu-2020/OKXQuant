@@ -10,6 +10,7 @@ from scripts.instrument_pool import load_instruments
 from scripts.evolution_status import public_status as evolution_status
 from scripts.memory_registry import public_view as memory_publication
 from scripts.dashboard_stats import today_lifecycle_stats, scoped_rows
+from scripts.json_projection_cache import VersionedJsonProjection
 import os
 import json
 import time
@@ -142,6 +143,15 @@ def _public_history_row(item):
     else:
         result["council_transcript"] = None
     return result
+
+
+_AI_HISTORY_SUMMARIES=VersionedJsonProjection(lambda rows:[_public_history_row(item) for item in rows[:25]]
+    if isinstance(rows,list) else [])
+
+
+def _ai_history_summaries():
+    try:return _AI_HISTORY_SUMMARIES.read(AI_HISTORY_FILE)
+    except (OSError,ValueError,TypeError):return []
 
 
 def _public_monitoring_snapshot(snapshot):
@@ -485,9 +495,7 @@ def _inject_local_data_into_stale(stale, positions, timestamp_full):
     # AI brain history: polling receives summaries; full transcripts are loaded on demand.
     if os.path.exists(AI_HISTORY_FILE):
         try:
-            with open(AI_HISTORY_FILE, "r", encoding="utf-8") as f:
-                raw_history = json.load(f)
-            stale["ai_brain_history"] = [_public_history_row(item) for item in raw_history[:25]]
+            stale["ai_brain_history"] = _ai_history_summaries()
         except Exception:
             pass
 
@@ -576,21 +584,62 @@ def load_persisted_dashboard_cache():
         return {}
 
 
+MONITOR_REFRESH_SECONDS=5.0
+PERSIST_MIN_INTERVAL_SECONDS=10.0
+_PERSIST_STATE={}
+_PERSIST_LOCK=threading.Lock()
+
+
+def _persistence_material(data):
+    positions=(data.get('positions_summary') or {}).get('items') or []
+    fields=('instId','posId','cTime','posSide','side','pos_sz','pos','exchangeSl','exchangeTp','protectionStatus')
+    return {'scope':data.get('account_source_id'),'environment':data.get('okx_environment'),
+            'positions':[{k:p.get(k) for k in fields} for p in positions if isinstance(p,dict)],
+            'orders':data.get('pending_orders') or [],'health':data.get('data_health',{}).get('status'),
+            'daily_blocked':(data.get('risk_status') or {}).get('daily_blocked'),
+            'decision_status':(data.get('decision_cycle') or {}).get('status')}
+
+
+def _persistable_snapshot(data):
+    # Keep valuation/lifecycle identity but leave full audit evidence on its
+    # authoritative files/deferred endpoints, not in every disk checkpoint.
+    compact=dict(data)
+    if 'trades' in data:
+        compact['trades']=[{**_public_trade_row(row),**{k:row[k] for k in ('pos_id','account_source_id') if k in row}}
+                           for row in data.get('trades') or [] if isinstance(row,dict)]
+    if 'ai_brain_history' in data:compact['ai_brain_history']=[_public_history_row(row) for row in data.get('ai_brain_history') or []]
+    compact.pop('ai_last_prompt',None)
+    if isinstance(compact.get('review'),dict):compact['review']={k:v for k,v in compact['review'].items() if k!='ai_last_prompt'}
+    return compact
+
+
 def persist_dashboard_cache(data):
+    with _PERSIST_LOCK:
+        return _persist_dashboard_cache(data)
+
+
+def _persist_dashboard_cache(data):
     if not _is_meaningful_dashboard_snapshot(data):
         return
+    now=time.monotonic()
+    material=hashlib.sha256(json.dumps(_persistence_material(data),sort_keys=True,separators=(',',':'),allow_nan=False).encode('utf-8')).hexdigest()
+    persist_key=(os.path.abspath(DASHBOARD_CACHE_FILE),data.get('account_source_id'))
+    if (_PERSIST_STATE.get('key')==persist_key and _PERSIST_STATE.get('material')==material
+            and os.path.isfile(DASHBOARD_CACHE_FILE) and now-_PERSIST_STATE.get('at',0)<PERSIST_MIN_INTERVAL_SECONDS):
+        return False
     cache_dir = os.path.dirname(DASHBOARD_CACHE_FILE) or DATA_DIR
     os.makedirs(cache_dir, exist_ok=True)
     fd, temp_path = tempfile.mkstemp(prefix=".dashboard-cache-", suffix=".json", dir=cache_dir)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(data, handle, ensure_ascii=False, indent=2)
+            json.dump(_persistable_snapshot(data), handle, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temp_path, 0o600)
         os.replace(temp_path, DASHBOARD_CACHE_FILE)
         os.chmod(DASHBOARD_CACHE_FILE, 0o600)
+        _PERSIST_STATE.update(key=persist_key,material=material,at=now)
     finally:
         if os.path.exists(temp_path):
             os.unlink(temp_path)
@@ -613,11 +662,13 @@ def _dashboard_background_worker_loop():
     time.sleep(0.5)
     while _BG_WORKER_RUNNING:
         try:
-            update_cache_cycle()
+            if not CACHE_DATA or time.time()-LAST_CACHE_TIME>=MONITOR_REFRESH_SECONDS:
+                update_cache_cycle()
         except Exception:
             pass
-        # Refresh every 2 seconds in background
-        time.sleep(2.0)
+        # HTTP readers and this producer share the existing single-flight lock.
+        # A recent on-demand refresh must not be immediately repeated here.
+        time.sleep(1.0)
 
 def start_dashboard_background_worker():
     if os.getenv("OKXQUANT_TESTING") == "1":
@@ -1308,10 +1359,7 @@ def _update_cache_cycle():
     ai_history_list = []
     if os.path.exists(AI_HISTORY_FILE):
         try:
-            with open(AI_HISTORY_FILE, "r", encoding="utf-8") as f:
-                raw_history = json.load(f)
-                # Polling uses summaries; full transcripts are fetched on expansion.
-                ai_history_list = [_public_history_row(item) for item in raw_history[:25]]
+            ai_history_list = _ai_history_summaries()
         except Exception:
             pass
 
@@ -1630,7 +1678,7 @@ def monitoring_snapshot():
     cached = CACHE_DATA
     age = max(0, time.time() - LAST_CACHE_TIME)
     matches = bool(cached and cached.get("account_source_id") == environment.identity)
-    if not matches or age > 5:
+    if not matches or age > MONITOR_REFRESH_SECONDS:
         request_cache_refresh()
     if not matches:
         return {

@@ -19,6 +19,9 @@ for p in (ROOT,ROOT/'scripts'):
 DATA=ROOT/'data'
 ACTIVE_INTERVAL_SECONDS=60
 IDLE_INTERVAL_SECONDS=300
+from scripts.json_projection_cache import VersionedJsonProjection
+_ACTIVITY_CACHE=VersionedJsonProjection(lambda rows:isinstance(rows,list) and any(
+    isinstance(row,dict) and row.get('status') in {'holding','closed_pending'} for row in rows))
 
 def load(name,default):
     try:return json.loads((DATA/name).read_text(encoding='utf-8'))
@@ -115,21 +118,24 @@ def should_run(last_run,now=None):
         return now-last_run>=5
     if status.get('pending_settlements',0) and now-(status.get('pending_since') or 0)<120:
         return now-last_run>=10
-    rows=load('trading_ledger.json',[])
-    active=isinstance(rows,list) and any(
-        isinstance(row,dict) and row.get('status') in {'holding','closed_pending'} for row in rows
-    )
+    # No regular reconciliation is due before the active minimum. The urgent
+    # request/pending-settlement paths above retain their 5s/10s response.
+    if now-last_run<ACTIVE_INTERVAL_SECONDS:return False
+    try:active=_ACTIVITY_CACHE.read(DATA/'trading_ledger.json')
+    except (OSError,ValueError,TypeError):active=False
     return now-last_run>=(ACTIVE_INTERVAL_SECONDS if active else IDLE_INTERVAL_SECONDS)
 
 def sync_once():
     from scripts.okx_runtime import selected_environment
     from scripts import sync_full_ledger
     env=selected_environment();requested=load('ledger_refresh_request.json',{})
+    started=time.perf_counter();cpu_started=time.process_time()
     try:
         rows=sync_full_ledger.build_lifecycle_ledger(notify=False)
+        build_finished=time.perf_counter()
         from scripts.db_manager import sync_json_to_sqlite
         try:
-            mirror = {'status':'ok','rows':sync_json_to_sqlite(DATA/'trading_ledger.json')}
+            mirror = {'status':'ok','rows':sync_json_to_sqlite(DATA/'trading_ledger.json',trades=rows)}
         except Exception as exc:
             # JSON is authoritative and has already been atomically updated.
             # Report mirror failure separately; never discard the good ledger.
@@ -138,6 +144,10 @@ def sync_once():
         pending=sum(r.get('status')=='closed_pending' for r in rows)
         state={'status':'ok' if mirror['status']=='ok' else 'partial','sqlite_mirror':mirror,'last_success':time.time(),'pending_since':(previous.get('pending_since') or time.time()) if pending else None,'environment_id':env.identity,'environment':env.mode,
                'handled_request':requested.get('id'),'pending_settlements':sum(r.get('status')=='closed_pending' for r in rows),'rows':len(rows)}
+        state['performance']={'build_seconds':round(build_finished-started,3),
+            'mirror_seconds':round(time.perf_counter()-build_finished,3),
+            'total_cpu_seconds':round(time.process_time()-cpu_started,3),
+            'reconciliation':getattr(sync_full_ledger,'LAST_RECONCILIATION_METRICS',{})}
         atomic('ledger_sync_status.json',state);return state
     except Exception as exc:
         previous=load('ledger_sync_status.json',{})
