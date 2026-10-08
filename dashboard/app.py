@@ -11,6 +11,7 @@ from scripts.evolution_status import public_status as evolution_status
 from scripts.memory_registry import public_view as memory_publication
 from scripts.dashboard_stats import today_lifecycle_stats, scoped_rows
 from scripts.json_projection_cache import VersionedJsonProjection
+from okxquant_backend.public_monitor import public_payload
 import os
 import json
 import time
@@ -156,7 +157,7 @@ def _public_monitoring_snapshot(snapshot):
     if isinstance(review, dict) and "ai_last_prompt" in review:
         data["review"] = {key: value for key, value in review.items() if key != "ai_last_prompt"}
     data["payload_profile"] = "monitoring-summary-v1"
-    return data
+    return public_payload(data)
 
 
 def get_target_instruments() -> list[dict[str, Any]]:
@@ -1781,8 +1782,8 @@ async def get_trades(limit: int = 30, offset: int = 0, state: str = "all", q: st
         if state=="closed" and row.get("status")=="holding":return False
         return not query or any(query in str(row.get(key) or "").casefold() for key in ("instId","inst","strategy","exit_reason"))
     rows=[row for row in rows if matches(row)]
-    return JSONResponse({"items":[_public_trade_row(row) for row in rows[offset:offset+limit]],
-        "total":len(rows),"counts":counts,"limit":limit,"offset":offset,"state":state,"q":q[:128],"account_source_id":scope},headers={"Cache-Control":"no-store"})
+    return JSONResponse(public_payload({"items":[_public_trade_row(row) for row in rows[offset:offset+limit]],
+        "total":len(rows),"counts":counts,"limit":limit,"offset":offset,"state":state,"q":q[:128],"account_source_id":scope}),headers={"Cache-Control":"no-store"})
 
 
 @app.get("/api/trades/{trade_id}")
@@ -1792,7 +1793,7 @@ async def get_trade_detail(trade_id: str):
     rows = canonical_rows(_read_ledger_rows(), selected_environment().identity)
     for row in rows:
         if str(row.get("id") or "") == trade_id:
-            return JSONResponse(row, headers={"Cache-Control": "no-store"})
+            return JSONResponse(public_payload(row), headers={"Cache-Control": "no-store"})
     raise HTTPException(status_code=404, detail="Trade not found")
 
 
@@ -1817,18 +1818,18 @@ async def get_ai_history(limit: int = 25, offset: int = 0):
     from scripts.okx_runtime import selected_environment
     scope=selected_environment().identity
     rows = _read_ai_history_records(scope)
-    return JSONResponse({
+    return JSONResponse(public_payload({
         "account_source_id":scope,
         "items": [_public_history_row(row) for row in rows[offset:offset + limit]],
         "total": len(rows), "limit": limit, "offset": offset,
-    }, headers={"Cache-Control": "no-store"})
+    }), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/ai/history/{history_id}")
 async def get_ai_history_detail(history_id: str):
     for row in _read_ai_history_records():
         if _history_id(row) == history_id:
-            return JSONResponse(row, headers={"Cache-Control": "no-store"})
+            return JSONResponse(public_payload(row), headers={"Cache-Control": "no-store"})
     raise HTTPException(status_code=404, detail="AI history record not found")
 
 

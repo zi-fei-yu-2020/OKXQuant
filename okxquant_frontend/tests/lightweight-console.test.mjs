@@ -67,9 +67,14 @@ test('canonical front routes and legacy redirects preserve titles and navigation
   assert.equal(pageTitle('/history'), '交易记录')
 })
 
-test('private monitor routes require authentication and HeaderBar does not expose raw prompt button', () => {
+test('public monitor routes are anonymous while admin and raw prompt tools remain private', () => {
   const routerSrc = read('router/index.ts')
   assert.match(routerSrc, /requiresAuth: true/)
+  assert.equal((routerSrc.match(/isPublic: true, tab:/g) || []).length, 5)
+  assert.doesNotMatch(routerSrc, /requiresAuth: true, tab:/)
+  const display = read('views/DashboardView.vue')
+  assert.doesNotMatch(display, /auth\.isAuthenticated/)
+  assert.match(display, /<LedgerLogs/)
   assert.match(routerSrc, /query: { next: to.fullPath }/)
 
   const headerSrc = read('components/HeaderBar.vue')

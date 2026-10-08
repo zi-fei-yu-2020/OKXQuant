@@ -1,4 +1,4 @@
-"""Authenticated monitor boundary, stateless scope changes and runtime configuration."""
+"""Public display/private admin boundaries, scoped data and runtime controls."""
 import asyncio
 import hashlib
 import json
@@ -17,7 +17,7 @@ from okxquant_backend import monitor_statistics
 
 class MonitorAccessTests(unittest.TestCase):
     def test_private_data_denied_before_loading_for_both_apps(self):
-        paths=['/api/all','/api/overview','/api/trades','/api/trades/private-id','/api/ai/last-prompt','/api/ai/history','/api/ai/history/private-id']
+        paths=['/api/ai/last-prompt','/api/ai/unknown-private-endpoint']
         for application in (api.app,dashboard.app):
             client=TestClient(application)
             try:
@@ -39,12 +39,40 @@ class MonitorAccessTests(unittest.TestCase):
         client=TestClient(api.app)
         try:
             with patch.object(api,'require_admin_header',side_effect=[{'id':1,'role':'admin'},HTTPException(401,'expired')]) as auth,patch.object(dashboard,'monitoring_snapshot',return_value={'account':{'total_eq':1}}):
-                first=client.get('/api/all',headers={'X-OKXQuant-Session':'one'})
-                second=client.get('/api/all',headers={'X-OKXQuant-Session':'one'})
+                first=client.get('/api/ai/last-prompt',headers={'X-OKXQuant-Session':'one'})
+                second=client.get('/api/ai/last-prompt',headers={'X-OKXQuant-Session':'one'})
             self.assertEqual(first.status_code,200);self.assertEqual(second.status_code,401)
             self.assertEqual(auth.call_count,2);self.assertIn('private',first.headers['cache-control'])
             self.assertIn('X-OKXQuant-Session',first.headers['vary'])
         finally:client.close()
+    def test_public_display_reads_ignore_absent_or_stale_admin_session(self):
+        snapshot={'account':{'total_eq':123},'logs':['inspection healthy', 'api_key=should-not-be-public']}
+        for application in (api.app,dashboard.app):
+            with TestClient(application) as client, patch.object(api,'require_admin_header',side_effect=AssertionError('public display must not authenticate')), patch.object(dashboard,'monitoring_snapshot',return_value=snapshot), patch.object(dashboard,'_read_ledger_rows',return_value=[]), patch.object(dashboard,'_read_ai_history_records',return_value=[]):
+                for headers in ({},{'X-OKXQuant-Session':'expired'}):
+                    for path in ['/api/all','/api/overview','/api/trades','/api/ai/history']:
+                        response=client.get(path,headers=headers)
+                        self.assertEqual(response.status_code,200,(path,response.text))
+                        self.assertIn('no-store',response.headers['cache-control'])
+                        self.assertNotIn('should-not-be-public',response.text)
+                    for path in ['/api/trades/missing','/api/ai/history/missing']:
+                        self.assertEqual(client.get(path,headers=headers).status_code,404)
+                self.assertEqual(client.get('/api/all').json()['logs'][0],'inspection healthy')
+        self.assertIn('should-not-be-public',snapshot['logs'][1], 'redaction must not mutate shared snapshot')
+
+    def test_display_allowlist_does_not_authorize_mutations_or_private_admin_data(self):
+        for application in (api.app,dashboard.app):
+            client=TestClient(application)
+            try:
+                with patch.object(api,'require_admin_header',side_effect=HTTPException(401,'login required')):
+                    for method in ('post','put','patch','delete'):
+                        for path in ['/api/all','/api/trades','/api/ai/history']:
+                            self.assertEqual(client.request(method.upper(),path,json={}).status_code,401)
+            finally:client.close()
+        with TestClient(api.app) as client:
+            for path in ['/api/v1/admin/config','/api/v1/admin/logs','/api/v1/admin/runtime-features']:
+                self.assertEqual(client.get(path).status_code,401,path)
+
     def test_health_remains_public(self):
         client=TestClient(api.app)
         try:

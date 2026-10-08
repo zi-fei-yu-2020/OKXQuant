@@ -28,13 +28,26 @@ def main():
         health=context.request.get(base+'/health')
         assert health.headers.get('x-okxquant-preview')=='isolated-source-snapshot','Refusing unmarked server'
         assert health.json()['credentials']['okx_configured'] is False,'Refusing configured exchange credentials'
-        for path in ['/api/all','/api/overview','/api/trades','/api/ai/last-prompt','/api/v1/status','/api/v1/cache/horizon-stats']:
+        for path in ['/api/all','/api/overview','/api/trades','/api/ai/history']:
+            response=context.request.get(base+path)
+            assert response.status==200,path
+            assert 'no-store' in response.headers.get('cache-control',''),path
+        for path in ['/api/ai/last-prompt','/api/v1/status','/api/v1/cache/horizon-stats','/api/v1/admin/config','/api/v1/admin/logs']:
             assert context.request.get(base+path).status==401,path
-        checks.append('anonymous private APIs denied')
+        checks.append('anonymous display APIs succeed; raw diagnostics and admin APIs denied')
         page=context.new_page();page.on('pageerror',lambda e:errors.append(str(e)))
-        page.goto(base+'/history?state=closed#ledger')
+        for old,new in [('/','/'),('/factors','/decisions'),('/news','/market-intelligence'),('/lab','/reviews'),('/history','/trades')]:
+            page.goto(base+old+'?probe=public#keep')
+            expect(page).to_have_url(base+new+'?probe=public#keep')
+        page.locator('details.action-disclosure > summary').click()
+        expect(page.get_by_role('heading',name='\u7cfb\u7edf\u5de1\u68c0\u65e5\u5fd7',exact=True)).to_be_visible()
+        assert not page.evaluate("localStorage.getItem('okxquant.admin.session.id')")
+        checks.append('all front pages and inspection log panel work without login')
+        page.screenshot(path=str(output/'anonymous-trades-logs.png'))
+        page.goto(base+'/admin/overview')
         expect(page).to_have_url(__import__('re').compile(r'/admin/login'))
-        checks.append('anonymous front route redirects to login')
+        checks.append('only admin navigation redirects anonymous visitors to login')
+        page.goto(base+'/admin/login?next=/trades%3Fstate%3Dclosed%23ledger')
         page.get_by_label('\u7ba1\u7406\u5458\u8d26\u53f7',exact=True).fill('admin')
         page.locator('#login-password').fill(password)
         page.get_by_role('button',name='\u767b\u5f55\u5de5\u4f5c\u7a7a\u95f4').click()

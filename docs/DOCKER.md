@@ -129,7 +129,7 @@ npm run build
 
 ## Lightweight release (2026-10-08)
 
-The first-install generator never overwrites existing configuration. New installs default to light optional workloads and paused automatic entries; existing deployments retain their saved flags. The console can change the optional runtime profile separately from the confirmed automatic-entry switch. Financial monitoring now requires login. Use the combined backend image entry point, not a separately launched dashboard ASGI object.
+The first-install generator never overwrites existing configuration. New installs default to light optional workloads and paused automatic entries; existing deployments retain their saved flags. The console can change the optional runtime profile separately from the confirmed automatic-entry switch. Front display pages and redacted inspection logs are public read-only. Only the admin console and its private configuration, raw diagnostic/prompt and management APIs require login. Use the combined backend image entry point, not a separately launched dashboard ASGI object.
 
 See `LIGHTWEIGHT_RELEASE_20261008.md` for feature boundaries, migration, authentication, statistical coverage and controlled rollback. Keep Node/OKX CLI in this compatibility image while OAuth/fallback consumers remain; removing it without auditing those paths is unsupported.
 

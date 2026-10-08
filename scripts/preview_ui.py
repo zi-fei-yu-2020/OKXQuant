@@ -33,6 +33,8 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix='okxquant-ui-preview-') as temporary:
         root = Path(temporary).resolve()
         copy_sources(root)
+        # Explicit empty-ledger fixture for public pagination checks, never live data.
+        (root / "data" / "trading_ledger.json").write_text("[]", encoding="utf8")
         (root / 'okxquant_frontend' / 'dist').symlink_to(ROOT / 'okxquant_frontend' / 'dist', target_is_directory=True)
         (root / 'docs').mkdir()
         (root / 'docs' / 'images').symlink_to(ROOT / 'docs' / 'images', target_is_directory=True)

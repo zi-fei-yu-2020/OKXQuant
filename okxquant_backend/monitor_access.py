@@ -1,4 +1,5 @@
-"""Session boundary shared by the mounted and standalone monitoring applications."""
+"""Public read-only display allowlist; raw diagnostics and control APIs remain private."""
+import re
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
@@ -11,8 +12,17 @@ def private_monitor_path(path):
     return path in PRIVATE_EXACT or any(path.startswith(prefix) for prefix in PRIVATE_PREFIXES)
 
 
+PUBLIC_READS = frozenset({"/api/all", "/api/overview", "/api/trades", "/api/ai/history"})
+
+
+def public_monitor_path(path):
+    path = path.rstrip("/") or "/"
+    return path in PUBLIC_READS or bool(re.fullmatch(r"/api/(?:trades|ai/history)/[^/]+", path))
+
+
 async def protect_monitor_data(request: Request, call_next):
-    private=private_monitor_path(request.url.path)
+    public_read = request.method in {"GET", "HEAD"} and public_monitor_path(request.url.path)
+    private=private_monitor_path(request.url.path) and not public_read
     if private and request.method != "OPTIONS" and not getattr(request.state,"monitor_user",None):
         # Lazy import avoids an application/mounted-router import cycle. Both
         # entry points validate against the same live session/user store.
@@ -29,4 +39,6 @@ async def protect_monitor_data(request: Request, call_next):
         vary=response.headers.get("Vary","")
         if "X-OKXQuant-Session".lower() not in vary.lower():
             response.headers["Vary"]=(vary+", " if vary else "")+"X-OKXQuant-Session"
+    if public_read:
+        response.headers["Cache-Control"]="no-cache, no-store, must-revalidate"
     return response

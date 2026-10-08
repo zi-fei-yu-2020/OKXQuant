@@ -2,7 +2,6 @@
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useDashboardStore } from '../stores/dashboard'
-import { useAuthStore } from '../stores/auth'
 import { monitorConnectionLabel } from '../utils/dashboardHealth'
 import { frontTabs, findFrontTab } from '../config/navigation'
 import HeaderBar from '../components/HeaderBar.vue'
@@ -23,7 +22,6 @@ import { Columns2, Rows2, RefreshCw } from 'lucide-vue-next'
 const router = useRouter()
 const route = useRoute()
 const store = useDashboardStore()
-const auth = useAuthStore()
 const layoutMode = ref<'dual' | 'stacked'>('dual')
 
 const currentTab = computed(() => {
@@ -164,9 +162,9 @@ function setLayout(mode: 'dual' | 'stacked') {
       <!-- Trades tab (lazy mount) -->
       <div v-if="currentTab === 'trades'" class="terminal-grid">
         <TradesLedger />
-        <details v-if="auth.isAuthenticated" class="action-disclosure rounded-xl border p-4 text-xs font-mono" style="background:var(--bg-card);border-color:var(--border-subtle)">
+        <details class="action-disclosure rounded-xl border p-4 text-xs font-mono" style="background:var(--bg-card);border-color:var(--border-subtle)">
           <summary class="cursor-pointer font-bold select-none" style="color:var(--text-main)">
-            高级运行诊断日志 (已认证管理员可见)
+            系统巡检日志（公开只读）
           </summary>
           <div class="mt-3 pt-3 border-t" style="border-color:var(--border-subtle)">
             <LedgerLogs />
