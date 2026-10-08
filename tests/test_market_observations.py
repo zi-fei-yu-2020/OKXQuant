@@ -1,4 +1,8 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 from scripts import market_observations as observations
 
 
@@ -27,6 +31,73 @@ class MarketObservationTests(unittest.TestCase):
         self.assertEqual(row['fields']['open_interest_usd']['freshness_limit_ms'],60000)
         self.assertEqual(row['derivatives_history']['open_interest_usd_delta_5m'],1000000)
         self.assertEqual(row['derivatives_history']['funding_rate_delta_5m'],.00005)
+
+    def test_indexed_derivatives_match_reference_for_unsorted_rows_and_gaps(self):
+        history=[]
+        for inst in ('BTC-USDT-SWAP','ETH-USDT-SWAP'):
+            for i in range(80):
+                at=1_000_000+i*60_000
+                fields={name:{'value':float(i)} for name in observations.DERIVATIVE_FIELDS}
+                if i%9==0:fields['funding_rate']={'value':None}
+                history.append({'instId':inst,'observed_at_ms':at,'fields':fields})
+        history.reverse()
+        current={'instId':'BTC-USDT-SWAP','observed_at_ms':6_000_000,
+                 'fields':{name:{'value':100.} for name in observations.DERIVATIVE_FIELDS}}
+        # Independent reference for the former scan/max behavior.
+        expected={}
+        rows=[row for row in history if row['instId']==current['instId'] and row['observed_at_ms']<current['observed_at_ms']]
+        for name in observations.DERIVATIVE_FIELDS:
+            for label,seconds in observations.DERIVATIVE_WINDOWS:
+                target=current['observed_at_ms']-seconds*1000
+                candidates=[row for row in rows if (row['fields'].get(name) or {}).get('value') is not None
+                            and row['observed_at_ms']<=target]
+                previous=max(candidates,key=lambda row:row['observed_at_ms']) if candidates else None
+                value=((previous or {}).get('fields',{}).get(name) or {}).get('value')
+                expected[f'{name}_delta_{label}']=None if value is None else 100.-value
+        index=observations._history_index(history)
+        self.assertEqual(observations.derive(current,history),expected)
+        self.assertEqual(observations.derive(current,history,index),expected)
+
+    def test_history_index_skips_invalid_rows_and_uses_first_duplicate_timestamp(self):
+        history=[
+            {'instId':'BTC-USDT-SWAP','observed_at_ms':700000,'fields':{'open_interest_usd':{'value':4}}},
+            {'instId':'BTC-USDT-SWAP','observed_at_ms':700000,'fields':{'open_interest_usd':{'value':9}}},
+            {'instId':'BTC-USDT-SWAP','observed_at_ms':'bad','fields':{'open_interest_usd':{'value':100}}},
+        ]
+        current={'instId':'BTC-USDT-SWAP','observed_at_ms':1_000_000,
+                 'fields':{'open_interest_usd':{'value':10}}}
+        result=observations.derive(current,history,observations._history_index(history))
+        self.assertEqual(result['open_interest_usd_delta_5m'],6)
+        self.assertEqual(result['open_interest_usd_delta_15m'],None)
+
+    def _collect_with_history(self, row_count):
+        temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
+        root=Path(temp.name);history_path=root/'market_observations.jsonl'
+        sample={'instId':'BTC-USDT-SWAP','observed_at_ms':1,'fields':{}}
+        line=json.dumps(sample,separators=(',',':'))+'\n'
+        history_path.write_text(line*row_count,encoding='utf-8')
+        with patch.object(observations,'DATA',root), \
+             patch.object(observations,'HISTORY',history_path), \
+             patch.object(observations,'LATEST',root/'latest.json'), \
+             patch('scripts.instrument_pool.load_instruments',return_value=[{'instId':'BTC-USDT-SWAP','type':'crypto'}]), \
+             patch('scripts.public_market.get_json',side_effect=self.getter), \
+             patch.object(observations,'_write_trimmed_history',wraps=observations._write_trimmed_history) as trim:
+            payload=observations.collect()
+            lines=history_path.read_text(encoding='utf-8').splitlines()
+            return payload,trim,len(lines),json.loads(lines[-1])
+
+    def test_history_limit_uses_slack_instead_of_rewriting_every_collection(self):
+        payload,trim,line_count,_=self._collect_with_history(observations.HISTORY_LIMIT)
+        trim.assert_not_called()
+        self.assertEqual(line_count,observations.HISTORY_LIMIT+1)
+        self.assertEqual(len(payload['items']),1)
+
+    def test_history_compacts_in_batches_without_dropping_recent_observation(self):
+        payload,trim,line_count,retained=self._collect_with_history(observations.HISTORY_LIMIT+observations.HISTORY_TRIM_SLACK)
+        trim.assert_called_once()
+        self.assertEqual(line_count,observations.HISTORY_LIMIT)
+        self.assertEqual(retained['observed_at_ms'],payload['items'][0]['observed_at_ms'])
+        self.assertEqual(len(payload['items']),1)
 
     def test_failed_read_is_unavailable_not_zero(self):
         def failed(url):

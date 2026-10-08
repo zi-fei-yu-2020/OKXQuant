@@ -144,15 +144,23 @@ class GatewayStore:
 
     def claim_due(self, limit: int = 20) -> list[dict[str, Any]]:
         now = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        due_sql = """SELECT d.id, d.channel, d.attempts, e.* FROM deliveries d
+                     JOIN events e ON e.event_id=d.event_id
+                     WHERE d.status IN ('pending','retry') AND d.next_attempt_at<=?
+                     ORDER BY e.priority DESC, d.id ASC LIMIT ?"""
+        # The worker polls once per second. Do an unlocked WAL read first so an
+        # idle poll does not acquire SQLite's writer lock and contend with event
+        # publishers/runtime-state writers. Recheck under BEGIN IMMEDIATE only
+        # when work actually appears; concurrent claimers remain idempotent.
+        with self.connect() as connection:
+            if connection.execute(
+                "SELECT 1 FROM deliveries WHERE status IN ('pending','retry') AND next_attempt_at<=? LIMIT 1",
+                (now,),
+            ).fetchone() is None:
+                return []
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            rows = connection.execute(
-                """SELECT d.id, d.channel, d.attempts, e.* FROM deliveries d
-                   JOIN events e ON e.event_id=d.event_id
-                   WHERE d.status IN ('pending','retry') AND d.next_attempt_at<=?
-                   ORDER BY e.priority DESC, d.id ASC LIMIT ?""",
-                (now, limit),
-            ).fetchall()
+            rows = connection.execute(due_sql, (now, limit)).fetchall()
             ids = [row["id"] for row in rows]
             if ids:
                 marks = ",".join("?" for _ in ids)
@@ -434,6 +442,17 @@ class GatewayStore:
         with self.connect() as connection:
             row = connection.execute("SELECT value FROM runtime_state WHERE key=?", (key,)).fetchone()
         return str(row["value"]) if row else default
+
+    def get_states(self, keys: list[str] | tuple[str, ...]) -> dict[str, str]:
+        """Fetch scheduler state keys in one SQLite session instead of N connections."""
+        normalized=tuple(dict.fromkeys(str(key) for key in keys if str(key)))
+        if not normalized:return {}
+        placeholders=','.join('?' for _ in normalized)
+        with self.connect() as connection:
+            rows=connection.execute(
+                f"SELECT key,value FROM runtime_state WHERE key IN ({placeholders})",normalized
+            ).fetchall()
+        return {str(row['key']):str(row['value']) for row in rows}
 
     def event_health(self) -> dict[str, int]:
         with self.connect() as connection:

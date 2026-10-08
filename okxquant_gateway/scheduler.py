@@ -20,6 +20,7 @@ from okxquant_gateway.store import GatewayStore, MANUAL_JOBS
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 BJ_TZ = timezone(timedelta(hours=8))
+_LAST_RAW_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -41,7 +42,9 @@ JOBS = (
     JobSpec("execution_quality", "execution_quality.py", 5, 20),
     JobSpec("ledger_sync", "ledger_monitor.py", 60, 50),
     JobSpec("trader", "ai_factor_trader.py", 15 * 60, 840),
-    JobSpec("demo_scalp", "demo_scalp.py", 60, 120),
+    # Keep the one-minute strategy cadence, but separate its heavier market
+    # package/candidate pass from the :25 factor and :45 observation collectors.
+    JobSpec("demo_scalp", "demo_scalp.py", 60, 120, phase_seconds=5),
     # Stagger non-critical research jobs so Python imports and indicator work
     # do not all hit the CPU at the trader/guard boundary.
     JobSpec("factor_library", "factor_library.py", 60, 55, phase_seconds=25),
@@ -149,13 +152,16 @@ class GatewayScheduler:
         self.completion_lock = threading.Lock()
         self.retry_after: dict[str, float] = {}
 
-    def _last_at(self, name: str) -> datetime | None:
-        raw = self.store.get_state(f"job.last.{name}")
+    @staticmethod
+    def _parse_last_at(raw: str) -> datetime | None:
         try:
             parsed = datetime.fromisoformat(raw) if raw else None
             return parsed.replace(tzinfo=BJ_TZ) if parsed and parsed.tzinfo is None else parsed
         except ValueError:
             return None
+
+    def _last_at(self, name: str) -> datetime | None:
+        return self._parse_last_at(self.store.get_state(f"job.last.{name}"))
 
     def initialize_migration_baseline(self, now: datetime | None = None) -> None:
         now = now or datetime.now(BJ_TZ)
@@ -173,8 +179,10 @@ class GatewayScheduler:
             return (value,)
         return spec.default_times
 
-    def due(self, spec: JobSpec, now: datetime, schedule: dict[str, Any]) -> bool:
-        last = self._last_at(spec.name)
+    def due(self, spec: JobSpec, now: datetime, schedule: dict[str, Any], *, last_raw=_LAST_RAW_UNSET) -> bool:
+        # Scheduler ticks provide a bulk-fetched value; direct callers retain the
+        # original behavior and read the single key on demand.
+        last = self._last_at(spec.name) if last_raw is _LAST_RAW_UNSET else self._parse_last_at(str(last_raw or ""))
         if spec.name == "ledger_sync":
             from scripts.ledger_monitor import should_run
             return should_run(last.timestamp() if last else 0, now.timestamp())
@@ -368,10 +376,13 @@ class GatewayScheduler:
                     self.retry_after[name] = time.monotonic() + 30
                 self.running.pop(name, None)
         schedule = load_schedule()
+        jobs = current_jobs()
+        last_states = self.store.get_states([f"job.last.{spec.name}" for spec in jobs])
         launched: list[str] = []
-        for spec in current_jobs():
+        for spec in jobs:
             try:
-                if spec.name in self.running or time.monotonic() < self.retry_after.get(spec.name, 0) or not self.due(spec, now, schedule):
+                if spec.name in self.running or time.monotonic() < self.retry_after.get(spec.name, 0) or not self.due(
+                        spec, now, schedule, last_raw=last_states.get(f"job.last.{spec.name}", "")):
                     continue
                 if spec.name == "self_improvement" and not self._self_improvement_window_open(now, spec):
                     continue

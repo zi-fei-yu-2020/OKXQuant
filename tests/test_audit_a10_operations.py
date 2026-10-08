@@ -308,11 +308,15 @@ class SchedulerSafetyTests(SchedulerFixture):
             stack.enter_context(patch.object(sched, 'current_jobs', return_value=jobs))
             stack.enter_context(patch.object(sched, 'load_schedule', return_value={}))
             self.scheduler.tick(self.now)
-            # The review job is deliberately deferred at a trader boundary; the
-            # latency-sensitive trader and guard/scalp jobs must still launch.
+            # The review job is deliberately deferred at a trader boundary.
+            # Trader/guard stay immediate; scalp remains on its one-minute
+            # cadence but is phased five seconds later to spread CPU work.
             self.assertEqual(len(recorders['executor'].calls), 0)
-            for name in ['trader_executor','guard_executor','scalp_executor']:
-                self.assertEqual(len(recorders[name].calls), 1)
+            self.assertEqual(len(recorders['trader_executor'].calls), 1)
+            self.assertEqual(len(recorders['guard_executor'].calls), 1)
+            self.assertEqual(len(recorders['scalp_executor'].calls), 0)
+            self.scheduler.tick(self.now.replace(second=5))
+            self.assertEqual(len(recorders['scalp_executor'].calls), 1)
 
     def test_obsolete_queued_spec_does_not_spawn(self):
         spec = sched.JobSpec('backup:example', 'nightly_backup_and_clean.py', schedule_key='backup_job:example', default_times=('20:00',))
@@ -361,7 +365,7 @@ class SchedulerSafetyTests(SchedulerFixture):
 
     def test_broken_job_does_not_block_later_jobs(self):
         jobs = (sched.JobSpec('bad','bad.py',60),sched.JobSpec('good','good.py',60))
-        def due(spec, now, schedule):
+        def due(spec, now, schedule, **_cached_state):
             if spec.name == 'bad':
                 raise ValueError('fixture')
             return True

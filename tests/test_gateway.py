@@ -2,6 +2,8 @@
 from __future__ import annotations
 import tempfile
 import unittest
+from contextlib import contextmanager
+from unittest.mock import patch
 from pathlib import Path
 
 from okxquant_gateway.events import GatewayEvent
@@ -23,6 +25,18 @@ class GatewayStoreTests(unittest.TestCase):
         self.assertEqual(stats["pending"], 2)
         due = self.store.claim_due()
         self.assertEqual({row["channel"] for row in due}, {"qq", "telegram"})
+
+    def test_idle_claim_poll_does_not_acquire_writer_lock(self):
+        statements=[]
+        original=self.store.connect
+        @contextmanager
+        def traced_connect(*,timeout=10):
+            with original(timeout=timeout) as connection:
+                connection.set_trace_callback(statements.append)
+                yield connection
+        with patch.object(self.store,'connect',side_effect=traced_connect):
+            self.assertEqual(self.store.claim_due(),[])
+        self.assertFalse(any(sql.strip().upper().startswith('BEGIN IMMEDIATE') for sql in statements))
 
     def test_delivery_success_isolated_from_failure(self):
         event = GatewayEvent("risk.triggered", "风险", "spread", priority=100)

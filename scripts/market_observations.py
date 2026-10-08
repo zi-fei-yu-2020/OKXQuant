@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import math
+from bisect import bisect_right
 import os
 import tempfile
 import time
@@ -17,6 +18,10 @@ DATA=ROOT/'data'
 HISTORY=DATA/'market_observations.jsonl'
 LATEST=DATA/'market_observations_latest.json'
 VERSION='market-observations-v1'
+HISTORY_LIMIT=20000
+HISTORY_TRIM_SLACK=1000
+DERIVATIVE_FIELDS=('open_interest_usd','funding_rate','long_short_ratio','taker_net_volume')
+DERIVATIVE_WINDOWS=(('5m',300),('15m',900),('1h',3600),('4h',14400))
 
 
 def number(value):
@@ -42,34 +47,75 @@ def unavailable(source, error_type, *, required=True, max_age_ms=15000):
             'required_for_strategy':bool(required),'fallback_used':False,'error_type':str(error_type)}
 
 
-def _read_history(limit=20000):
+def _read_history(limit=HISTORY_LIMIT+HISTORY_TRIM_SLACK):
     try:
         lines=HISTORY.read_text(encoding='utf-8').splitlines()[-limit:]
         return [json.loads(line) for line in lines if line.strip()]
     except (OSError,ValueError,TypeError):return []
 
 
-def derive(current, history):
-    at=current['observed_at_ms'];inst=current['instId']
-    rows=[row for row in history if row.get('instId')==inst and row.get('observed_at_ms',0)<at]
-    def previous(field_name, seconds):
-        target=at-seconds*1000
-        candidates=[row for row in rows if isinstance((row.get('fields') or {}).get(field_name),dict)
-                    and (row['fields'][field_name]).get('value') is not None
-                    and row.get('observed_at_ms',0)<=target]
-        return max(candidates,key=lambda row:row['observed_at_ms']) if candidates else None
+def _history_index(history):
+    """Index valid observations once; per-instrument derivatives then use binary search."""
+    rows=[]
+    for row in history or ():
+        if not isinstance(row,dict):continue
+        inst=str(row.get('instId') or '')
+        fields=row.get('fields')
+        if not inst or not isinstance(fields,dict):continue
+        try:at=int(number(row.get('observed_at_ms')))
+        except (TypeError,ValueError):continue
+        rows.append((at,inst,fields))
+    rows.sort(key=lambda item:item[0])
+    index={}
+    for at,inst,fields in rows:
+        instrument=index.setdefault(inst,{})
+        for name in DERIVATIVE_FIELDS:
+            sample=fields.get(name)
+            if not isinstance(sample,dict) or sample.get('value') is None:continue
+            try:value=number(sample['value'])
+            except (TypeError,ValueError):continue
+            times,values=instrument.setdefault(name,([],[]))
+            # Preserve the original derive() tie rule: among duplicate timestamps,
+            # use the first valid observation in source order.
+            if times and times[-1]==at:continue
+            times.append(at);values.append(value)
+    return index
+
+
+def derive(current, history, history_index=None):
+    at=int(number(current['observed_at_ms']));inst=str(current['instId'])
+    index=history_index if history_index is not None else _history_index(history)
+    available=index.get(inst,{})
     result={}
-    for source_name in ('open_interest_usd','funding_rate','long_short_ratio','taker_net_volume'):
-        now=(current['fields'].get(source_name) or {}).get('value')
-        for label,seconds in (('5m',300),('15m',900),('1h',3600),('4h',14400)):
-            old=previous(source_name,seconds)
-            old_value=((old or {}).get('fields',{}).get(source_name) or {}).get('value')
+    for source_name in DERIVATIVE_FIELDS:
+        now=(current.get('fields') or {}).get(source_name) or {}
+        now_value=now.get('value')
+        if now_value is not None:
+            try:now_value=number(now_value)
+            except (TypeError,ValueError):now_value=None
+        times,values=available.get(source_name,([],[]))
+        for label,seconds in DERIVATIVE_WINDOWS:
+            pos=bisect_right(times,at-seconds*1000)-1
+            old_value=values[pos] if pos>=0 else None
             key=f'{source_name}_delta_{label}'
-            result[key]=None if now is None or old_value is None else now-old_value
+            result[key]=None if now_value is None or old_value is None else now_value-old_value
     return result
 
 
-def collect_one(item, *, getter=None, now_ms=None, history=None):
+def _write_trimmed_history(rows):
+    fd,tmp=tempfile.mkstemp(prefix='.observations-history-',suffix='.tmp',dir=HISTORY.parent)
+    try:
+        with os.fdopen(fd,'w',encoding='utf-8') as handle:
+            for row in rows:
+                handle.write(json.dumps(row,ensure_ascii=False,allow_nan=False,separators=(',',':'))+'\n')
+            handle.flush();os.fsync(handle.fileno())
+        os.replace(tmp,HISTORY)
+    finally:
+        try:os.unlink(tmp)
+        except OSError:pass
+
+
+def collect_one(item, *, getter=None, now_ms=None, history=None, history_index=None):
     from scripts import public_market
     getter=getter or public_market.get_json
     now=int(time.time()*1000 if now_ms is None else now_ms)
@@ -123,7 +169,7 @@ def collect_one(item, *, getter=None, now_ms=None, history=None):
         fields['taker_net_volume']=field(number(row[1])-number(row[2]),source='okx_rubik_taker_volume',exchange_ts=row[0],received_at=now,required=False,max_age_ms=600000)
     except Exception as exc:fields['taker_net_volume']=unavailable('okx_rubik_taker_volume',type(exc).__name__,required=False,max_age_ms=600000)
     record={'version':VERSION,'instId':inst,'observed_at_ms':now,'fields':fields}
-    record['derivatives_history']=derive(record,history or [])
+    record['derivatives_history']=derive(record,history or [],history_index)
     required=[value for value in fields.values() if value.get('required_for_strategy')]
     record['quality']={'status':'fresh' if required and all(v['status']=='fresh' for v in required) else 'partial',
                        'required_fields':len(required),'fresh_required_fields':sum(v['status']=='fresh' for v in required)}
@@ -143,13 +189,16 @@ def _atomic(path,value):
 
 def collect():
     from scripts.instrument_pool import load_instruments
-    history=_read_history();rows=[collect_one(item,history=history) for item in load_instruments() if item.get('type','crypto')=='crypto']
+    history=_read_history();history_index=_history_index(history)
+    rows=[collect_one(item,history=history,history_index=history_index)
+          for item in load_instruments() if item.get('type','crypto')=='crypto']
     DATA.mkdir(parents=True,exist_ok=True)
     with HISTORY.open('a',encoding='utf-8') as handle:
         for row in rows:handle.write(json.dumps(row,ensure_ascii=False,allow_nan=False,separators=(',',':'))+'\n')
-    # Bound local history without inventing continuity.
-    lines=HISTORY.read_text(encoding='utf-8').splitlines()
-    if len(lines)>20000:HISTORY.write_text('\n'.join(lines[-20000:])+'\n',encoding='utf-8')
+    # Keep a slack window so a full history is not rewritten every minute.
+    # The retained timeline and derivative continuity are unchanged.
+    if len(history)+len(rows)>HISTORY_LIMIT+HISTORY_TRIM_SLACK:
+        _write_trimmed_history((history+rows)[-HISTORY_LIMIT:])
     payload={'version':VERSION,'generated_at_ms':int(time.time()*1000),'items':rows}
     _atomic(LATEST,payload);return payload
 

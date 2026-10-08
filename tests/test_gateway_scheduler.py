@@ -39,8 +39,9 @@ class GatewaySchedulerTests(unittest.TestCase):
     def test_minute_jobs_are_staggered_away_from_the_trader_boundary(self):
         factors = next(spec for spec in JOBS if spec.name == "factor_library")
         market = next(spec for spec in JOBS if spec.name == "market_observations")
+        scalp = next(spec for spec in JOBS if spec.name == "demo_scalp")
         boundary = self.now.replace(minute=15, second=0)
-        for spec in (factors, market):
+        for spec in (factors, market, scalp):
             self.store.set_state(f"job.last.{spec.name}", boundary.replace(minute=14).isoformat())
             self.assertFalse(self.scheduler.due(spec, boundary, {}))
             phased = boundary + timedelta(seconds=spec.phase_seconds)
@@ -54,6 +55,18 @@ class GatewaySchedulerTests(unittest.TestCase):
         self.store.set_state("job.last.daily_briefing", at_eight.isoformat())
         self.assertFalse(self.scheduler.due(briefing, at_eight, schedule))
         self.assertTrue(self.scheduler.due(briefing, at_eight.replace(hour=20), schedule))
+
+    def test_tick_batches_last_run_reads_for_idle_jobs(self):
+        jobs=(next(spec for spec in JOBS if spec.name=='position_guard'),
+              next(spec for spec in JOBS if spec.name=='market_observations'))
+        for spec in jobs:self.store.set_state(f'job.last.{spec.name}',self.now.isoformat())
+        with patch('okxquant_gateway.scheduler.current_jobs',return_value=jobs), \
+             patch('okxquant_gateway.scheduler.load_schedule',return_value={}), \
+             patch.object(self.store,'get_states',wraps=self.store.get_states) as bulk, \
+             patch.object(self.store,'get_state',wraps=self.store.get_state) as single:
+            self.assertEqual(self.scheduler.tick(self.now),[])
+        bulk.assert_called_once_with([f'job.last.{spec.name}' for spec in jobs])
+        single.assert_not_called()
 
     def test_runtime_state_survives_store_reopen(self):
         self.store.set_state("job.last.news", self.now.isoformat())
