@@ -51,3 +51,10 @@ At the 16:40-16:43 checks, the ledger showed **8 known openings today, all 8 pen
 Cleanup removed **18 unused old OKXQuant images** and **944.6 MB of expired reconstructible build cache**. Root filesystem usage fell from 63,518,195,712 to 60,815,245,312 bytes immediately after cleanup: **2.70 GB freed**. After building the replacement image, final measured usage was 60,933,038,080 bytes (66% full), with 31,538,114,560 bytes available. Running containers, named volumes, evidence/ledger data and other services' rollback images were preserved. Application rollback images `okxquant:build-74ba776` and `okxquant:build-60b1c0a` remain.
 
 The Compose image/build metadata keys are persisted in the server checkout's ignored `.env`; no credentials were written to source or this report. The deploy uses `okxquant:build-ddb1b35`. A later documentation-only commit does not require another application restart.
+
+
+### Final natural execution check
+
+A subsequent read-only check observed a naturally scheduled SUI minute candidate completing `maker_canceled -> fallback_result(status=accepted)`, with its cycle recorded as `submitted`. No manual/test opening was triggered. Acceptance is not a guarantee of fill or profitability. This supersedes the earlier observation that no post-release fallback event had yet occurred.
+
+At the final health check the ledger reported **9 known openings today / 8 pending settlements / 1 settled close today**, and the container remained healthy. An active/changed-position ledger cycle used 21.24 CPU seconds; the 12.793-13.989-second figures above describe unchanged warm reconciliation, not every possible future cycle. The historical-settlement gap is still unresolved upstream.
