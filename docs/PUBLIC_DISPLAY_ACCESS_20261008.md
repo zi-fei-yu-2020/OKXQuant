@@ -21,4 +21,10 @@ The display site must work without login, including system inspection logs. Only
 
 ## Deployment
 
-Pending image build/test and controlled production replacement. Keep the previous light image for rollback; restore the original automatic-entry flag after verification. Production domain acceptance will be appended after deployment.
+Deployed image: `okxquant:build-2398079`. The independently built server image passed **1,897 offline tests in 349.875 seconds**, with no network or production volumes and a one-core limit. A durable locked controller paused future entries, drained active entry cycles, checked exchange protection, replaced only the app container, checked anonymous display and protected admin APIs, and restored the original automatic-entry flag `1`. The completed deployment journal and healthy new image were read back through the pinned SSH host identity. The post-restart protection check found zero positions and zero pending orders. No orders were forced closed or canceled. Previous image `5d36af2` remains available for rollback.
+
+Production Edge verification on the operator's HTTPS domain passed **24 read-only checks**, with zero JavaScript errors. This included real anonymous overview/list/detail APIs, all canonical and legacy page routes, stale-admin-session tolerance, six private API denials, and admin navigation redirecting to login. Crucially, the browser waited for actual retained trade rows and **60 inspection log DOM entries**, rather than treating an empty loading shell as success. Desktop/mobile checks found no document-level horizontal overflow.
+
+All browser-side non-GET/HEAD/OPTIONS traffic was blocked; attempted Cloudflare RUM telemetry was also blocked and recorded separately. No production login, settings mutation or order was used to exercise these checks. Local direct DNS returned a loopback IPv6 address, so domain verification used the existing local HTTP proxy with normal TLS verification. No DNS/hosts/proxy configuration was changed, and SSH continued to pin the independently verified server key.
+
+Artifacts are in the ignored directory `okxquant_frontend/.ui-artifacts/public-access-20261008/`. The local disposable preview was stopped after acceptance. Documentation-only follow-up commits do not require another app restart.
