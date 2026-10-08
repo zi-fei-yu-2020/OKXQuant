@@ -131,7 +131,7 @@ onMounted(() => {
         >
           <button
             @click="fetchLogStream('trader')"
-            class="px-2.5 py-1 rounded text-sm font-sans font-bold cursor-pointer transition-colors"
+            class="ui-action ui-action--sm"
             :style="
               activeLogTab === 'trader'
                 ? { backgroundColor: 'var(--text-main)', color: 'var(--bg-card)' }
@@ -142,7 +142,7 @@ onMounted(() => {
           </button>
           <button
             @click="fetchLogStream('backend')"
-            class="px-2.5 py-1 rounded text-sm font-sans font-bold cursor-pointer transition-colors"
+            class="ui-action ui-action--sm"
             :style="
               activeLogTab === 'backend'
                 ? { backgroundColor: 'var(--text-main)', color: 'var(--bg-card)' }
@@ -153,7 +153,7 @@ onMounted(() => {
           </button>
           <button
             @click="fetchLogStream('scheduler')"
-            class="px-2.5 py-1 rounded text-sm font-sans font-bold cursor-pointer transition-colors"
+            class="ui-action ui-action--sm"
             :style="
               activeLogTab === 'scheduler'
                 ? { backgroundColor: 'var(--text-main)', color: 'var(--bg-card)' }

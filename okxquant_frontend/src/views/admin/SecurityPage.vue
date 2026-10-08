@@ -330,7 +330,7 @@ const { prompt } = useDialogs()
             <button
               @click="saveCapital"
               :disabled="(savingCapital) || actionBusy || !canManage"
-              class="w-full flex items-center justify-center space-x-1.5 px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-sans font-bold cursor-pointer disabled:opacity-50 transition-all shadow-xs"
+              class="ui-action w-full bg-emerald-700 hover:bg-emerald-800 text-white"
             >
               <Save class="w-3.5 h-3.5" /><span>{{
                 savingCapital ? '更新中...' : '更新基准本金'
@@ -373,7 +373,7 @@ const { prompt } = useDialogs()
             />
             <button :disabled="actionBusy"
               @click="addInstrument"
-              class="px-3 py-1.5 rounded-lg text-sm font-sans font-bold transition-all cursor-pointer shadow-xs"
+              class="ui-action ui-action--sm"
               style="background-color: var(--text-main); color: var(--bg-card)"
             >
               添加标的
@@ -450,7 +450,7 @@ const { prompt } = useDialogs()
                   <button
                     @click="removeInstrument(item)"
                     :disabled="(item.protected || item.has_tracker) || actionBusy"
-                    class="p-1 rounded hover:opacity-80 text-rose-400 disabled:opacity-20 cursor-pointer transition-opacity"
+                    class="ui-icon-button ui-icon-button--danger hover:opacity-80 text-rose-400 disabled:opacity-20 transition-opacity"
                     title="从标的池移除"
                   >
                     <Trash2 class="w-3.5 h-3.5" />
@@ -488,7 +488,7 @@ const { prompt } = useDialogs()
           </div>
           <button :disabled="actionBusy"
             @click="loadPositions"
-            class="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
+            class="ui-action ui-action--sm border"
             style="
               background-color: var(--bg-card);
               border-color: var(--border-medium);
@@ -575,7 +575,7 @@ const { prompt } = useDialogs()
                 <td class="py-2.5 px-4 text-right">
                   <button :disabled="actionBusy"
                     @click="openClose(p)"
-                    class="px-2.5 py-1 rounded-md text-xs font-sans font-bold border transition-all cursor-pointer shadow-xs"
+                    class="ui-action ui-action--sm border"
                     style="
                       background-color: var(--color-down-bg);
                       border-color: var(--color-down-border);
@@ -667,7 +667,7 @@ const { prompt } = useDialogs()
         <div class="flex justify-end gap-2">
           <button :disabled="actionBusy"
             @click="closeModal = null"
-            class="px-3 py-2 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
+            class="ui-action border"
             style="
               background-color: var(--bg-card-subtle);
               border-color: var(--border-medium);
@@ -679,7 +679,7 @@ const { prompt } = useDialogs()
           <button
             @click="confirmClose"
             :disabled="(closing) || actionBusy || !canManage"
-            class="px-3 py-2 rounded-lg text-sm font-sans font-bold cursor-pointer disabled:opacity-50 transition-all shadow-xs"
+            class="ui-action"
             style="
               background-color: var(--color-down-bg);
               border-color: var(--color-down-border);

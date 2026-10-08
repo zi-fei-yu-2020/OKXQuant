@@ -70,7 +70,7 @@ onMounted(load)
       </div>
       <button
         @click="load"
-        class="flex items-center space-x-1 px-3 py-2 rounded-lg border text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
+        class="ui-action border"
         style="
           background-color: var(--bg-card-subtle);
           border-color: var(--border-medium);

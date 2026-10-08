@@ -137,7 +137,7 @@ onUnmounted(() => {
           <!-- 4 Core Pillars Grid -->
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-2">
             <div
-              class="p-4 rounded-xl border space-y-2 shadow-xs"
+              class="ui-panel p-4 rounded-xl border space-y-2 shadow-xs"
               style="background-color: var(--bg-card); border-color: var(--border-subtle)"
             >
               <div
@@ -154,7 +154,7 @@ onUnmounted(() => {
             </div>
 
             <div
-              class="p-4 rounded-xl border space-y-2 shadow-xs"
+              class="ui-panel p-4 rounded-xl border space-y-2 shadow-xs"
               style="background-color: var(--bg-card); border-color: var(--border-subtle)"
             >
               <div
@@ -170,7 +170,7 @@ onUnmounted(() => {
             </div>
 
             <div
-              class="p-4 rounded-xl border space-y-2 shadow-xs"
+              class="ui-panel p-4 rounded-xl border space-y-2 shadow-xs"
               style="background-color: var(--bg-card); border-color: var(--border-subtle)"
             >
               <div
@@ -188,7 +188,7 @@ onUnmounted(() => {
             </div>
 
             <div
-              class="p-4 rounded-xl border space-y-2 shadow-xs"
+              class="ui-panel p-4 rounded-xl border space-y-2 shadow-xs"
               style="background-color: var(--bg-card); border-color: var(--border-subtle)"
             >
               <div
@@ -346,7 +346,7 @@ onUnmounted(() => {
           </p>
 
           <div
-            class="rounded-xl border p-4 text-xs font-mono space-y-2.5 shadow-xs"
+            class="ui-panel rounded-xl border p-4 text-xs font-mono space-y-2.5 shadow-xs"
             style="background-color: var(--bg-card); border-color: var(--border-subtle)"
           >
             <div class="font-bold text-xs" style="color: var(--text-main)">
@@ -720,7 +720,7 @@ onUnmounted(() => {
           </p>
 
           <div
-            class="rounded-xl border p-4 text-xs font-mono space-y-2 shadow-xs"
+            class="ui-panel rounded-xl border p-4 text-xs font-mono space-y-2 shadow-xs"
             style="background-color: var(--bg-card); border-color: var(--border-subtle)"
           >
             <div class="font-bold text-xs" style="color: var(--text-main)">
@@ -886,7 +886,7 @@ onUnmounted(() => {
           </p>
 
           <div
-            class="rounded-xl border p-4 text-xs font-mono space-y-2 shadow-xs"
+            class="ui-panel rounded-xl border p-4 text-xs font-mono space-y-2 shadow-xs"
             style="background-color: var(--bg-card); border-color: var(--border-subtle)"
           >
             <div class="flex items-center justify-between" style="color: var(--text-muted)">
@@ -965,7 +965,7 @@ pip install -r requirements.txt
 
           <div class="space-y-3">
             <div
-              class="p-4 rounded-xl border space-y-2 shadow-xs"
+              class="ui-panel p-4 rounded-xl border space-y-2 shadow-xs"
               style="background-color: var(--bg-card); border-color: var(--border-subtle)"
             >
               <h3 class="text-sm font-bold" style="color: var(--text-main)">
@@ -979,7 +979,7 @@ pip install -r requirements.txt
             </div>
 
             <div
-              class="p-4 rounded-xl border space-y-2 shadow-xs"
+              class="ui-panel p-4 rounded-xl border space-y-2 shadow-xs"
               style="background-color: var(--bg-card); border-color: var(--border-subtle)"
             >
               <h3 class="text-sm font-bold" style="color: var(--text-main)">
@@ -992,7 +992,7 @@ pip install -r requirements.txt
             </div>
 
             <div
-              class="p-4 rounded-xl border space-y-2 shadow-xs"
+              class="ui-panel p-4 rounded-xl border space-y-2 shadow-xs"
               style="background-color: var(--bg-card); border-color: var(--border-subtle)"
             >
               <h3 class="text-sm font-bold" style="color: var(--text-main)">

@@ -503,7 +503,7 @@ const toast = useToast()
             <button
               @click="testConnection"
               :disabled="(busy !== '') || actionBusy || !canManage"
-              class="flex items-center space-x-1 px-3 py-2 rounded-lg border text-sm font-sans cursor-pointer disabled:opacity-40 transition-all shadow-xs"
+              class="ui-action border"
               style="
                 background-color: var(--bg-card-subtle);
                 border-color: var(--border-medium);
@@ -517,7 +517,7 @@ const toast = useToast()
             <button
               @click="save"
               :disabled="(busy !== '') || actionBusy || !canManage"
-              class="flex items-center space-x-1 px-3 py-2 rounded-lg text-sm font-sans font-bold cursor-pointer disabled:opacity-40 transition-all shadow-xs"
+              class="ui-action"
               style="background-color: var(--text-main); color: var(--bg-card)"
             >
               <Save class="w-3.5 h-3.5" /><span>{{
@@ -527,7 +527,7 @@ const toast = useToast()
             <button
               @click="runNow"
               :disabled="(busy !== '') || actionBusy"
-              class="flex items-center space-x-1 px-3 py-2 rounded-lg text-sm font-sans font-bold cursor-pointer disabled:opacity-40 transition-all shadow-xs"
+              class="ui-action"
               style="
                 background-color: var(--color-down-bg);
                 border-color: var(--color-down-border);
@@ -550,7 +550,7 @@ const toast = useToast()
             <button
               @click="triggerUpload"
               :disabled="(busy !== '') || actionBusy"
-              class="flex items-center space-x-1 px-3 py-2 rounded-lg border text-sm font-sans font-bold cursor-pointer disabled:opacity-40 transition-all shadow-xs"
+              class="ui-action border"
               style="
                 background-color: var(--bg-card-subtle);
                 border-color: var(--border-medium);
@@ -682,7 +682,7 @@ const toast = useToast()
                     <div class="flex items-center justify-center space-x-2">
                       <button :disabled="actionBusy"
                         @click="downloadArchive(a.name)"
-                        class="p-1 rounded hover:bg-[var(--bg-badge)] text-[var(--color-brand)] transition-colors cursor-pointer"
+                        class="ui-icon-button ui-icon-button--brand hover:bg-[var(--bg-badge)] text-[var(--color-brand)]"
                         title="下载归档到本地"
                       >
                         <Download class="w-3.5 h-3.5" />
@@ -691,7 +691,7 @@ const toast = useToast()
                         v-if="auth.isSuperadmin"
                         @click="restoreArchive(a.name)"
                         :disabled="(busy === 'restore') || actionBusy || !canManage"
-                        class="p-1 rounded hover:bg-[var(--bg-badge)] text-amber-500 transition-colors cursor-pointer"
+                        class="ui-icon-button ui-icon-button--warning hover:bg-[var(--bg-badge)] text-amber-500"
                         title="恢复此备份到系统"
                       >
                         <RotateCcw class="w-3.5 h-3.5" />

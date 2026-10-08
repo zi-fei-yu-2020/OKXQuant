@@ -143,12 +143,6 @@ const dailyLimitPct = computed(() => {
 const dailyCircuitTriggered = computed(() => store.data?.risk_status?.daily_blocked)
 const signedPct = (value: number | null) => (value === null ? '--' : `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`)
 
-// Period metadata
-const metadataTimezone = computed(() => activePeriodData.value?.timezone || stats.value?.timezone || 'Asia/Shanghai')
-const metadataAsOf = computed(() => activePeriodData.value?.as_of || stats.value?.as_of || null)
-const metadataScope = computed(() => activePeriodData.value?.scope || stats.value?.scope || (store.data?.okx_environment === 'demo' ? '模拟盘' : '实盘'))
-const coverageStart = computed(() => activePeriodData.value?.coverage?.start || (stats.value as any)?.coverage?.start || null)
-
 // Unknown stats
 const unknownStat = computed(() => stat('unknown'))
 const hasUnknownOrders = computed(() => {
@@ -179,13 +173,15 @@ const floatingPnl = computed(() => {
     <!-- Card 1: Execution Profile -->
     <AppCard class="telemetry-card telemetry-card--profile">
       <div class="telemetry-card__heading">
-        <div>
-          <p class="telemetry-card__eyebrow">执行模式</p>
+        <div class="telemetry-heading__top">
+          <span class="telemetry-card__eyebrow">执行模式</span>
+          <AppBadge :tone="profile?.error ? 'warning' : execution.id ? 'brand' : 'neutral'">
+            {{ profile?.error ? '配置不可用' : execution.id === 'standard' ? '标准风控' : execution.id === 'small300' ? '300U 小资金' : execution.id || '尚未取得' }}
+          </AppBadge>
+        </div>
+        <div class="telemetry-heading__title-row">
           <h3>{{ profileLabel }}</h3>
         </div>
-        <AppBadge :tone="profile?.error ? 'warning' : execution.id ? 'brand' : 'neutral'">
-          {{ profile?.error ? '配置不可用' : execution.id === 'standard' ? '标准风控' : execution.id === 'small300' ? '300U 小资金' : execution.id || '尚未取得' }}
-        </AppBadge>
       </div>
       <div class="telemetry-card__body telemetry-card__params">
         <div><span>单笔风险</span><strong>{{ riskPerTrade }}</strong></div>
@@ -196,60 +192,59 @@ const floatingPnl = computed(() => {
     </AppCard>
 
     <!-- Card 2: Strategy Telemetry with TODAY / ALL tabs -->
-    <AppCard class="telemetry-card telemetry-card--stats">
-      <div class="telemetry-card__heading">
-        <div>
-          <p class="telemetry-card__eyebrow">策略统计</p>
-          <div class="flex items-center gap-2">
-          <span v-if="isUnavailable" class="text-amber-500 font-medium">
-            统计提示：当前账户历史分段统计尚未完成聚合
-          </span>
-          <span v-else-if="periodsData !== null && !activePeriodData" class="text-amber-500 font-medium">
-            周期提示：当前所选周期 ({{ activePeriod === 'today' ? '当日统计' : '全局统计' }}) 暂无分段统计
-          </span>
-            <h3>短线 / 波段</h3>
-            <!-- Responsive accessible tabs for TODAY / ALL -->
-            <div
-              v-if="periodsData"
-              class="inline-flex rounded-md border p-0.5 text-xs font-mono"
-              role="tablist"
-              aria-label="策略统计周期"
-              style="background: var(--bg-card-subtle); border-color: var(--border-subtle)"
+    <AppCard class="telemetry-card telemetry-card--stats" data-strategy-stats>
+      <div class="telemetry-card__heading telemetry-card__heading--stats">
+        <div class="telemetry-heading__top">
+          <span class="telemetry-card__eyebrow">策略统计</span>
+          <AppBadge :tone="store.error || store.isStale ? 'warning' : 'neutral'">
+            {{ !hasStats ? '暂无统计' : statsStatusLabel }}
+          </AppBadge>
+        </div>
+        <div class="telemetry-heading__title-row">
+          <h3>短线 / 波段</h3>
+          <!-- Responsive accessible tabs for TODAY / ALL -->
+          <div
+            v-if="periodsData"
+            class="telemetry-tabs"
+            role="tablist"
+            aria-label="策略统计周期"
+          >
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="activePeriod === 'today'"
+              class="ui-tab-control telemetry-tab-btn"
+              :class="{ 'telemetry-tab-btn--active': activePeriod === 'today' }"
+              @click="activePeriod = 'today'"
             >
-              <button
-                type="button"
-                role="tab"
-                :aria-selected="activePeriod === 'today'"
-                class="px-2 py-0.5 rounded transition-colors text-[11px]"
-                :class="activePeriod === 'today' ? 'bg-[var(--bg-card)] font-bold text-[var(--color-brand)] shadow-xs' : 'text-[var(--text-muted)]'"
-                @click="activePeriod = 'today'"
-              >
-                当日统计
-              </button>
-              <button
-                type="button"
-                role="tab"
-                :aria-selected="activePeriod === 'all'"
-                class="px-2 py-0.5 rounded transition-colors text-[11px]"
-                :class="activePeriod === 'all' ? 'bg-[var(--bg-card)] font-bold text-[var(--color-brand)] shadow-xs' : 'text-[var(--text-muted)]'"
-                @click="activePeriod = 'all'"
-              >
-                全局统计
-              </button>
-            </div>
+              当日统计
+            </button>
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="activePeriod === 'all'"
+              class="ui-tab-control telemetry-tab-btn"
+              :class="{ 'telemetry-tab-btn--active': activePeriod === 'all' }"
+              @click="activePeriod = 'all'"
+            >
+              全局统计
+            </button>
           </div>
         </div>
-        <AppBadge :tone="store.error || store.isStale ? 'warning' : 'neutral'">
-          {{ !hasStats ? '暂无统计' : statsStatusLabel }}
-        </AppBadge>
+        <div v-if="isUnavailable" class="telemetry-hint text-amber-500 font-medium">
+          统计提示：当前账户历史分段统计尚未完成聚合
+        </div>
+        <div v-else-if="periodsData !== null && !activePeriodData" class="telemetry-hint text-amber-500 font-medium">
+          周期提示：当前所选周期 ({{ activePeriod === 'today' ? '当日统计' : '全局统计' }}) 暂无分段统计
+        </div>
       </div>
 
       <div class="telemetry-card__body telemetry-card__stats">
         <!-- Scalp Stats -->
         <div class="telemetry-stat">
-          <div class="flex items-center justify-between">
+          <div class="telemetry-stat__top">
             <span>短线净盈亏</span>
-            <span v-if="horizonWinRateText(stat('scalp')) !== '--'" class="text-[10px] text-[var(--text-faint)]">
+            <span v-if="horizonWinRateText(stat('scalp')) !== '--'" class="telemetry-stat__winrate">
               胜率 {{ horizonWinRateText(stat('scalp')) }}
             </span>
           </div>
@@ -266,9 +261,9 @@ const floatingPnl = computed(() => {
 
         <!-- Swing Stats -->
         <div class="telemetry-stat">
-          <div class="flex items-center justify-between">
+          <div class="telemetry-stat__top">
             <span>波段净盈亏</span>
-            <span v-if="horizonWinRateText(stat('swing')) !== '--'" class="text-[10px] text-[var(--text-faint)]">
+            <span v-if="horizonWinRateText(stat('swing')) !== '--'" class="telemetry-stat__winrate">
               胜率 {{ horizonWinRateText(stat('swing')) }}
             </span>
           </div>
@@ -284,13 +279,13 @@ const floatingPnl = computed(() => {
         </div>
       </div>
 
-      <!-- Additional Stats Info Row: Unclassified & Floating PnL & Metadata Note -->
+      <!-- Additional Stats Info Row: Unclassified & Floating PnL -->
       <div
-        v-if="hasUnknownOrders || floatingPnl !== null || metadataAsOf"
-        class="telemetry-card__footer col-span-full pt-2 border-t flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono text-[var(--text-faint)]"
+        v-if="hasUnknownOrders || floatingPnl !== null"
+        class="telemetry-card__footer col-span-full pt-2 border-t flex flex-wrap items-center gap-2 text-[10px] font-mono text-[var(--text-faint)]"
         style="border-color: var(--border-subtle)"
       >
-        <div class="flex items-center gap-2">
+        <div class="flex items-center flex-wrap gap-2">
           <span v-if="hasUnknownOrders" class="text-amber-500 font-medium">
             未分类订单: {{ count(unknownStat.closed) }} 笔平仓 · {{ count(unknownStat.opened) }} 笔在途 (不计入胜率)
           </span>
@@ -298,23 +293,16 @@ const floatingPnl = computed(() => {
             持仓浮动盈亏: <strong :style="{ color: profitTone(floatingPnl) }">{{ money(floatingPnl) }}</strong>
           </span>
         </div>
-        <div class="flex items-center gap-1.5 ml-auto">
-          <span>{{ metadataScope }} · 时区 {{ metadataTimezone }}</span>
-          <span v-if="metadataAsOf">· 截至 {{ metadataAsOf }}</span>
-          <span v-if="coverageStart">· 起始 {{ coverageStart }}</span>
-          <span>(系统保留账本口径)</span>
-        </div>
       </div>
     </AppCard>
 
     <!-- Card 3: Decision State -->
     <AppCard class="telemetry-card telemetry-card--decision">
       <div class="telemetry-card__heading">
-        <div>
-          <p class="telemetry-card__eyebrow">决策状态</p>
+        <div class="telemetry-heading__top">
           <h3>当前状态</h3>
+          <AppBadge :tone="statusTone" data-decision-status>{{ statusLabel }}</AppBadge>
         </div>
-        <AppBadge :tone="statusTone" data-decision-status>{{ statusLabel }}</AppBadge>
       </div>
       <div class="telemetry-card__body telemetry-card__decision">
         <div class="telemetry-decision__meta">
@@ -329,6 +317,225 @@ const floatingPnl = computed(() => {
   </div>
 </template>
 <style scoped>
-.strategy-telemetry{display:grid;gap:.75rem;container-type:inline-size}.telemetry-card{min-width:0;padding:1rem 1.15rem;display:grid;grid-template-columns:minmax(145px,190px) minmax(0,1fr);align-items:center;gap:1rem 1.5rem}.telemetry-card__heading{min-width:0;display:flex;align-items:center;justify-content:space-between;gap:.75rem}.telemetry-card__eyebrow{margin:0 0 .2rem;color:var(--text-faint);font-size:.7rem;letter-spacing:.08em}.telemetry-card h3{margin:0;color:var(--text-main);font-size:.95rem;font-weight:650}.telemetry-card__body{min-width:0}.telemetry-card__params,.telemetry-card__stats,.telemetry-card__decision{display:flex;align-items:center;min-width:0}.telemetry-card__params{justify-content:space-between;gap:1.25rem}.telemetry-card__params div{display:grid;gap:.2rem;min-width:0}.telemetry-card__params span,.telemetry-stat span,.telemetry-decision__meta span{color:var(--text-muted);font-size:.72rem;white-space:nowrap}.telemetry-card__params strong{color:var(--text-main);font-size:.88rem;font-variant-numeric:tabular-nums;white-space:normal;overflow-wrap:anywhere;line-height:1.55}.telemetry-card__stats{gap:.75rem}.telemetry-stat{flex:1 1 0;min-width:0;padding:.65rem .85rem;border-radius:.6rem;background:var(--bg-card-subtle);display:grid;gap:.18rem}.telemetry-stat strong{font-size:1.1rem;font-variant-numeric:tabular-nums}.telemetry-stat small,.telemetry-decision__copy small{color:var(--text-faint);font-size:.7rem}.telemetry-card__decision{gap:1.5rem;justify-content:flex-end}.telemetry-decision__copy{flex:1 1 auto;min-width:0}.telemetry-decision__copy p{margin:0;color:var(--text-muted);font-size:.82rem;line-height:1.55;overflow-wrap:anywhere}.telemetry-decision__status{font-weight:750;color:var(--text-main)!important;font-size:1rem!important}.telemetry-decision__copy small{display:block;margin-top:.35rem;line-height:1.45;overflow-wrap:anywhere}.telemetry-decision__meta{flex:0 0 auto;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:.55rem 1rem}.telemetry-decision__meta span{display:grid;gap:.15rem}.telemetry-decision__meta strong{color:var(--text-main);font-size:.85rem;font-variant-numeric:tabular-nums}@media (max-width:900px){.telemetry-card{grid-template-columns:1fr;gap:.75rem}.telemetry-card__params,.telemetry-card__decision{align-items:flex-start}}@media (max-width:560px){.telemetry-card__params{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.7rem}.telemetry-card__stats,.telemetry-card__decision{display:grid;grid-template-columns:1fr;gap:.8rem}.telemetry-decision__meta{justify-content:flex-start}}
-@container (max-width:720px){.telemetry-card{grid-template-columns:1fr;gap:.65rem;padding:.9rem 1rem}.telemetry-card__params{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.6rem 1.1rem}.telemetry-card__params div{gap:.1rem}.telemetry-card__decision{justify-content:flex-start}.telemetry-decision__meta{justify-content:flex-start;gap:.55rem 1.1rem}.telemetry-card__heading{justify-content:space-between}.telemetry-card__eyebrow{margin-bottom:.1rem}}
+.strategy-telemetry {
+  display: grid;
+  gap: 0.75rem;
+  container-type: inline-size;
+  min-width: 0;
+  max-width: 100%;
+}
+.telemetry-card {
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.75rem 0.875rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  box-sizing: border-box;
+}
+.telemetry-card__heading {
+  min-width: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.telemetry-heading__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+}
+.telemetry-heading__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  width: 100%;
+  min-width: 0;
+}
+.telemetry-card__eyebrow {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.telemetry-card h3 {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 0.9375rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.telemetry-tabs {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card-subtle);
+  gap: 2px;
+  max-width: 100%;
+}
+.telemetry-tab-btn {
+  min-width: 60px;
+  border: none;
+  color: var(--text-muted);
+  background: transparent;
+}
+.telemetry-tab-btn--active {
+  background: var(--bg-card);
+  font-weight: 700;
+  color: var(--color-brand);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+.telemetry-hint {
+  font-size: 0.7rem;
+  line-height: 1.4;
+  margin-top: 0.2rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.telemetry-card__body {
+  min-width: 0;
+  width: 100%;
+}
+.telemetry-card__params {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem 0.75rem;
+  min-width: 0;
+  width: 100%;
+}
+.telemetry-card__params div {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.telemetry-card__params span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.telemetry-card__params strong {
+  color: var(--text-main);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+.telemetry-card__stats {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.65rem;
+  min-width: 0;
+  width: 100%;
+}
+.telemetry-stat {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-subtle);
+  display: grid;
+  gap: 0.2rem;
+}
+.telemetry-stat__top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  width: 100%;
+  min-width: 0;
+}
+.telemetry-stat__top span:first-child {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.telemetry-stat__winrate {
+  font-size: 0.68rem;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.telemetry-stat strong {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  width: 100%;
+}
+.telemetry-stat small {
+  color: var(--text-faint);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.telemetry-card__decision {
+  display: flex;
+  justify-content: flex-start;
+  min-width: 0;
+  width: 100%;
+}
+.telemetry-decision__meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 0.45rem 0.9rem;
+  min-width: 0;
+  width: 100%;
+}
+.telemetry-decision__meta span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+.telemetry-decision__meta strong {
+  color: var(--text-main);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+@container (min-width: 500px) {
+  .telemetry-card__stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 640px) {
+  .telemetry-card__params {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 768px) {
+  .telemetry-card {
+    display: grid;
+    grid-template-columns: minmax(180px, 230px) minmax(0, 1fr);
+    align-items: center;
+    gap: 1rem 1.5rem;
+    padding: 1rem 1.15rem;
+  }
+  .telemetry-card__decision {
+    justify-content: flex-end;
+  }
+  .telemetry-decision__meta {
+    justify-content: flex-end;
+  }
+}
 </style>

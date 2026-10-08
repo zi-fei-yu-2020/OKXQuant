@@ -617,7 +617,7 @@ const toast = useToast()
     <template v-if="currentView === 'list'">
       <!-- Top Title & Navigation Bar -->
       <div
-        class="rounded-2xl border p-4 sm:p-5 flex items-center justify-between shadow-xs transition-colors"
+        class="ui-panel rounded-2xl border p-4 sm:p-5 flex items-center justify-between shadow-xs transition-colors"
         style="background-color: var(--bg-card); border-color: var(--border-subtle)"
       >
         <div class="flex items-center space-x-3">
@@ -648,7 +648,7 @@ const toast = useToast()
         <div class="flex items-center space-x-2">
           <button :disabled="actionBusy"
             @click="openAddProviderModal"
-            class="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-sm font-bold cursor-pointer transition-all hover:opacity-90 btn-primary-text"
+            class="ui-action ui-action--sm border hover:opacity-90 btn-primary-text"
             style="background-color: #2563eb; color: #ffffff"
             title="添加自定义供应商"
           >
@@ -739,7 +739,7 @@ const toast = useToast()
             <!-- Capsule Status Button -->
             <button :disabled="actionBusy || !canManage"
               @click="toggleProviderQuick(prov, $event)"
-              class="px-3 py-1 rounded-full text-sm font-semibold border transition-all cursor-pointer shadow-2xs"
+              class="ui-action ui-action--sm rounded-full border shadow-2xs"
               :style="
                 prov.enabled
                   ? {
@@ -768,12 +768,12 @@ const toast = useToast()
     <template v-else-if="currentView === 'detail' && selectedProvider">
       <!-- Detail Top Navigation Bar -->
       <div
-        class="rounded-2xl border p-4 flex items-center justify-between shadow-xs transition-colors"
+        class="ui-panel rounded-2xl border p-4 flex items-center justify-between shadow-xs transition-colors"
         style="background-color: var(--bg-card); border-color: var(--border-subtle)"
       >
         <button :disabled="actionBusy"
           @click="goBackToList"
-          class="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-sm font-bold cursor-pointer transition-all hover:bg-[var(--bg-card-subtle)]"
+          class="ui-action ui-action--sm border hover:bg-[var(--bg-card-subtle)]"
           style="
             background-color: var(--bg-card);
             border-color: var(--border-subtle);
@@ -802,7 +802,7 @@ const toast = useToast()
       <!-- SUB-VIEW A: 「配置」Tab (对齐截图 2) -->
       <div
         v-if="detailTab === 'config'"
-        class="space-y-4 rounded-2xl border p-5 shadow-xs transition-colors"
+        class="ui-panel space-y-4 rounded-2xl border p-5 shadow-xs transition-colors"
         style="background-color: var(--bg-card); border-color: var(--border-subtle)"
       >
         <!-- Section 1: 管理设置项列表 -->
@@ -1033,7 +1033,7 @@ const toast = useToast()
         </div>
 
         <!-- Connection test -->
-        <div class="rounded-xl border p-4 space-y-3" style="background-color: var(--bg-card-subtle); border-color: var(--border-subtle)">
+        <div class="ui-panel rounded-xl border p-4 space-y-3" style="background-color: var(--bg-card-subtle); border-color: var(--border-subtle)">
           <div>
             <div class="font-bold text-sm" style="color: var(--text-main)">供应商可用性测试</div>
             <div class="text-xs mt-1" style="color: var(--text-faint)">填写一个真实模型 ID，使用当前表单中的 Base URL、协议与临时 API Key 发起最小 PING 请求；测试不会保存表单。</div>
@@ -1045,7 +1045,7 @@ const toast = useToast()
               style="background-color: var(--bg-card); border-color: var(--border-subtle); color: var(--text-main)" />
             <datalist id="provider-known-models"><option v-for="model in selectedProvider.models || []" :key="model.id" :value="model.id" /></datalist>
             <button type="button" @click="runProviderTest" :disabled="actionBusy || testLoading || !providerTestModel.trim()"
-              class="px-4 py-2 rounded-xl border text-sm font-bold cursor-pointer disabled:opacity-50"
+              class="ui-action border"
               style="background-color: var(--bg-card); border-color: var(--border-medium); color: var(--text-main)">
               {{ testLoading ? '测试中...' : '测试可用性' }}
             </button>
@@ -1060,10 +1060,10 @@ const toast = useToast()
         <!-- Save actions -->
         <div class="pt-3 pb-16 flex flex-wrap justify-end gap-2">
           <button :disabled="actionBusy || !canManage" @click="saveProviderConfig"
-            class="px-5 py-2 rounded-xl border text-sm font-bold transition-all cursor-pointer shadow-xs"
+            class="ui-action border"
             style="background-color: var(--bg-card-subtle); border-color: var(--border-medium); color: var(--text-main)">保存供应商配置</button>
           <button :disabled="actionBusy || !canManage" @click="saveProviderAndOpenModels"
-            class="px-5 py-2 rounded-xl text-sm font-bold transition-all cursor-pointer shadow-xs btn-primary-text"
+            class="ui-action btn-primary-text"
             style="background-color: #2563eb; color: #ffffff">保存并获取模型</button>
         </div>
       </div>
@@ -1176,7 +1176,7 @@ const toast = useToast()
               <button :disabled="actionBusy || !canManage"
                 v-if="m.id !== cfg?.active_model_id || selectedProvider?.id !== cfg?.active_provider_id"
                 @click="activateModel(m)"
-                class="px-3 py-1 rounded-xl text-sm font-bold border transition-all cursor-pointer shadow-xs btn-primary-text"
+                class="ui-action ui-action--sm border btn-primary-text"
                 style="background-color: #2563eb; color: #ffffff"
                 title="一键设为主脑"
               >
@@ -1186,7 +1186,7 @@ const toast = useToast()
               <button
                 @click="runTestModel(m)"
                 :disabled="(testLoading && testingModelId === m.id) || actionBusy"
-                class="p-2 rounded-xl border text-sm cursor-pointer hover:bg-[var(--bg-card)] transition-colors"
+                class="ui-icon-button border text-sm hover:bg-[var(--bg-card)]"
                 style="
                   background-color: var(--bg-card-subtle);
                   border-color: var(--border-subtle);
@@ -1202,7 +1202,7 @@ const toast = useToast()
 
               <button :disabled="actionBusy"
                 @click="openEditModelModal(m)"
-                class="p-2 rounded-xl border text-sm cursor-pointer hover:bg-[var(--bg-card)] transition-colors"
+                class="ui-icon-button border text-sm hover:bg-[var(--bg-card)]"
                 style="
                   background-color: var(--bg-card-subtle);
                   border-color: var(--border-subtle);
@@ -1215,7 +1215,7 @@ const toast = useToast()
 
               <button :disabled="actionBusy || !canManage"
                 @click="deleteSingleModel(m.id)"
-                class="p-2 rounded-xl border text-sm cursor-pointer hover:bg-red-500/10 transition-colors text-red-400"
+                class="ui-icon-button ui-icon-button--danger border text-sm hover:bg-red-500/10 text-red-400"
                 style="border-color: var(--border-subtle)"
                 title="删除该模型"
               >
@@ -1236,7 +1236,7 @@ const toast = useToast()
         <!-- Diagnostic Response Box -->
         <div
           v-if="testResult"
-          class="rounded-2xl border p-4 transition-all shadow-xs text-sm"
+          class="ui-panel rounded-2xl border p-4 transition-all shadow-xs text-sm"
           :style="{
             backgroundColor: testResult.ok ? 'var(--color-up-bg)' : 'var(--color-down-bg)',
             borderColor: testResult.ok ? 'var(--color-up-border)' : 'var(--color-down-border)',
@@ -1280,7 +1280,7 @@ const toast = useToast()
             <!-- 获取 (带方块立方体图标的大圆角按钮) -->
             <button :disabled="actionBusy"
               @click="openFetchDialog"
-              class="flex items-center space-x-2 px-5 py-2.5 rounded-full font-bold text-sm cursor-pointer border transition-all hover:opacity-90 shadow-2xs"
+              class="ui-action rounded-full border hover:opacity-90 shadow-2xs"
               style="
                 background-color: var(--color-purple-bg);
                 border-color: var(--color-purple-border);
@@ -1294,7 +1294,7 @@ const toast = useToast()
             <!-- + 添加新模型 -->
             <button :disabled="actionBusy"
               @click="openAddModelModal"
-              class="flex items-center space-x-2 px-5 py-2.5 rounded-full font-bold text-sm cursor-pointer border transition-all hover:opacity-90 shadow-2xs"
+              class="ui-action rounded-full border hover:opacity-90 shadow-2xs"
               style="
                 background-color: var(--bg-card-subtle);
                 border-color: var(--border-subtle);
@@ -1308,7 +1308,7 @@ const toast = useToast()
             <!-- 清空删除图标 (带红晕气泡) -->
             <button :disabled="actionBusy || !canManage"
               @click="clearCurrentProviderModels"
-              class="p-2.5 rounded-full border cursor-pointer hover:bg-red-500/10 transition-colors text-red-400"
+              class="ui-action p-2.5 rounded-full border hover:bg-red-500/10 text-red-400"
               style="border-color: var(--color-down-border); background-color: var(--color-down-bg)"
               title="清空该供应商所有模型"
             >
@@ -1325,7 +1325,7 @@ const toast = useToast()
       >
         <button :disabled="actionBusy"
           @click="detailTab = 'config'"
-          class="flex items-center space-x-2 px-6 py-2.5 rounded-xl font-bold text-sm cursor-pointer transition-all border"
+          class="ui-action border"
           :style="
             detailTab === 'config'
               ? {
@@ -1347,7 +1347,7 @@ const toast = useToast()
 
         <button :disabled="actionBusy"
           @click="detailTab = 'models'"
-          class="flex items-center space-x-2 px-6 py-2.5 rounded-xl font-bold text-sm cursor-pointer transition-all border"
+          class="ui-action border"
           :style="
             detailTab === 'models'
               ? {
@@ -1422,7 +1422,7 @@ const toast = useToast()
             <span v-if="selectedProvider?.has_key && !customFetchKey" class="text-xs text-emerald-400 font-bold">✓ 将使用已保存凭证</span>
             <span v-else class="text-xs" style="color: var(--text-faint)">不会在结果、审计记录或页面中回显 API Key</span>
             <button @click="executeRemoteFetch" :disabled="fetchingRemote || actionBusy || !customFetchUrl.trim()"
-              class="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-sm font-bold transition-all cursor-pointer shadow-xs btn-primary-text disabled:opacity-50"
+              class="ui-action btn-primary-text"
               style="background-color: #2563eb; color: #ffffff">
               <RefreshCw class="w-3.5 h-3.5" :class="fetchingRemote ? 'animate-spin' : ''" />
               <span>{{ fetchingRemote ? '正在获取...' : '获取模型列表' }}</span>
@@ -1497,15 +1497,15 @@ const toast = useToast()
 
             <div class="flex flex-wrap items-center justify-end gap-2 shrink-0">
               <button @click="runRemoteModelTest(rm)" :disabled="actionBusy || remoteTestingModelId === rm.id"
-                class="px-2.5 py-1 rounded-lg text-sm font-medium border cursor-pointer disabled:opacity-50"
+                class="ui-action ui-action--sm border"
                 style="background-color: var(--bg-card); border-color: var(--border-subtle); color: var(--text-main)">
                 {{ remoteTestingModelId === rm.id ? '测试中...' : '测试' }}
               </button>
               <button :disabled="actionBusy || !canManage || !savedProviderId()" @click="importRemoteModel(rm, false)"
-                class="px-2.5 py-1 rounded-lg text-sm font-medium border cursor-pointer hover:bg-[var(--bg-card)] transition-colors disabled:opacity-50"
+                class="ui-action ui-action--sm border hover:bg-[var(--bg-card)]"
                 style="background-color: var(--bg-card); border-color: var(--border-subtle); color: var(--text-main)">+ 添加</button>
               <button :disabled="actionBusy || !canManage || !savedProviderId()" @click="importRemoteModel(rm, true)"
-                class="px-3 py-1 rounded-lg text-sm font-bold transition-all cursor-pointer shadow-xs btn-primary-text disabled:opacity-50"
+                class="ui-action ui-action--sm btn-primary-text"
                 style="background-color: #2563eb; color: #ffffff">添加并启用</button>
             </div>
           </div>
@@ -1524,7 +1524,7 @@ const toast = useToast()
             <button :disabled="actionBusy || !canManage || !savedProviderId()"
               v-if="filteredRemoteModels.length"
               @click="importAllFilteredRemoteModels"
-              class="px-3 py-1.5 rounded-xl border text-sm font-bold cursor-pointer transition-all hover:opacity-90"
+              class="ui-action ui-action--sm border hover:opacity-90"
               style="
                 background-color: var(--color-purple-bg);
                 border-color: var(--color-purple-border);
@@ -1535,7 +1535,7 @@ const toast = useToast()
             </button>
             <button :disabled="actionBusy"
               @click="fetchModalVisible = false"
-              class="px-4 py-1.5 rounded-xl border text-sm cursor-pointer"
+              class="ui-action ui-action--sm border"
               style="
                 background-color: var(--bg-card-subtle);
                 border-color: var(--border-subtle);
@@ -1634,7 +1634,7 @@ const toast = useToast()
                 type="button"
                 @click="toggleCapability('chat')"
                 :aria-pressed="modelForm.capabilities.includes('chat')"
-                class="px-2.5 py-1 rounded-lg border text-sm font-medium cursor-pointer transition-all"
+                class="ui-action ui-action--sm border"
                 :style="
                   modelForm.capabilities.includes('chat')
                     ? {
@@ -1655,7 +1655,7 @@ const toast = useToast()
                 type="button"
                 @click="toggleCapability('vision')"
                 :aria-pressed="modelForm.capabilities.includes('vision')"
-                class="px-2.5 py-1 rounded-lg border text-sm font-medium cursor-pointer transition-all"
+                class="ui-action ui-action--sm border"
                 :style="
                   modelForm.capabilities.includes('vision')
                     ? {
@@ -1676,7 +1676,7 @@ const toast = useToast()
                 type="button"
                 @click="toggleCapability('tools')"
                 :aria-pressed="modelForm.capabilities.includes('tools')"
-                class="px-2.5 py-1 rounded-lg border text-sm font-medium cursor-pointer transition-all"
+                class="ui-action ui-action--sm border"
                 :style="
                   modelForm.capabilities.includes('tools')
                     ? {
@@ -1697,7 +1697,7 @@ const toast = useToast()
                 type="button"
                 @click="toggleCapability('reasoning')"
                 :aria-pressed="modelForm.capabilities.includes('reasoning')"
-                class="px-2.5 py-1 rounded-lg border text-sm font-medium cursor-pointer transition-all"
+                class="ui-action ui-action--sm border"
                 :style="
                   modelForm.capabilities.includes('reasoning')
                     ? {
@@ -1771,7 +1771,7 @@ const toast = useToast()
         >
           <button :disabled="actionBusy"
             @click="modelModalVisible = false"
-            class="px-4 py-1.5 rounded-xl border text-sm cursor-pointer"
+            class="ui-action ui-action--sm border"
             style="
               background-color: var(--bg-card-subtle);
               border-color: var(--border-subtle);
@@ -1782,7 +1782,7 @@ const toast = useToast()
           </button>
           <button :disabled="actionBusy || !canManage"
             @click="saveModelForm"
-            class="px-5 py-1.5 rounded-xl text-sm font-bold transition-all cursor-pointer shadow-xs btn-primary-text"
+            class="ui-action ui-action--sm btn-primary-text"
             style="background-color: #2563eb; color: #ffffff"
           >
             保存模型

@@ -90,7 +90,7 @@ async function copyPrompt() {
       >
         <button
           @click="activeTab = 'reasoning'"
-          class="flex items-center space-x-1.5 px-3 py-2 border-b-2 font-bold transition-all cursor-pointer"
+          class="ui-tab-control border-b-2"
           :style="
             activeTab === 'reasoning'
               ? { borderColor: 'var(--text-main)', color: 'var(--text-main)' }
@@ -102,7 +102,7 @@ async function copyPrompt() {
         </button>
         <button
           @click="activeTab = 'prompt'"
-          class="flex items-center space-x-1.5 px-3 py-2 border-b-2 font-bold transition-all cursor-pointer"
+          class="ui-tab-control border-b-2"
           :style="
             activeTab === 'prompt'
               ? { borderColor: 'var(--text-main)', color: 'var(--text-main)' }
@@ -287,7 +287,7 @@ async function copyPrompt() {
             <button
               @click="copyPrompt"
               :disabled="!fullPromptText"
-              class="px-2.5 py-1 rounded border text-xs font-mono cursor-pointer transition-colors"
+              class="ui-action ui-action--sm border"
               style="
                 background-color: var(--bg-card);
                 border-color: var(--border-subtle);

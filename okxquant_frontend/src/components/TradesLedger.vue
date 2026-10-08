@@ -271,7 +271,7 @@ function horizonLabel(v: unknown, t?: any): string {
       >
         <button
           @click="filter = 'all'"
-          class="px-3 py-1.5 rounded-md cursor-pointer transition font-medium"
+          class="ui-tab-control"
           :style="
             filter === 'all'
               ? {
@@ -288,7 +288,7 @@ function horizonLabel(v: unknown, t?: any): string {
         </button>
         <button
           @click="filter = 'active'"
-          class="px-3 py-1.5 rounded-md cursor-pointer transition font-medium"
+          class="ui-tab-control"
           :style="
             filter === 'active'
               ? {
@@ -305,7 +305,7 @@ function horizonLabel(v: unknown, t?: any): string {
         </button>
         <button
           @click="filter = 'closed'"
-          class="px-3 py-1.5 rounded-md cursor-pointer transition font-medium"
+          class="ui-tab-control"
           :style="
             filter === 'closed'
               ? {
@@ -499,7 +499,7 @@ function horizonLabel(v: unknown, t?: any): string {
         <div v-if="serverTotal !== null && serverTotal > pageSize" class="flex items-center gap-2">
           <button
             type="button"
-            class="px-2 py-0.5 rounded border transition-colors text-xs"
+            class="ui-action ui-action--sm border"
             style="border-color: var(--border-subtle); background: var(--bg-card)"
             :disabled="offset === 0 || loadingTrades"
             @click="fetchPage(offset - pageSize)"
@@ -509,7 +509,7 @@ function horizonLabel(v: unknown, t?: any): string {
           <span class="num-tabular">{{ Math.floor(offset / pageSize) + 1 }} / {{ Math.ceil(serverTotal / pageSize) }}</span>
           <button
             type="button"
-            class="px-2 py-0.5 rounded border transition-colors text-xs"
+            class="ui-action ui-action--sm border"
             style="border-color: var(--border-subtle); background: var(--bg-card)"
             :disabled="offset + pageSize >= serverTotal || loadingTrades"
             @click="fetchPage(offset + pageSize)"

@@ -214,7 +214,7 @@ const toast = useToast()
       <div class="flex flex-wrap gap-1">
         <button :disabled="actionBusy"
           @click="switchTab('settings')"
-          class="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-sm font-sans font-bold cursor-pointer transition-colors"
+          class="ui-action ui-action--sm"
           :style="
             activeTab === 'settings'
               ? { backgroundColor: 'var(--text-main)', color: 'var(--bg-card)' }
@@ -226,7 +226,7 @@ const toast = useToast()
         </button>
         <button :disabled="actionBusy"
           @click="switchTab('evolution_system')"
-          class="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-sm font-sans font-bold cursor-pointer transition-colors"
+          class="ui-action ui-action--sm"
           :style="
             activeTab === 'evolution_system'
               ? { backgroundColor: 'var(--text-main)', color: 'var(--bg-card)' }
@@ -238,7 +238,7 @@ const toast = useToast()
         </button>
         <button :disabled="actionBusy"
           @click="switchTab('evolution_user')"
-          class="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-sm font-sans font-bold cursor-pointer transition-colors"
+          class="ui-action ui-action--sm"
           :style="
             activeTab === 'evolution_user'
               ? { backgroundColor: 'var(--text-main)', color: 'var(--bg-card)' }
@@ -255,7 +255,7 @@ const toast = useToast()
           v-if="auth.isSuperadmin"
           @click="triggerEvolutionNow"
           :disabled="(busy !== '') || actionBusy || !canManage"
-          class="flex items-center space-x-1 px-3 py-1.5 rounded-lg text-sm font-sans font-bold cursor-pointer disabled:opacity-40 transition-all shadow-xs"
+          class="ui-action ui-action--sm"
           style="
             background-color: var(--color-brand-bg);
             border-color: var(--color-brand-border);
@@ -303,7 +303,7 @@ const toast = useToast()
             v-if="auth.isSuperadmin"
             @click="savePipelineModules"
             :disabled="(busy !== '') || actionBusy || !canManage"
-            class="flex items-center space-x-1 px-4 py-2 rounded-lg text-sm font-sans font-bold cursor-pointer disabled:opacity-40 transition-all shadow-xs"
+            class="ui-action"
             style="background-color: var(--text-main); color: var(--bg-card)"
           >
             <Save class="w-3.5 h-3.5" />
@@ -316,7 +316,7 @@ const toast = useToast()
           <div
             v-for="(mod, mIdx) in workingModules"
             :key="mod.id || mIdx"
-            class="border rounded-xl p-4 transition-all"
+            class="ui-panel border rounded-xl p-4 transition-all"
             style="background-color: var(--bg-card-subtle); border-color: var(--border-subtle)"
           >
             <div class="flex items-center justify-between mb-2">

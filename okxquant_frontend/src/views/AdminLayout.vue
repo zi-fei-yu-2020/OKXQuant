@@ -121,7 +121,7 @@ function logout() {
         <!-- Subroute tabs bar for multi-item sections -->
         <nav
           v-if="sectionSiblings.length > 1"
-          class="flex items-center gap-1 border-b pb-3 mb-4 text-xs font-medium"
+          class="flex flex-wrap items-center gap-1.5 border-b pb-3 mb-4 text-xs font-medium"
           style="border-color: var(--border-subtle)"
           aria-label="分类子导航"
         >

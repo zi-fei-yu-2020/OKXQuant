@@ -529,7 +529,7 @@ const { confirm, prompt } = useDialogs()
       <div class="flex items-center space-x-1.5 shrink-0">
         <button :disabled="actionBusy"
           @click="showVarRibbon = !showVarRibbon"
-          class="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg border text-sm font-sans transition-all cursor-pointer shadow-xs"
+          class="ui-action ui-action--sm border"
           :style="
             showVarRibbon
               ? {
@@ -551,7 +551,7 @@ const { confirm, prompt } = useDialogs()
         </button>
         <button :disabled="actionBusy"
           @click="variableGuideVisible = true"
-          class="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg border text-sm font-sans transition-all cursor-pointer shadow-xs"
+          class="ui-action ui-action--sm border"
           style="
             background-color: var(--bg-card-subtle);
             border-color: var(--border-subtle);
@@ -565,7 +565,7 @@ const { confirm, prompt } = useDialogs()
         <button :disabled="actionBusy"
           v-if="auth.isSuperadmin"
           @click="importVisible = true"
-          class="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg border text-sm font-sans transition-all cursor-pointer shadow-xs"
+          class="ui-action ui-action--sm border"
           style="
             background-color: var(--bg-card-subtle);
             border-color: var(--border-subtle);
@@ -578,7 +578,7 @@ const { confirm, prompt } = useDialogs()
         </button>
         <button :disabled="actionBusy"
           @click="exportProfile"
-          class="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg border text-sm font-sans transition-all cursor-pointer shadow-xs"
+          class="ui-action ui-action--sm border"
           style="
             background-color: var(--bg-card-subtle);
             border-color: var(--border-subtle);
@@ -609,7 +609,7 @@ const { confirm, prompt } = useDialogs()
         v-for="v in templateVariables"
         :key="v.key"
         @click="insertVarIntoActiveModule(v.key)"
-        class="flex items-center space-x-1 px-2 py-1 rounded-lg border text-xs transition-all cursor-pointer shadow-xs hover:border-[var(--color-brand)]"
+        class="ui-action ui-action--sm border hover:border-[var(--color-brand)]"
         style="
           background-color: var(--bg-card-subtle);
           border-color: var(--border-subtle);
@@ -667,7 +667,7 @@ const { confirm, prompt } = useDialogs()
           <button :disabled="actionBusy"
             v-if="auth.isSuperadmin"
             @click="createVisible = true"
-            class="flex items-center space-x-1 px-2 py-1 rounded-lg text-xs font-bold cursor-pointer shadow-xs transition-colors"
+            class="ui-action ui-action--sm"
             style="background-color: var(--text-main); color: var(--bg-card)"
           >
             <Plus class="w-3 h-3" />
@@ -738,7 +738,7 @@ const { confirm, prompt } = useDialogs()
               v-for="p in pipelines"
               :key="p.id"
               @click="switchPipeline(p.id)"
-              class="px-3.5 py-1.5 text-sm font-bold rounded-lg cursor-pointer transition-all"
+              class="ui-action ui-action--sm"
               :style="
                 activePipeline === p.id
                   ? { backgroundColor: 'var(--text-main)', color: 'var(--bg-card)' }
@@ -759,7 +759,8 @@ const { confirm, prompt } = useDialogs()
             v-for="(m, idx) in workingModules"
             :key="m.id"
             @click="activeEditingIdx = idx"
-            class="border rounded-xl p-3.5 transition-all shadow-xs"
+            data-prompt-module
+            class="prompt-module border rounded-xl p-3.5 transition-all shadow-xs"
             :style="{
               backgroundColor: m.enabled ? 'var(--bg-card-subtle)' : 'var(--bg-card)',
               borderColor:
@@ -768,9 +769,9 @@ const { confirm, prompt } = useDialogs()
             }"
             :class="activeEditingIdx === idx ? 'ring-1 ring-blue-500/30' : ''"
           >
-            <div class="flex items-center justify-between mb-2 gap-2">
+            <div class="prompt-module__header mb-2" data-module-header>
               <!-- Title & Ordering -->
-              <div class="flex items-center space-x-2 min-w-0 flex-1">
+              <div class="prompt-module__title">
                 <span
                   class="w-5 h-5 rounded font-bold text-xs flex items-center justify-center shrink-0 border"
                   style="
@@ -784,7 +785,7 @@ const { confirm, prompt } = useDialogs()
                 <button
                   @click.stop="moveModule(idx, -1)"
                   :disabled="(idx === 0) || actionBusy"
-                  class="p-1 rounded disabled:opacity-20 cursor-pointer transition-colors"
+                  class="ui-icon-button disabled:opacity-20"
                   style="color: var(--text-muted)"
                   title="上移模块"
                 >
@@ -793,7 +794,7 @@ const { confirm, prompt } = useDialogs()
                 <button
                   @click.stop="moveModule(idx, 1)"
                   :disabled="(idx === workingModules.length - 1) || actionBusy"
-                  class="p-1 rounded disabled:opacity-20 cursor-pointer transition-colors"
+                  class="ui-icon-button disabled:opacity-20"
                   style="color: var(--text-muted)"
                   title="下移模块"
                 >
@@ -809,10 +810,10 @@ const { confirm, prompt } = useDialogs()
               </div>
 
               <!-- Controls: Copy, Delete, Toggle -->
-              <div class="flex items-center space-x-1.5 shrink-0">
+              <div class="prompt-module__actions">
                 <button :disabled="actionBusy"
                   @click.stop="duplicateModule(idx)"
-                  class="p-1.5 rounded-lg cursor-pointer transition-colors"
+                  class="ui-icon-button"
                   style="color: var(--text-muted)"
                   title="复制模块"
                 >
@@ -820,15 +821,16 @@ const { confirm, prompt } = useDialogs()
                 </button>
                 <button :disabled="actionBusy"
                   @click.stop="removeModule(idx)"
-                  class="p-1.5 rounded-lg text-rose-400 hover:opacity-80 cursor-pointer transition-opacity"
+                  class="ui-icon-button ui-icon-button--danger text-rose-400 hover:opacity-80 transition-opacity"
                   title="删除模块"
                 >
                   <Trash2 class="w-3.5 h-3.5" />
                 </button>
                 <button :disabled="actionBusy"
                   @click.stop="toggleModule(m)"
-                  class="cursor-pointer transition-colors p-1"
-                  :class="m.enabled ? 'text-emerald-500' : 'text-[var(--text-muted)]'"
+                  class="ui-icon-button"
+                  :aria-pressed="m.enabled"
+                  :class="m.enabled ? 'ui-icon-button--active' : 'text-[var(--text-muted)]'"
                   :title="m.enabled ? '已启用该模块 (点击禁用)' : '已禁用该模块 (点击启用)'"
                 >
                   <ToggleRight v-if="m.enabled" class="w-5 h-5" />
@@ -856,7 +858,7 @@ const { confirm, prompt } = useDialogs()
           <!-- Add Module Button -->
           <button :disabled="actionBusy"
             @click="addModule"
-            class="w-full py-2.5 rounded-xl border border-dashed text-sm cursor-pointer flex items-center justify-center space-x-1.5 transition-all shadow-xs"
+            class="ui-action w-full border border-dashed"
             style="
               background-color: var(--bg-card-subtle);
               border-color: var(--border-medium);
@@ -877,7 +879,7 @@ const { confirm, prompt } = useDialogs()
             <button
               @click="saveProfile"
               :disabled="(!dirty || !auth.isSuperadmin) || actionBusy || !canManage"
-              class="btn-primary-text flex items-center space-x-1.5 px-4 py-2 rounded-lg font-bold transition-all shadow-xs"
+              class="ui-action btn-primary-text"
               :class="
                 dirty
                   ? 'cursor-pointer hover:bg-blue-600 active:scale-95'
@@ -891,7 +893,7 @@ const { confirm, prompt } = useDialogs()
             <button :disabled="actionBusy || !canManage"
               v-if="selectedProfileId !== lib.active_profile_id && auth.isSuperadmin"
               @click="activateProfile"
-              class="btn-primary-text flex items-center space-x-1.5 px-3.5 py-2 rounded-lg font-bold cursor-pointer hover:bg-emerald-600 transition-all shadow-xs"
+              class="ui-action btn-primary-text hover:bg-emerald-600"
               style="background-color: #067647; color: #ffffff !important"
             >
               <CheckCircle2 class="w-4 h-4" style="color: #ffffff" />
@@ -903,7 +905,7 @@ const { confirm, prompt } = useDialogs()
             <button :disabled="actionBusy || !canManage"
               v-if="auth.isSuperadmin"
               @click="duplicateProfile"
-              class="flex items-center space-x-1 px-3 py-2 rounded-lg border text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
+              class="ui-action border"
               style="
                 background-color: var(--bg-card-subtle);
                 border-color: var(--border-medium);
@@ -915,7 +917,7 @@ const { confirm, prompt } = useDialogs()
             </button>
             <button :disabled="actionBusy"
               @click="showHistory"
-              class="flex items-center space-x-1 px-3 py-2 rounded-lg border text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
+              class="ui-action border"
               style="
                 background-color: var(--bg-card-subtle);
                 border-color: var(--border-medium);
@@ -928,7 +930,7 @@ const { confirm, prompt } = useDialogs()
             <button :disabled="actionBusy || !canManage"
               v-if="selectedProfileId !== lib.active_profile_id && auth.isSuperadmin"
               @click="deleteProfile"
-              class="flex items-center space-x-1 px-3 py-2 rounded-lg border text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
+              class="ui-action border"
               style="
                 background-color: var(--color-down-bg);
                 border-color: var(--color-down-border);
@@ -968,7 +970,7 @@ const { confirm, prompt } = useDialogs()
             >
               <button :disabled="actionBusy"
                 @click="previewMode = 'rendered'"
-                class="px-2 py-0.5 rounded text-xs font-bold cursor-pointer transition-all"
+                class="ui-action ui-action--sm"
                 :style="
                   previewMode === 'rendered'
                     ? { backgroundColor: 'var(--text-main)', color: 'var(--bg-card)' }
@@ -979,7 +981,7 @@ const { confirm, prompt } = useDialogs()
               </button>
               <button :disabled="actionBusy"
                 @click="previewMode = 'template'"
-                class="px-2 py-0.5 rounded text-xs font-bold cursor-pointer transition-all"
+                class="ui-action ui-action--sm"
                 :style="
                   previewMode === 'template'
                     ? { backgroundColor: 'var(--text-main)', color: 'var(--bg-card)' }
@@ -991,7 +993,7 @@ const { confirm, prompt } = useDialogs()
             </div>
             <button :disabled="actionBusy"
               @click="copyPreview"
-              class="px-2 py-1 rounded-lg border text-xs font-sans cursor-pointer transition-all shadow-xs"
+              class="ui-action ui-action--sm border"
               style="
                 background-color: var(--bg-card-subtle);
                 border-color: var(--border-medium);
@@ -1107,7 +1109,7 @@ const { confirm, prompt } = useDialogs()
                   insertVarIntoActiveModule(v.key)
                   variableGuideVisible = false
                  }"
-                class="btn-primary-text px-2.5 py-1 rounded-lg font-bold text-xs cursor-pointer shadow-xs hover:bg-blue-600 transition-colors"
+                class="ui-action ui-action--sm btn-primary-text hover:bg-blue-600"
                 style="background-color: #2563eb; color: #ffffff !important"
               >
                 <span style="color: #ffffff">插入到当前模块</span>
@@ -1243,7 +1245,7 @@ const { confirm, prompt } = useDialogs()
 
           <button :disabled="actionBusy || !canManage"
             @click="submitImport"
-            class="px-5 py-2 rounded-xl font-bold text-sm cursor-pointer transition-all shadow-xs"
+            class="ui-action"
             style="background-color: var(--text-main); color: var(--bg-card)"
           >
             确认导入并载入方案
@@ -1304,7 +1306,7 @@ const { confirm, prompt } = useDialogs()
           <button :disabled="actionBusy || !canManage"
             v-if="auth.isSuperadmin"
             @click="rollback(h.id || h.revision_id)"
-            class="flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-xs cursor-pointer transition-all shadow-xs"
+            class="ui-action ui-action--sm border"
             style="
               background-color: var(--bg-card-subtle);
               border-color: var(--border-medium);
@@ -1319,3 +1321,33 @@ const { confirm, prompt } = useDialogs()
     >
   </div>
 </template>
+
+
+<style scoped>
+.prompt-module__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.prompt-module__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.prompt-module__title input { flex: 1 1 120px; max-width: 100%; }
+.prompt-module__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  margin-left: auto;
+  max-width: 100%;
+}
+</style>

@@ -379,12 +379,7 @@ const quickNav = [
         <button
           @click="loadRuntime"
           :disabled="loading"
-          class="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border text-sm font-sans font-bold transition-all cursor-pointer shadow-xs disabled:opacity-50"
-          style="
-            background-color: var(--bg-card-subtle);
-            border-color: var(--border-subtle);
-            color: var(--text-main);
-          "
+          class="ui-button ui-button--secondary ui-button--sm"
         >
           <RefreshCw class="w-3.5 h-3.5" :class="loading ? 'animate-spin' : ''" />
           <span>刷新状态</span>
@@ -483,11 +478,10 @@ const quickNav = [
             {{ runtime.llm_runtime?.model || runtime.llm_runtime?.active_model || '未选择模型' }}
           </div>
           <div
-            class="text-xs font-sans mt-1 flex items-center space-x-1.5"
+            class="runtime-metric-meta text-xs font-sans mt-1"
             style="color: var(--text-faint)"
           >
             <span>推理思考: {{ runtime.llm_runtime?.active_reasoning_effort || 'HIGH' }}</span>
-            <span>·</span>
             <span class="text-indigo-400 group-hover:underline">配置通道 →</span>
           </div>
         </AppCard>
@@ -520,7 +514,7 @@ const quickNav = [
             }}
           </div>
           <div
-            class="text-xs font-sans mt-1 flex items-center space-x-1"
+            class="runtime-metric-meta text-xs font-sans mt-1"
             style="color: var(--text-faint)"
           >
             <span
@@ -528,7 +522,6 @@ const quickNav = [
             >
               ● {{ connection.configured ? 'Key 已配置' : connection.status === 'unbound' ? '当前用途未绑定' : '尚未配置凭证' }}
             </span>
-            <span>·</span>
             <span class="text-indigo-400 group-hover:underline">账户管理 →</span>
           </div>
         </AppCard>
@@ -1110,4 +1103,10 @@ const quickNav = [
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+</style>
+
+
+<style scoped>
+.runtime-metric-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
+.runtime-metric-meta > span { white-space: nowrap; }
 </style>

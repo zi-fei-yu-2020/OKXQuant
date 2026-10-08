@@ -273,7 +273,7 @@ const { prompt } = useDialogs()
           </div>
           <button :disabled="actionBusy"
             @click="load"
-            class="flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-xs font-sans cursor-pointer transition-all shadow-xs"
+            class="ui-action ui-action--sm border"
             style="
               background-color: var(--bg-card);
               border-color: var(--border-medium);
@@ -329,7 +329,7 @@ const { prompt } = useDialogs()
                   <button :disabled="actionBusy"
                     v-if="d.status === 'dead'"
                     @click="replayDelivery(d.id)"
-                    class="flex items-center space-x-1 ml-auto px-2 py-1 rounded-md border text-xs font-sans cursor-pointer transition-colors"
+                    class="ui-action ui-action--sm ml-auto border"
                     style="
                       background-color: var(--color-warn-bg);
                       border-color: var(--color-warn-border);

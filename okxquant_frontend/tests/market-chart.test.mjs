@@ -62,7 +62,7 @@ test('only one chart dependency is introduced and it stays lazy-loaded',()=>{
  const component=readFileSync(new URL('../src/components/MarketCandles.vue',import.meta.url),'utf8')
  assert.ok(component.includes("import('klinecharts')"))
  const view=readFileSync(new URL('../src/views/DashboardView.vue',import.meta.url),'utf8')
- assert.ok(view.includes('<TopHudRibbon /><MarketCandles'))
+ assert.match(view, /<TopHudRibbon\s*\/>\s*<MarketCandles\b/)
  assert.ok(view.includes('<TacticalDesk />'))
 })
 

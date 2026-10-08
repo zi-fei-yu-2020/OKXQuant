@@ -281,7 +281,7 @@ const { confirm } = useDialogs()
         <button
           @click="runSandbox"
           :disabled="(testing) || actionBusy || !canManage"
-          class="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg border font-bold transition-all cursor-pointer shadow-xs disabled:opacity-50"
+          class="ui-action ui-action--sm border"
           style="
             background-color: var(--bg-card-subtle);
             border-color: var(--border-medium);
@@ -294,7 +294,7 @@ const { confirm } = useDialogs()
         <button :disabled="actionBusy"
           v-if="auth.isSuperadmin"
           @click="openCreateModal"
-          class="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg font-bold transition-all cursor-pointer shadow-xs"
+          class="ui-action ui-action--sm"
           style="background-color: var(--text-main); color: var(--bg-card)"
         >
           <Plus class="w-3.5 h-3.5" />
@@ -323,7 +323,7 @@ const { confirm } = useDialogs()
       <div
         v-for="(p, idx) in plugins"
         :key="p.filename"
-        class="border rounded-xl p-4 sm:p-5 transition-all shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4"
+        class="ui-panel border rounded-xl p-4 sm:p-5 transition-all shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4"
         :style="{
           backgroundColor: 'var(--bg-card)',
           borderColor: p.enabled ? 'var(--border-medium)' : 'var(--border-subtle)',
@@ -336,7 +336,7 @@ const { confirm } = useDialogs()
             <button
               @click="movePlugin(idx, -1)"
               :disabled="(idx === 0) || actionBusy || !canManage"
-              class="p-1 rounded disabled:opacity-20 cursor-pointer transition-colors"
+              class="ui-icon-button disabled:opacity-20"
               style="color: var(--text-muted)"
               title="提高执行优先级"
             >
@@ -345,7 +345,7 @@ const { confirm } = useDialogs()
             <button
               @click="movePlugin(idx, 1)"
               :disabled="(idx === plugins.length - 1) || actionBusy || !canManage"
-              class="p-1 rounded disabled:opacity-20 cursor-pointer transition-colors"
+              class="ui-icon-button disabled:opacity-20"
               style="color: var(--text-muted)"
               title="降低执行优先级"
             >
@@ -429,7 +429,7 @@ const { confirm } = useDialogs()
         >
           <button :disabled="actionBusy"
             @click="openEditor(p)"
-            class="flex items-center space-x-1 px-3 py-1.5 rounded-lg border font-bold cursor-pointer transition-all shadow-xs"
+            class="ui-action ui-action--sm border"
             style="
               background-color: var(--bg-card-subtle);
               border-color: var(--border-medium);
@@ -444,7 +444,7 @@ const { confirm } = useDialogs()
           <button :disabled="actionBusy || !canManage"
             v-if="auth.isSuperadmin && !p.filename.startsWith('0')"
             @click="deletePlugin(p)"
-            class="p-2 rounded-lg hover:bg-rose-500/10 text-rose-500 cursor-pointer transition-colors"
+            class="ui-icon-button ui-icon-button--danger hover:bg-rose-500/10 text-rose-500"
             title="删除插件"
           >
             <Trash2 class="w-4 h-4" />
@@ -452,8 +452,9 @@ const { confirm } = useDialogs()
 
           <button :disabled="actionBusy || !canManage"
             @click="togglePlugin(p)"
-            class="cursor-pointer transition-colors p-1"
-            :class="p.enabled ? 'text-emerald-500' : 'text-[var(--text-muted)]'"
+            class="ui-icon-button"
+            :aria-pressed="p.enabled"
+                  :class="p.enabled ? 'ui-icon-button--active' : 'text-[var(--text-muted)]'"
             :title="p.enabled ? '已启用 (点击停用)' : '已停用 (点击启用)'"
           >
             <ToggleRight v-if="p.enabled" class="w-6 h-6" />
@@ -516,7 +517,7 @@ const { confirm } = useDialogs()
           <div class="flex items-center space-x-1.5 shrink-0">
             <button :disabled="actionBusy"
               @click="exportPluginCode(editingFilename, editingCode)"
-              class="flex items-center space-x-1 px-2 sm:px-2.5 py-1 rounded-lg border text-xs sm:text-sm cursor-pointer shadow-xs transition-colors"
+              class="ui-action ui-action--sm sm:px-2.5 border sm:text-sm"
               style="
                 background-color: var(--bg-card-subtle);
                 border-color: var(--border-medium);
@@ -529,7 +530,7 @@ const { confirm } = useDialogs()
             </button>
             <button :disabled="actionBusy"
               @click="editorVisible = false"
-              class="p-1 rounded-lg hover:bg-zinc-500/10 cursor-pointer transition-colors"
+              class="ui-icon-button hover:bg-zinc-500/10"
               style="color: var(--text-muted)"
             >
               <X class="w-4 h-4" />
@@ -580,7 +581,7 @@ const { confirm } = useDialogs()
           <div class="flex items-center justify-end space-x-2 shrink-0">
             <button :disabled="actionBusy"
               @click="editorVisible = false"
-              class="px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-xl border text-sm cursor-pointer shadow-xs transition-colors"
+              class="ui-action ui-action--sm sm:px-4 sm:py-2 border"
               style="
                 background-color: var(--bg-card-subtle);
                 border-color: var(--border-medium);
@@ -592,7 +593,7 @@ const { confirm } = useDialogs()
             <button
               @click="saveCode"
               :disabled="(savingCode) || actionBusy || !canManage"
-              class="flex items-center space-x-1.5 px-4 sm:px-5 py-1.5 sm:py-2 rounded-xl font-bold text-sm cursor-pointer transition-all shadow-xs disabled:opacity-50"
+              class="ui-action ui-action--sm sm:px-5 sm:py-2"
               style="background-color: var(--text-main); color: var(--bg-card)"
             >
               <Save class="w-4 h-4" />
@@ -646,7 +647,7 @@ const { confirm } = useDialogs()
           </div>
           <button :disabled="actionBusy"
             @click="createModalVisible = false"
-            class="cursor-pointer p-1"
+            class="ui-icon-button"
             style="color: var(--text-muted)"
           >
             <X class="w-4 h-4" />
@@ -713,7 +714,7 @@ const { confirm } = useDialogs()
         >
           <button :disabled="actionBusy"
             @click="createModalVisible = false"
-            class="px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-xl border text-sm cursor-pointer shadow-xs"
+            class="ui-action ui-action--sm sm:px-4 sm:py-2 border"
             style="
               background-color: var(--bg-card-subtle);
               border-color: var(--border-medium);
@@ -724,7 +725,7 @@ const { confirm } = useDialogs()
           </button>
           <button :disabled="actionBusy || !canManage"
             @click="submitCreate"
-            class="px-4 sm:px-5 py-1.5 sm:py-2 rounded-xl font-bold text-sm cursor-pointer transition-all shadow-xs"
+            class="ui-action ui-action--sm sm:px-5 sm:py-2"
             style="background-color: var(--text-main); color: var(--bg-card)"
           >
             创建并加入管线

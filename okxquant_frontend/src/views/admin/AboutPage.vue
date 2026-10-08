@@ -103,8 +103,7 @@ onMounted(() => {
           <a
             href="https://github.com/zi-fei-yu-2020/OKXQuant"
             target="_blank"
-            class="inline-flex items-center space-x-1.5 mt-4 px-3 py-1.5 rounded-lg border text-sm font-sans font-bold transition-all cursor-pointer shadow-xs"
-            style="background-color: var(--text-main); color: var(--bg-card)"
+            class="ui-button ui-button--secondary ui-button--sm mt-4 inline-flex"
           >
             <GitBranch class="w-3.5 h-3.5" />
             <span>GitHub 仓库</span>
@@ -166,12 +165,7 @@ onMounted(() => {
           <button
             @click="checkUpdate"
             :disabled="updateChecking"
-            class="flex items-center space-x-1 px-3 py-1.5 rounded-lg border text-sm font-sans font-bold transition-all cursor-pointer shadow-xs"
-            style="
-              background-color: var(--bg-card-subtle);
-              border-color: var(--border-medium);
-              color: var(--text-main);
-            "
+            class="ui-button ui-button--secondary ui-button--sm"
           >
             <Download v-if="!updateChecking" class="w-3.5 h-3.5" />
             <span>{{ updateChecking ? '检查中...' : '检查远端更新' }}</span>

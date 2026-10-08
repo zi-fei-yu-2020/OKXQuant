@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import AppCard from './ui/AppCard.vue'
 import { readableLog } from '../utils/logText'
-
 import { useDashboardStore } from '../stores/dashboard'
 import { Terminal } from 'lucide-vue-next'
 
@@ -10,6 +9,7 @@ const store = useDashboardStore()
 
 <template>
   <AppCard
+    data-inspection-logs
     class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
     style="background-color: var(--bg-card); border-color: var(--border-subtle)"
   >
@@ -17,7 +17,7 @@ const store = useDashboardStore()
       <div class="flex items-center space-x-2">
         <Terminal class="w-4 h-4" style="color: var(--color-brand)" />
         <h2
-          class="text-xs sm:text-sm font-black font-mono uppercase tracking-wide"
+          class="text-xs sm:text-sm font-semibold font-mono uppercase tracking-wide"
           style="color: var(--text-main)"
         >
           系统巡检日志
@@ -33,7 +33,7 @@ const store = useDashboardStore()
       <div
         v-for="(log, idx) in store.logs"
         :key="idx"
-        class="[overflow-wrap:anywhere] border-l-2 pl-2 py-0.5 leading-relaxed transition-colors hover:bg-[var(--bg-card-hover)]"
+        class="[overflow-wrap:anywhere] border-l-2 pl-2.5 py-0.5 leading-relaxed transition-colors hover:bg-[var(--bg-card-hover)]"
         style="border-color: var(--border-medium); color: var(--text-muted)"
       >
         {{ readableLog(log) }}

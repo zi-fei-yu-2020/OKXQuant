@@ -90,8 +90,8 @@ function setLayout(mode: 'dual' | 'stacked') {
   <div class="terminal-shell">
     <HeaderBar />
     <main class="terminal-main">
-      <PageHeader :title="heading[0]" :description="heading[1]" eyebrow="工作空间 / 监控终端"
-        ><template #actions>
+      <PageHeader :title="heading[0]" :description="heading[1]" eyebrow="工作空间 / 监控终端">
+        <template #actions>
           <AppBadge v-if="store.data?.okx_environment" :tone="store.data.okx_environment === 'demo' ? 'neutral' : 'warning'">
             {{ store.data.okx_environment === 'demo' ? 'OKX 模拟盘' : 'OKX 实盘' }}
           </AppBadge>
@@ -100,8 +100,8 @@ function setLayout(mode: 'dual' | 'stacked') {
             class="min-w-[7.5rem] justify-center"
             :tone="monitorTone"
             dot
-            >{{ monitorLabel }}</AppBadge
-          ><button
+          >{{ monitorLabel }}</AppBadge>
+          <button
             v-if="store.error || (store.data && store.isStale)"
             class="ui-icon-button"
             :disabled="store.isRefreshing"
@@ -122,8 +122,9 @@ function setLayout(mode: 'dual' | 'stacked') {
               aria-label="切换纵向布局"
               @click="setLayout('stacked')"
             >
-              <Rows2 class="size-4" /></button
-            ><button
+              <Rows2 class="size-4" />
+            </button>
+            <button
               class="ui-icon-button"
               :style="{ color: layoutMode === 'dual' ? 'var(--color-brand)' : undefined }"
               :aria-pressed="layoutMode === 'dual'"
@@ -131,8 +132,10 @@ function setLayout(mode: 'dual' | 'stacked') {
               @click="setLayout('dual')"
             >
               <Columns2 class="size-4" />
-            </button></div></template
-      ></PageHeader>
+            </button>
+          </div>
+        </template>
+      </PageHeader>
 
       <!-- Overview tab (lazy mount: unmounted when other tabs active) -->
       <div
@@ -140,7 +143,11 @@ function setLayout(mode: 'dual' | 'stacked') {
         class="terminal-overview"
         :class="{ 'terminal-overview--dual': layoutMode === 'dual' }"
       >
-        <div class="terminal-overview__left"><TopHudRibbon /><MarketCandles :active="currentTab === 'overview' && (route.path === '/' || route.path === '/trading')" /><TacticalDesk /></div>
+        <div class="terminal-overview__left">
+          <TopHudRibbon />
+          <MarketCandles :active="currentTab === 'overview' && (route.path === '/' || route.path === '/trading')" />
+          <TacticalDesk />
+        </div>
         <InstrumentMatrix />
       </div>
 
@@ -162,19 +169,12 @@ function setLayout(mode: 'dual' | 'stacked') {
       <!-- Trades tab (lazy mount) -->
       <div v-if="currentTab === 'trades'" class="terminal-grid">
         <TradesLedger />
-        <details class="action-disclosure rounded-xl border p-4 text-xs font-mono" style="background:var(--bg-card);border-color:var(--border-subtle)">
-          <summary class="cursor-pointer font-bold select-none" style="color:var(--text-main)">
-            系统巡检日志（公开只读）
-          </summary>
-          <div class="mt-3 pt-3 border-t" style="border-color:var(--border-subtle)">
-            <LedgerLogs />
-          </div>
-        </details>
+        <LedgerLogs />
       </div>
     </main>
     <footer class="terminal-footer">
-      <button @click="store.showAboutModal = true">OKXQuant · v0.1.0</button
-      ><span class="ml-4 hidden sm:inline">只读监控 · 交易有风险，决策需审慎</span>
+      <button @click="store.showAboutModal = true">OKXQuant · v0.1.0</button>
+      <span class="ml-4 hidden sm:inline">只读监控 · 交易有风险，决策需审慎</span>
     </footer>
     <AboutModal
       :visible="store.showAboutModal"

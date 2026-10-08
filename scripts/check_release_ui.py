@@ -39,10 +39,11 @@ def main():
         for old,new in [('/','/'),('/factors','/decisions'),('/news','/market-intelligence'),('/lab','/reviews'),('/history','/trades')]:
             page.goto(base+old+'?probe=public#keep')
             expect(page).to_have_url(base+new+'?probe=public#keep')
-        page.locator('details.action-disclosure > summary').click()
+        expect(page.locator('[data-inspection-logs]')).to_be_visible()
+        assert page.locator('[data-inspection-logs]').evaluate("el => !el.closest('details')")
         expect(page.get_by_role('heading',name='\u7cfb\u7edf\u5de1\u68c0\u65e5\u5fd7',exact=True)).to_be_visible()
         assert not page.evaluate("localStorage.getItem('okxquant.admin.session.id')")
-        checks.append('all front pages and inspection log panel work without login')
+        checks.append('all front pages and default-expanded inspection logs work without login')
         page.screenshot(path=str(output/'anonymous-trades-logs.png'))
         page.goto(base+'/admin/overview')
         expect(page).to_have_url(__import__('re').compile(r'/admin/login'))

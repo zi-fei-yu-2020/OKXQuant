@@ -117,9 +117,11 @@ test('StrategyTelemetryPanel enforces strict period rendering with no legacy fal
   assert.match(panelSrc, /全局统计/)
   assert.match(panelSrc, /role="tab"/)
 
-  // Coverage start metadata must be displayed
-  assert.match(panelSrc, /coverageStart/)
-  assert.match(panelSrc, /起始 {{ coverageStart }}/)
+  // The operator requested a concise display, not a change to the accounting periods.
+  const template = panelSrc.slice(panelSrc.indexOf('<template>'), panelSrc.lastIndexOf('</template>'))
+  for (const redundant of ['coverageStart', '\u7cfb\u7edf\u4fdd\u7559\u8d26\u672c\u53e3\u5f84', '\u51b3\u7b56\u72b6\u6001']) {
+    assert.ok(!template.includes(redundant), `Redundant display returned: ${redundant}`)
+  }
 })
 
 test('StrategyTelemetryPanel renders unknown/no-stats when periods is empty or unavailable', async () => {
@@ -168,7 +170,7 @@ test('StrategyTelemetryPanel renders unknown/no-stats when periods is empty or u
     execution_profile: { execution: { id: 'standard' } },
   })))
   assert.doesNotMatch(zeroClosedHtml, /胜率 0.0%/)
-  assert.match(zeroClosedHtml, /起始 2026-09-01 00:00/)
+  assert.doesNotMatch(zeroClosedHtml, /2026-09-01|Asia\/Shanghai|2026-10-08 10:00/)
 })
 
 test('main dashboard fetch and prompt fetch send X-OKXQuant-Session and guard stale 401 vs new token', () => {

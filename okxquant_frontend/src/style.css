@@ -43,6 +43,20 @@
     Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
     sans-serif;
   --font-data: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  /* Shared geometry: public display and admin use the same control/surface scale. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --radius-control: 8px;
+  --radius-card: 12px;
+  --control-height: 40px;
+  --control-height-sm: 34px;
+  --icon-control-size: 36px;
+  --card-inset: 20px;
+  --control-font-size: 13px;
 }
 :root[data-theme='dark'] {
   color-scheme: dark;
@@ -133,8 +147,9 @@
     width: 100%;
     min-width: 0;
     border: 1px solid var(--border-medium);
-    border-radius: 8px;
-    padding: 10px 12px;
+    border-radius: var(--radius-control);
+    min-height: var(--control-height);
+    padding: 9px var(--space-3);
     background: var(--bg-input);
     color: var(--text-main);
     font-family: inherit;
@@ -233,30 +248,52 @@
   overflow: hidden;
 }
 .brand-mark__image { width: 34px; height: 34px; display: block; object-fit: cover; border-radius: 10px; }
-.ui-button {
+/* ui-action brings legacy action call sites onto the shared geometry without
+   overriding their existing dynamic selected, warning or danger colors. */
+.ui-button,
+.ui-action {
   display: inline-flex;
   justify-content: center;
   align-items: center;
-  gap: 8px;
-  min-height: 40px;
-  padding: 9px 15px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  font-size: 13px;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+  min-height: var(--control-height);
+  padding: var(--space-2) 14px;
+  border-radius: var(--radius-control);
+  font-family: var(--font-ui);
+  font-size: var(--control-font-size);
   font-weight: 600;
   line-height: 20px;
-  white-space: nowrap;
-  transition:
-    background-color 0.15s,
-    border-color 0.15s;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+  box-shadow: none;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
   text-decoration: none;
+  cursor: pointer;
+}
+.ui-button { border: 1px solid transparent; }
+.ui-button:focus-visible,
+.ui-action:focus-visible,
+.ui-icon-button:focus-visible,
+.ui-tab-control:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+.ui-button:disabled,
+.ui-action:disabled,
+.ui-icon-button:disabled,
+.ui-tab-control:disabled {
+  opacity: .55;
+  cursor: not-allowed;
 }
 .ui-button--primary {
   background: #4658d7;
   border-color: #4658d7;
   color: white;
 }
-.ui-button--primary:hover {
+.ui-button--primary:hover:not(:disabled) {
   background: #394bc4;
 }
 .ui-button--secondary {
@@ -265,8 +302,8 @@
   color: var(--text-main);
   box-shadow: var(--shadow-card);
 }
-.ui-button--secondary:hover,
-.ui-button--ghost:hover {
+.ui-button--secondary:hover:not(:disabled),
+.ui-button--ghost:hover:not(:disabled) {
   background: var(--bg-card-hover);
 }
 .ui-button--ghost {
@@ -277,12 +314,13 @@
   border-color: #b4233d;
   color: white;
 }
-.ui-button--danger:hover {
+.ui-button--danger:hover:not(:disabled) {
   background: #981b32;
 }
-.ui-button--sm {
-  min-height: 34px;
-  padding: 6px 11px;
+.ui-button--sm,
+.ui-action--sm {
+  min-height: var(--control-height-sm);
+  padding: 6px 10px;
   font-size: 12px;
 }
 .ui-icon-button {
@@ -290,19 +328,21 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
+  width: var(--icon-control-size);
+  height: var(--icon-control-size);
+  padding: 0;
   color: var(--text-muted);
-  border-radius: 8px;
+  border-radius: var(--radius-control);
 }
-.ui-icon-button:hover {
+.ui-icon-button:hover:not(:disabled) {
   background: var(--bg-card-hover);
   color: var(--text-main);
 }
 .ui-card {
   min-width: 0;
+  max-width: 100%;
   border: 1px solid var(--border-subtle);
-  border-radius: 12px;
+  border-radius: var(--radius-card);
   background: var(--bg-card);
   box-shadow: var(--shadow-card);
 }
@@ -312,7 +352,7 @@
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  padding: 20px 24px;
+  padding: var(--space-4) var(--card-inset);
   border-bottom: 1px solid var(--border-subtle);
 }
 .ui-card__header h2 {
@@ -325,10 +365,10 @@
   margin-top: 4px;
 }
 .ui-card__body {
-  padding: 24px;
+  padding: var(--card-inset);
 }
 .ui-card__footer {
-  padding: 16px 24px;
+  padding: var(--space-4) var(--card-inset);
   border-top: 1px solid var(--border-subtle);
 }
 .ui-badge {
@@ -1254,10 +1294,7 @@ body:has(dialog[open]) > .ui-toasts {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 @media (max-width: 767px) {
-  .ui-icon-button {
-    width: 44px;
-    height: 44px;
-  }
+  :root { --icon-control-size: 44px; }
   .ui-toast .ui-icon-button {
     width: 28px;
     height: 28px;
@@ -1314,10 +1351,11 @@ body:has(dialog[open]) > .ui-toasts {
 
 /* A disclosure is an action, not paragraph text. */
 .action-disclosure > summary {
-  list-style: none; display: flex; align-items: center; gap: .6rem;
-  min-height: 44px; padding: .7rem .9rem; border: 1px solid var(--border-medium);
-  border-radius: .6rem; background: var(--bg-card-subtle); color: var(--text-main);
-  font-weight: 600; cursor: pointer; transition: background-color .15s;
+  list-style: none; display: flex; align-items: center; flex-wrap: wrap; gap: .5rem .6rem;
+  min-height: 42px; padding: .65rem .85rem; border: 1px solid var(--border-medium);
+  border-radius: var(--radius-control); background: var(--bg-card-subtle); color: var(--text-main);
+  font-weight: 600; cursor: pointer; transition: background-color .15s ease, border-color .15s ease;
+  max-width: 100%; box-sizing: border-box;
 }
 .action-disclosure > summary::-webkit-details-marker { display: none; }
 .action-disclosure > summary::before { content: '▸'; color: var(--color-brand); }
@@ -1326,3 +1364,37 @@ body:has(dialog[open]) > .ui-toasts {
 .action-disclosure[open] > summary::after { content: '收起'; }
 .action-disclosure > summary:hover { background: var(--bg-card-hover); }
 .action-disclosure > summary:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 2px; }
+
+
+/* Shared compact tabs keep their existing selection bindings/semantic colors. */
+.ui-tab-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: var(--control-height-sm);
+  padding: 6px 10px;
+  border-radius: var(--radius-control);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
+  white-space: nowrap;
+  transition: background-color .15s ease, color .15s ease;
+}
+.ui-icon-button--active { color: var(--color-up); }
+.ui-icon-button--active:hover:not(:disabled) { color: var(--color-up); background: var(--color-up-bg); }
+.ui-icon-button--danger { color: var(--color-down); }
+.ui-icon-button--danger:hover:not(:disabled) { color: var(--color-down); background: var(--color-down-bg); }
+.ui-icon-button--warning { color: var(--color-warn); }
+.ui-icon-button--warning:hover:not(:disabled) { color: var(--color-warn); background: var(--color-warn-bg); }
+.ui-icon-button--brand { color: var(--color-brand); }
+.ui-icon-button--brand:hover:not(:disabled) { color: var(--color-brand); background: var(--color-brand-bg); }
+.ui-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.ui-panel { border-radius: var(--radius-card); }
+@media (max-width: 640px) {
+  :root { --control-height: 44px; --control-height-sm: 40px; --icon-control-size: 44px; --card-inset: 16px; }
+  .ui-card__header, .ui-dialog__header, .ui-dialog__footer { gap: var(--space-3); }
+}

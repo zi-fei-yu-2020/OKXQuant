@@ -275,7 +275,7 @@ const toast = useToast()
 
     <!-- 1. Top Control Station: Switch, Consensus Mode & Actions -->
     <div
-      class="rounded-2xl border p-4 sm:p-5 shadow-xs space-y-4"
+      class="ui-panel rounded-2xl border p-4 sm:p-5 shadow-xs space-y-4"
       style="background-color: var(--bg-card); border-color: var(--border-subtle)"
     >
       <!-- Header row -->
@@ -330,7 +330,7 @@ const toast = useToast()
           <button
             type="button"
             @click="toggleCouncil"
-            class="flex items-center space-x-2 px-3 py-1.5 rounded-xl border cursor-pointer transition-colors text-sm font-sans font-bold"
+            class="ui-action ui-action--sm border"
             :style="
               councilConfig.enabled
                 ? {
@@ -355,7 +355,7 @@ const toast = useToast()
           <button
             @click="saveConfig"
             :disabled="(saving || !auth.isSuperadmin) || actionBusy || !canManage"
-            class="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-sm font-sans font-bold cursor-pointer disabled:opacity-40 shadow-xs transition-all"
+            class="ui-action ui-action--sm"
             style="background-color: var(--text-main); color: var(--bg-card)"
           >
             <Save class="w-3.5 h-3.5" />
@@ -366,7 +366,7 @@ const toast = useToast()
           <button
             @click="runDebateTest"
             :disabled="(testing) || actionBusy"
-            class="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl border text-sm font-sans font-bold cursor-pointer disabled:opacity-40 transition-all shadow-xs"
+            class="ui-action ui-action--sm border"
             style="
               background-color: var(--bg-card-subtle);
               border-color: var(--border-medium);
@@ -456,7 +456,7 @@ const toast = useToast()
           <button
             @click="applySuite('hedge_fund_desk')"
             :disabled="(!auth.isSuperadmin) || actionBusy || !canManage"
-            class="flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-sm font-sans cursor-pointer transition-all"
+            class="ui-action ui-action--sm border"
             style="
               background-color: var(--bg-card-subtle);
               border-color: var(--border-subtle);
@@ -469,7 +469,7 @@ const toast = useToast()
           <button
             @click="addNewCustomTrader"
             :disabled="(!auth.isSuperadmin) || actionBusy"
-            class="flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-dashed text-sm font-sans cursor-pointer transition-all"
+            class="ui-action ui-action--sm border border-dashed"
             style="border-color: var(--color-brand); color: var(--color-brand)"
           >
             <Plus class="w-3 h-3" />
@@ -484,7 +484,7 @@ const toast = useToast()
       <div
         v-for="(role, roleId) in councilConfig.roles"
         :key="roleId"
-        class="rounded-2xl border p-4 sm:p-5 transition-all shadow-xs"
+        class="ui-panel rounded-2xl border p-4 sm:p-5 transition-all shadow-xs"
         :style="{
           backgroundColor: expandedRole === roleId ? 'var(--bg-card-subtle)' : 'var(--bg-card)',
           borderColor:
@@ -599,8 +599,9 @@ const toast = useToast()
               v-if="!role.is_arbitrator && roleId !== 'cio'"
               @click="role.enabled = role.enabled === false ? true : false"
               :disabled="(!auth.isSuperadmin) || actionBusy"
-              class="cursor-pointer p-1"
-              :class="role.enabled !== false ? 'text-emerald-400' : 'text-[var(--text-muted)]'"
+              class="ui-icon-button"
+              :aria-pressed="role.enabled !== false"
+                  :class="role.enabled !== false ? 'ui-icon-button--active' : 'text-[var(--text-muted)]'"
               :title="role.enabled !== false ? '静音此交易员' : '激活此交易员'"
             >
               <ToggleRight v-if="role.enabled !== false" class="w-5 h-5" />
@@ -616,7 +617,7 @@ const toast = useToast()
               "
               @click="removeRole(String(roleId))"
               :disabled="(!auth.isSuperadmin) || actionBusy"
-              class="p-1.5 rounded text-rose-400 hover:opacity-80 cursor-pointer"
+              class="ui-icon-button ui-icon-button--danger text-rose-400 hover:opacity-80"
               title="移除此席位"
             >
               <Trash2 class="w-3.5 h-3.5" />
@@ -625,7 +626,7 @@ const toast = useToast()
             <!-- Expand Accordion Button -->
             <button :disabled="actionBusy"
               @click="expandedRole = expandedRole === roleId ? '' : String(roleId)"
-              class="p-1.5 rounded cursor-pointer transition-colors"
+              class="ui-icon-button"
               style="color: var(--text-muted)"
               title="展开/收起定制提示词"
             >
@@ -680,7 +681,7 @@ const toast = useToast()
                     ? `${role.prompt.trim()}\n- 重点核验: {{${slot.k}}}`
                     : `{{${slot.k}}}`
                 "
-                class="px-2 py-0.5 rounded-md border cursor-pointer hover:border-purple-400 transition-colors"
+                class="ui-action ui-action--sm border hover:border-purple-400"
                 style="
                   background-color: var(--bg-card);
                   border-color: var(--border-subtle);
@@ -721,7 +722,7 @@ const toast = useToast()
     <!-- 3. Live Deliberation Docket & CIO Verdict (Only shown after test run) -->
     <div
       v-if="testResult"
-      class="rounded-2xl border p-4 sm:p-5 space-y-4 shadow-lg"
+      class="ui-panel rounded-2xl border p-4 sm:p-5 space-y-4 shadow-lg"
       style="background-color: var(--bg-card); border-color: var(--color-brand-border)"
     >
       <div
@@ -746,7 +747,7 @@ const toast = useToast()
         </div>
         <button :disabled="actionBusy"
           @click="testResult = null"
-          class="text-sm font-sans cursor-pointer px-3 py-1 rounded-lg border"
+          class="ui-action ui-action--sm border"
           style="
             background-color: var(--bg-card-subtle);
             border-color: var(--border-subtle);
@@ -816,7 +817,7 @@ const toast = useToast()
 
       <!-- CIO Arbitrated Verdict & Order Dispatch -->
       <div
-        class="rounded-xl border p-4 space-y-3"
+        class="ui-panel rounded-xl border p-4 space-y-3"
         style="background-color: var(--bg-card-subtle); border-color: var(--color-brand-border)"
       >
         <div class="flex items-center justify-between">

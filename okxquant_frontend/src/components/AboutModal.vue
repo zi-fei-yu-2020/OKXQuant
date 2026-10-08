@@ -150,7 +150,7 @@ async function copyToClipboard(text: string, targetName: string) {
               </span>
               <button
                 @click="copyToClipboard('cd okxquant_frontend && npm run build', 'build')"
-                class="px-2 py-1 rounded border text-[10px] font-mono cursor-pointer transition-colors shrink-0 flex items-center space-x-1"
+                class="ui-action ui-action--sm border shrink-0"
                 style="
                   background-color: var(--bg-card);
                   border-color: var(--border-subtle);
@@ -177,7 +177,7 @@ async function copyToClipboard(text: string, targetName: string) {
                     'test',
                   )
                 "
-                class="px-2 py-1 rounded border text-[10px] font-mono cursor-pointer transition-colors shrink-0 flex items-center space-x-1"
+                class="ui-action ui-action--sm border shrink-0"
                 style="
                   background-color: var(--bg-card);
                   border-color: var(--border-subtle);

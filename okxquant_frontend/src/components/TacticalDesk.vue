@@ -87,7 +87,7 @@ const allProtected = computed(
       >
         <button
           @click="activeTab = 'positions'"
-          class="h-7.5 flex items-center space-x-2 px-3 rounded-md font-bold transition-all cursor-pointer"
+          class="ui-tab-control"
           :style="
             activeTab === 'positions'
               ? {
@@ -116,7 +116,7 @@ const allProtected = computed(
 
         <button
           @click="activeTab = 'orders'"
-          class="h-7.5 flex items-center space-x-2 px-3 rounded-md font-bold transition-all cursor-pointer"
+          class="ui-tab-control"
           :style="
             activeTab === 'orders'
               ? {
@@ -152,7 +152,7 @@ const allProtected = computed(
             v-for="sym in availableSymbols"
             :key="sym"
             @click="selectedSymbol = sym"
-            class="h-7 px-2.5 rounded-md text-[11px] font-mono transition-all cursor-pointer border"
+            class="ui-action ui-action--sm border"
             :style="
               selectedSymbol === sym
                 ? {

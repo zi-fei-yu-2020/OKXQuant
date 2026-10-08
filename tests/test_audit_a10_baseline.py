@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from scripts import daily_summary_and_backup as briefing
-from scripts import okx_runtime
+from scripts import okx_runtime, dashboard_stats
 from okxquant_backend import account_baseline
 
 
@@ -32,7 +32,19 @@ class DailyBaselineTests(unittest.TestCase):
         self.notify = self.stack.enter_context(patch.object(briefing, 'notify_daily_summary'))
         self.process = self.stack.enter_context(patch.object(briefing.subprocess, 'run'))
         self.stack.enter_context(patch.dict(os.environ, {'INITIAL_CAPITAL':'','INITIAL_CAPITAL_ACCOUNT_SCOPE':''}))
-        self.today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d')
+        # Ledger fixtures close at 11:00/13:00. Wall-clock midnight used to
+        # classify those synthetic rows as future trades and fail this suite.
+        # Freeze both briefing day and the aggregation cutoff, not production behavior.
+        self.clock_time = datetime.datetime(2026, 10, 9, 20, tzinfo=datetime.timezone(datetime.timedelta(hours=8)))
+        frozen = self.clock_time
+        class Clock(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return frozen.astimezone(tz) if tz else frozen.replace(tzinfo=None)
+        self.stack.enter_context(patch.object(briefing, 'datetime', SimpleNamespace(
+            datetime=Clock, timezone=datetime.timezone, timedelta=datetime.timedelta)))
+        self.stack.enter_context(patch.object(dashboard_stats, 'datetime', Clock))
+        self.today = frozen.strftime('%Y-%m-%d')
 
     def rows(self, scope=None):
         return [dict(status='closed', environment_id=scope or self.scope, close_time=self.today+' 11:00:00', pnl=100, inst='BEFORE'),
@@ -83,6 +95,20 @@ class DailyBaselineTests(unittest.TestCase):
             'reset_time':self.today+' 12:00:00'}):
             text = self.run_briefing()
         self.assertNotIn('10000', text)
+
+    def test_future_fixture_closes_are_still_excluded_before_their_time(self):
+        before = self.clock_time.replace(hour=8)
+        class MorningClock(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return before.astimezone(tz) if tz else before.replace(tzinfo=None)
+        self.ledger.write_text(json.dumps(self.rows()))
+        with patch.object(dashboard_stats, 'datetime', MorningClock), patch.object(
+                briefing, 'datetime', SimpleNamespace(datetime=MorningClock,
+                    timezone=datetime.timezone, timedelta=datetime.timedelta)):
+            text = self.run_briefing()
+        self.assertIn('+0.00 USDT', text)
+        self.assertNotIn('+107.00 USDT', text)
 
     def test_account_switch_during_report_refuses_notification(self):
         self.ledger.write_text(json.dumps(self.rows()))

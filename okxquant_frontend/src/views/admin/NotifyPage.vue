@@ -371,14 +371,14 @@ const toast = useToast()
           <div class="flex items-center space-x-3">
             <button :disabled="actionBusy || !canManage"
               @click="startQqBind"
-              class="px-2.5 py-1 rounded-lg text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
+              class="ui-action ui-action--sm"
               style="background-color: var(--text-main); color: var(--bg-card)"
             >
               扫码绑定
             </button>
             <button :disabled="actionBusy || !canManage"
               @click="startCapture"
-              class="flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
+              class="ui-action ui-action--sm border"
               style="
                 background-color: var(--color-brand-bg);
                 border-color: var(--color-brand-border);
@@ -478,7 +478,7 @@ const toast = useToast()
         <div class="flex space-x-2 mt-3">
           <button :disabled="actionBusy"
             @click="diagnose('qq')"
-            class="px-3 py-1.5 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
+            class="ui-action ui-action--sm border"
             style="
               background-color: var(--bg-card-subtle);
               border-color: var(--border-medium);
@@ -489,7 +489,7 @@ const toast = useToast()
           </button>
           <button :disabled="actionBusy || !canManage"
             @click="sendTest('qq')"
-            class="px-3 py-1.5 rounded-lg border text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
+            class="ui-action ui-action--sm border"
             style="
               background-color: var(--color-up-bg);
               border-color: var(--color-up-border);
@@ -613,7 +613,7 @@ const toast = useToast()
         <div class="flex space-x-2 mt-3">
           <button :disabled="actionBusy"
             @click="diagnose('telegram')"
-            class="px-3 py-1.5 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
+            class="ui-action ui-action--sm border"
             style="
               background-color: var(--bg-card-subtle);
               border-color: var(--border-medium);
@@ -624,7 +624,7 @@ const toast = useToast()
           </button>
           <button :disabled="actionBusy || !canManage"
             @click="sendTest('telegram')"
-            class="px-3 py-1.5 rounded-lg border text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
+            class="ui-action ui-action--sm border"
             style="
               background-color: var(--color-up-bg);
               border-color: var(--color-up-border);
@@ -703,7 +703,7 @@ const toast = useToast()
           ></AppField>
           <button :disabled="actionBusy"
             @click="diagnose('wechat')"
-            class="px-3 py-1.5 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
+            class="ui-action ui-action--sm border"
             style="
               background-color: var(--bg-card-subtle);
               border-color: var(--border-medium);
@@ -714,7 +714,7 @@ const toast = useToast()
           </button>
           <button :disabled="actionBusy || !canManage"
             @click="sendTest('wechat')"
-            class="ml-2 px-3 py-1.5 rounded-lg border text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
+            class="ui-action ui-action--sm ml-2 border"
             style="
               background-color: var(--color-up-bg);
               border-color: var(--color-up-border);
@@ -791,7 +791,7 @@ const toast = useToast()
           ></AppField>
           <button :disabled="actionBusy"
             @click="diagnose('webhook')"
-            class="px-3 py-1.5 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
+            class="ui-action ui-action--sm border"
             style="
               background-color: var(--bg-card-subtle);
               border-color: var(--border-medium);
@@ -802,7 +802,7 @@ const toast = useToast()
           </button>
           <button :disabled="actionBusy || !canManage"
             @click="sendTest('webhook')"
-            class="ml-2 px-3 py-1.5 rounded-lg border text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
+            class="ui-action ui-action--sm ml-2 border"
             style="
               background-color: var(--color-up-bg);
               border-color: var(--color-up-border);
@@ -931,14 +931,14 @@ const toast = useToast()
           <div class="flex items-center space-x-3">
             <button :disabled="actionBusy || !canManage"
               @click="saveAll"
-              class="px-4 py-2 rounded-lg text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
+              class="ui-action"
               style="background-color: var(--text-main); color: var(--bg-card)"
             >
               保存全部通知通道
             </button>
             <button :disabled="actionBusy"
               @click="saveSchedule"
-              class="px-4 py-2 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
+              class="ui-action border"
               style="
                 background-color: var(--bg-card-subtle);
                 border-color: var(--border-medium);
@@ -1060,7 +1060,7 @@ const toast = useToast()
         <div class="flex justify-center space-x-2">
           <button :disabled="actionBusy || !canManage"
             @click="startQqBind"
-            class="px-3 py-1.5 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
+            class="ui-action ui-action--sm border"
             style="
               background-color: var(--bg-card-subtle);
               border-color: var(--border-medium);

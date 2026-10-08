@@ -212,7 +212,7 @@ const { prompt } = useDialogs()
           <button
             @click="changePassword"
             :disabled="(changingPwd) || actionBusy"
-            class="w-full flex items-center justify-center space-x-1.5 px-4 py-2 rounded-lg text-sm font-sans font-bold cursor-pointer disabled:opacity-50 transition-all shadow-xs"
+            class="ui-action w-full"
             style="background-color: var(--text-main); color: var(--bg-card)"
           >
             <ShieldCheck class="w-3.5 h-3.5" /><span>{{
@@ -247,7 +247,7 @@ const { prompt } = useDialogs()
         <button :disabled="actionBusy"
           v-if="auth.isSuperadmin"
           @click="createVisible = true"
-          class="flex items-center space-x-1 px-3 py-1.5 rounded-lg text-sm font-sans font-bold transition-all cursor-pointer shadow-xs"
+          class="ui-action ui-action--sm"
           style="background-color: var(--text-main); color: var(--bg-card)"
         >
           <Plus class="w-3.5 h-3.5" />
@@ -348,7 +348,7 @@ const { prompt } = useDialogs()
                 <button :disabled="actionBusy || !canManage"
                   v-if="u.id !== currentUserId"
                   @click="toggleEnabled(u)"
-                  class="px-2.5 py-1 rounded-md border text-xs font-sans transition-all cursor-pointer shadow-xs"
+                  class="ui-action ui-action--sm border"
                   style="
                     background-color: var(--bg-card-subtle);
                     border-color: var(--border-medium);
@@ -361,7 +361,7 @@ const { prompt } = useDialogs()
                 <button :disabled="actionBusy || !canManage"
                   v-if="u.locked_until"
                   @click="unlockUser(u)"
-                  class="px-2.5 py-1 rounded-md border text-xs font-sans cursor-pointer transition-colors"
+                  class="ui-action ui-action--sm border"
                   style="
                     background-color: var(--color-warn-bg);
                     border-color: var(--color-warn-border);
@@ -452,7 +452,7 @@ const { prompt } = useDialogs()
         <div class="flex justify-end space-x-2">
           <button :disabled="actionBusy"
             @click="createVisible = false"
-            class="px-3 py-2 rounded-lg border text-sm font-sans cursor-pointer transition-all shadow-xs"
+            class="ui-action border"
             style="
               background-color: var(--bg-card-subtle);
               border-color: var(--border-medium);
@@ -463,7 +463,7 @@ const { prompt } = useDialogs()
           </button>
           <button :disabled="actionBusy || !canManage"
             @click="createUser"
-            class="px-3 py-2 rounded-lg text-sm font-sans font-bold cursor-pointer transition-all shadow-xs"
+            class="ui-action"
             style="background-color: var(--text-main); color: var(--bg-card)"
           >
             创建
