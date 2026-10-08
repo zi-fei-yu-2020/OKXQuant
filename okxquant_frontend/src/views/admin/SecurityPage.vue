@@ -248,7 +248,7 @@ const { prompt } = useDialogs()
 <template>
   <div class="space-y-4 font-sans text-sm">
     <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading || actionBusy" @click="loadAll()">重试</button></div>
-    <AppCard class="p-4 text-sm leading-relaxed"><router-link to="/admin/accounts" class="font-semibold" style="color:var(--color-brand)">前往统一账户中心</router-link><p style="color:var(--text-muted)">新增资讯授权、双环境绑定和安全换号请使用账户中心；此页只保留盈亏基准、标的管理和受保护的平仓操作；账户、凭据及手动平仓权限统一在账户中心配置。</p></AppCard>
+    <AppCard class="p-4 text-sm leading-relaxed"><router-link v-if="auth.isSuperadmin" to="/admin/accounts" class="font-semibold" style="color:var(--color-brand)">前往统一账户中心</router-link><span v-else class="font-semibold">账户连接由超级管理员管理</span><p style="color:var(--text-muted)">新增资讯授权、双环境绑定和安全换号请使用账户中心；此页只保留盈亏基准、标的管理和受保护的平仓操作；账户、凭据及手动平仓权限统一在账户中心配置。</p></AppCard>
     <!-- Header & Action Bar -->
 
     <LoadingState v-if="loading" />

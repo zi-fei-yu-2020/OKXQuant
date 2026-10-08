@@ -1,18 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { APP_LOGO_SRC } from '../config/branding'
-const route = useRoute()
-const clock = ref('')
-let timer: ReturnType<typeof setInterval> | undefined
-const updateClock = () => {
-  clock.value = new Date().toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
-}
-onMounted(() => {
-  updateClock()
-  timer = setInterval(updateClock, 1000)
-})
-onUnmounted(() => clearInterval(timer))
+import { frontTabs } from '../config/navigation'
 import {
   LayoutDashboard,
   Brain,
@@ -25,21 +15,44 @@ import {
   BookOpen,
 } from 'lucide-vue-next'
 import { useTheme } from '../composables/useTheme'
-import FloatingActions from './FloatingActions.vue'
+
+const route = useRoute()
+const clock = ref('')
+let timer: ReturnType<typeof setInterval> | undefined
+const updateClock = () => {
+  clock.value = new Date().toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
+}
+onMounted(() => {
+  updateClock()
+  timer = setInterval(updateClock, 1000)
+})
+onUnmounted(() => clearInterval(timer))
+
 const { theme, toggleTheme } = useTheme()
-const tabs = [
-  { to: '/', label: '交易概览', icon: LayoutDashboard },
-  { to: '/factors', label: 'AI 决策', icon: Brain },
-  { to: '/news', label: '市场情报', icon: Newspaper },
-  { to: '/lab', label: '策略复盘', icon: Sparkles },
-  { to: '/history', label: '交易记录', icon: Receipt },
+
+const fallbackTabs = [
+  { path: '/', label: '交易概览', icon: LayoutDashboard },
+  { path: '/decisions', label: 'AI 决策', icon: Brain },
+  { path: '/market-intelligence', label: '市场情报', icon: Newspaper },
+  { path: '/reviews', label: '策略复盘', icon: Sparkles },
+  { path: '/trades', label: '交易记录', icon: Receipt },
 ]
+
+const tabs = computed(() => {
+  const source = frontTabs && frontTabs.length ? frontTabs : fallbackTabs
+  return source.map((tab) => ({
+    to: tab.path,
+    label: tab.label,
+    icon: tab.icon,
+  }))
+})
+
 </script>
 <template>
   <header class="terminal-header">
     <div class="terminal-header__inner">
       <RouterLink to="/" class="terminal-brand"
-        ><span class="brand-mark"><img  :src="APP_LOGO_SRC" alt="OKXQuant" class="brand-mark__image" /></span><span
+        ><span class="brand-mark"><img :src="APP_LOGO_SRC" alt="OKXQuant" class="brand-mark__image" /></span><span
           >OKXQuant</span
         ></RouterLink
       >
@@ -50,14 +63,13 @@ const tabs = [
           :to="tab.to"
           class="terminal-nav__item"
           exact-active-class="is-active"
-          :class="{ 'is-active': tab.to === '/' && route.meta.tab === 'trading' }"
+          :class="{ 'is-active': (tab.to === '/' && (route.path === '/' || route.path === '/trading' || route.meta.tab === 'overview' || route.meta.tab === 'trading')) }"
           ><component :is="tab.icon" class="size-4" aria-hidden="true" /><span>{{
             tab.label
           }}</span></RouterLink
         >
       </nav>
       <div class="terminal-header__actions flex items-center gap-1.5">
-        <FloatingActions v-if="!route.path.startsWith('/docs')" />
         <span
           class="hidden xl:inline text-xs text-[var(--text-faint)] num-tabular mr-2"
           title="北京时间 UTC+8"
@@ -87,7 +99,7 @@ const tabs = [
       :key="tab.to"
       :to="tab.to"
       exact-active-class="is-active"
-      :class="{ 'is-active': tab.to === '/' && route.meta.tab === 'trading' }"
+      :class="{ 'is-active': (tab.to === '/' && (route.path === '/' || route.path === '/trading' || route.meta.tab === 'overview' || route.meta.tab === 'trading')) }"
       ><component :is="tab.icon" class="size-5" aria-hidden="true" /><span>{{
         tab.label
       }}</span></RouterLink

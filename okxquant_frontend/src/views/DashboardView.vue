@@ -2,7 +2,9 @@
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useDashboardStore } from '../stores/dashboard'
+import { useAuthStore } from '../stores/auth'
 import { monitorConnectionLabel } from '../utils/dashboardHealth'
+import { frontTabs, findFrontTab } from '../config/navigation'
 import HeaderBar from '../components/HeaderBar.vue'
 import TopHudRibbon from '../components/TopHudRibbon.vue'
 import TacticalDesk from '../components/TacticalDesk.vue'
@@ -17,35 +19,54 @@ import AboutModal from '../components/AboutModal.vue'
 import PageHeader from '../components/ui/PageHeader.vue'
 import AppBadge from '../components/ui/AppBadge.vue'
 import { Columns2, Rows2, RefreshCw } from 'lucide-vue-next'
+
 const router = useRouter()
 const route = useRoute()
 const store = useDashboardStore()
+const auth = useAuthStore()
 const layoutMode = ref<'dual' | 'stacked'>('dual')
-const descriptions = {
-  trading: ['交易概览', '账户、持仓与市场信号，在一个视图中保持同步。'],
-  factors: ['AI 决策', '回溯模型判断与投委会讨论，了解每一轮策略的依据。'],
-  news: ['市场情报', '关注影响市场的新闻、情绪与资金动向。'],
-  lab: ['策略复盘', '查看交易复盘与长期记忆，追踪策略的持续演进。'],
-  history: ['交易记录', '查阅订单生命周期、历史成交与执行日志。'],
-} as const
-const heading = computed(() => descriptions[store.activeTab])
+
+const currentTab = computed(() => {
+  const meta = route.meta.tab as string | undefined
+  if (meta === 'decisions' || meta === 'factors' || route.path === '/decisions' || route.path === '/factors') return 'decisions'
+  if (meta === 'market-intelligence' || meta === 'news' || route.path === '/market-intelligence' || route.path === '/news') return 'market-intelligence'
+  if (meta === 'reviews' || meta === 'lab' || route.path === '/reviews' || route.path === '/lab') return 'reviews'
+  if (meta === 'trades' || meta === 'history' || route.path === '/trades' || route.path === '/history') return 'trades'
+  return 'overview'
+})
+
+const activeTabMeta = computed(() => findFrontTab(currentTab.value) || frontTabs[0]!)
+const heading = computed(() => [activeTabMeta.value.label, activeTabMeta.value.description] as const)
+
 const monitorLabel = computed(() => monitorConnectionLabel(store.data, store.error, store.isStale))
 const monitorTone = computed(() => monitorLabel.value === '数据已更新' ? 'success' : 'warning')
+
 function syncTabFromRoute() {
-  const tab = route.meta.tab
-  if (typeof tab === 'string' && tab in descriptions)
-    store.activeTab = tab as keyof typeof descriptions
-  else if (route.path === '/') store.activeTab = 'trading'
+  const tab = currentTab.value
+  if (tab === 'overview') store.activeTab = 'trading'
+  else if (tab === 'decisions') store.activeTab = 'factors'
+  else if (tab === 'market-intelligence') store.activeTab = 'news'
+  else if (tab === 'reviews') store.activeTab = 'lab'
+  else if (tab === 'trades') store.activeTab = 'history'
 }
+
 watch(() => route.path, syncTabFromRoute)
+
 watch(
   () => store.activeTab,
   (tab) => {
-    const path = tab === 'trading' ? '/' : `/${tab}`
-    if (route.path !== path && !route.path.startsWith('/admin') && !route.path.startsWith('/docs'))
-      router.replace(path)
+    let targetPath = '/'
+    if (tab === 'factors' || tab === ('decisions' as any)) targetPath = '/decisions'
+    else if (tab === 'news' || tab === ('market-intelligence' as any)) targetPath = '/market-intelligence'
+    else if (tab === 'lab' || tab === ('reviews' as any)) targetPath = '/reviews'
+    else if (tab === 'history' || tab === ('trades' as any)) targetPath = '/trades'
+
+    if (route.path !== targetPath && !route.path.startsWith('/admin') && !route.path.startsWith('/docs')) {
+      router.replace(targetPath)
+    }
   },
 )
+
 onMounted(() => {
   syncTabFromRoute()
   store.startPolling(10000)
@@ -55,7 +76,9 @@ onMounted(() => {
     /* optional preference */
   }
 })
+
 onUnmounted(() => store.stopPolling())
+
 function setLayout(mode: 'dual' | 'stacked') {
   layoutMode.value = mode
   try {
@@ -91,7 +114,7 @@ function setLayout(mode: 'dual' | 'stacked') {
             <RefreshCw class="size-4" :class="{ 'animate-spin': store.isRefreshing }" />
           </button>
           <div
-            v-if="store.activeTab === 'trading'"
+            v-if="currentTab === 'overview'"
             class="hidden lg:flex border rounded-lg p-0.5 bg-[var(--bg-card)]"
           >
             <button
@@ -112,19 +135,43 @@ function setLayout(mode: 'dual' | 'stacked') {
               <Columns2 class="size-4" />
             </button></div></template
       ></PageHeader>
+
+      <!-- Overview tab (lazy mount: unmounted when other tabs active) -->
       <div
-        v-show="store.activeTab === 'trading'"
+        v-if="currentTab === 'overview'"
         class="terminal-overview"
         :class="{ 'terminal-overview--dual': layoutMode === 'dual' }"
       >
-        <div class="terminal-overview__left"><TopHudRibbon /><MarketCandles :active="store.activeTab === 'trading' && (route.path === '/' || route.path === '/trading')" /><TacticalDesk /></div>
+        <div class="terminal-overview__left"><TopHudRibbon /><MarketCandles :active="currentTab === 'overview' && (route.path === '/' || route.path === '/trading')" /><TacticalDesk /></div>
         <InstrumentMatrix />
       </div>
-      <div v-show="store.activeTab === 'factors'" class="terminal-grid"><AiBrainHistory /></div>
-      <div v-show="store.activeTab === 'news'" class="terminal-grid"><NewsIntelligence /></div>
-      <div v-show="store.activeTab === 'lab'" class="terminal-grid"><SelfEvolutionLab /></div>
-      <div v-show="store.activeTab === 'history'" class="terminal-grid">
-        <TradesLedger /><LedgerLogs />
+
+      <!-- AI Decisions tab (lazy mount) -->
+      <div v-if="currentTab === 'decisions'" class="terminal-grid">
+        <AiBrainHistory />
+      </div>
+
+      <!-- Market Intelligence tab (lazy mount) -->
+      <div v-if="currentTab === 'market-intelligence'" class="terminal-grid">
+        <NewsIntelligence />
+      </div>
+
+      <!-- Strategy Review tab (lazy mount) -->
+      <div v-if="currentTab === 'reviews'" class="terminal-grid">
+        <SelfEvolutionLab />
+      </div>
+
+      <!-- Trades tab (lazy mount) -->
+      <div v-if="currentTab === 'trades'" class="terminal-grid">
+        <TradesLedger />
+        <details v-if="auth.isAuthenticated" class="action-disclosure rounded-xl border p-4 text-xs font-mono" style="background:var(--bg-card);border-color:var(--border-subtle)">
+          <summary class="cursor-pointer font-bold select-none" style="color:var(--text-main)">
+            高级运行诊断日志 (已认证管理员可见)
+          </summary>
+          <div class="mt-3 pt-3 border-t" style="border-color:var(--border-subtle)">
+            <LedgerLogs />
+          </div>
+        </details>
       </div>
     </main>
     <footer class="terminal-footer">

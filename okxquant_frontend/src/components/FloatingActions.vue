@@ -1,21 +1,47 @@
 <script setup lang="ts">
-// Kept at the existing import path; this is now a header action, not a floating toolbar.
-import { computed, ref, onUnmounted } from 'vue'
+// Authenticated advanced prompt audit action; render only a verified receipt.
+import { ref, watch, onUnmounted } from 'vue'
 import { Terminal, Copy } from 'lucide-vue-next'
 import AppDialog from './ui/AppDialog.vue'
 import AppButton from './ui/AppButton.vue'
 import { useDashboardStore } from '../stores/dashboard'
 import { useClipboard } from '../composables/useClipboard'
+import { useAuthStore } from '../stores/auth'
+
 const store = useDashboardStore()
+const auth = useAuthStore()
 const { copyText } = useClipboard()
-const promptModalOpen = ref(false), promptCopied = ref(false), promptLoading = ref(false)
-const prompt = computed(() => store.data?.ai_last_prompt?.trim() ? store.data.ai_last_prompt : '')
+const promptModalOpen = ref(false)
+const promptCopied = ref(false)
+const promptLoading = ref(false)
+
+const prompt = ref(''), promptScope = ref('')
+let promptSession = '', generation = 0
 let copiedTimer: ReturnType<typeof setTimeout> | undefined
+watch([() => auth.token, () => store.data?.account_source_id], () => {
+  if (prompt.value && (promptSession !== auth.token || promptScope.value !== store.data?.account_source_id)) {
+    generation += 1
+    prompt.value = ''
+    promptScope.value = ''
+  }
+}, { flush: 'sync' })
 async function openPrompt() {
   promptModalOpen.value = true
-  if (prompt.value || promptLoading.value) return
+  if (promptLoading.value) return
+  const epoch = ++generation
+  const session = auth.token
+  prompt.value = ''
+  promptScope.value = ''
   promptLoading.value = true
-  try { await store.fetchLatestPrompt() } catch { /* dashboard status already communicates stale data */ }
+  try {
+    const value = await store.fetchLatestPrompt()
+    const verified = store.getVerifiedPrompt()
+    if (epoch === generation && session === auth.token && value && verified?.prompt === value) {
+      promptSession = session
+      promptScope.value = verified.scope
+      prompt.value = value
+    }
+  } catch { /* An unavailable/new account never displays a prior private prompt. */ }
   finally { promptLoading.value = false }
 }
 async function copyPrompt() {
@@ -24,7 +50,7 @@ async function copyPrompt() {
   clearTimeout(copiedTimer)
   copiedTimer = setTimeout(() => { promptCopied.value = false }, 1500)
 }
-onUnmounted(() => clearTimeout(copiedTimer))
+onUnmounted(() => { generation += 1; clearTimeout(copiedTimer) })
 </script>
 <template>
   <button class="ui-button ui-button--secondary ui-button--sm" aria-label="查看实时提示词（最近保存记录）" aria-haspopup="dialog" data-header-prompt @click="openPrompt">
@@ -34,7 +60,7 @@ onUnmounted(() => clearTimeout(copiedTimer))
     <div class="space-y-3 min-w-0" data-prompt-audit>
       <div class="flex flex-wrap items-center justify-between gap-3">
         <p class="text-xs leading-relaxed flex-1 min-w-0" style="color:var(--text-muted)">
-          {{ promptLoading ? 'Loading prompt...' : !prompt ? '暂无已保存提示词。待决策任务写入记录后可在此查阅。' : store.error || store.isStale ? '监控数据更新延迟，以下保留最近取得的提示词记录。' : '展示后端最近保存的原文；接口未提供该记录的独立时间与轮次，无法核验它属于本轮。' }}
+          {{ promptLoading ? '正在加载提示词…' : !prompt ? '暂无已保存提示词。待决策任务写入记录后可在此查阅。' : store.error || store.isStale ? '监控数据更新延迟，以下保留最近取得的提示词记录。' : '已核验账户归属的保存记录，不代表当前执行或模型调用成功' }}
         </p>
         <AppButton v-if="prompt" size="sm" @click="copyPrompt"><Copy class="size-4" aria-hidden="true" />{{ promptCopied ? '已复制' : '复制全文' }}</AppButton>
       </div>

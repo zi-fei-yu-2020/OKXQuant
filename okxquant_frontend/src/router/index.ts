@@ -5,39 +5,53 @@ import { useAuthStore } from '../stores/auth'
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
-    name: 'dashboard',
+    name: 'dashboard-overview',
     component: () => import('../views/DashboardView.vue'),
-    meta: { isPublic: true },
+    meta: { requiresAuth: true, tab: 'overview' },
+  },
+  {
+    path: '/decisions',
+    name: 'dashboard-decisions',
+    component: () => import('../views/DashboardView.vue'),
+    meta: { requiresAuth: true, tab: 'decisions' },
+  },
+  {
+    path: '/market-intelligence',
+    name: 'dashboard-market-intelligence',
+    component: () => import('../views/DashboardView.vue'),
+    meta: { requiresAuth: true, tab: 'market-intelligence' },
+  },
+  {
+    path: '/reviews',
+    name: 'dashboard-reviews',
+    component: () => import('../views/DashboardView.vue'),
+    meta: { requiresAuth: true, tab: 'reviews' },
+  },
+  {
+    path: '/trades',
+    name: 'dashboard-trades',
+    component: () => import('../views/DashboardView.vue'),
+    meta: { requiresAuth: true, tab: 'trades' },
   },
   {
     path: '/trading',
-    name: 'dashboard-trading',
-    component: () => import('../views/DashboardView.vue'),
-    meta: { isPublic: true, tab: 'trading' },
+    redirect: (to) => ({ path: '/', query: to.query, hash: to.hash }),
   },
   {
     path: '/factors',
-    name: 'dashboard-factors',
-    component: () => import('../views/DashboardView.vue'),
-    meta: { isPublic: true, tab: 'factors' },
+    redirect: (to) => ({ path: '/decisions', query: to.query, hash: to.hash }),
   },
   {
     path: '/news',
-    name: 'dashboard-news',
-    component: () => import('../views/DashboardView.vue'),
-    meta: { isPublic: true, tab: 'news' },
+    redirect: (to) => ({ path: '/market-intelligence', query: to.query, hash: to.hash }),
   },
   {
     path: '/lab',
-    name: 'dashboard-lab',
-    component: () => import('../views/DashboardView.vue'),
-    meta: { isPublic: true, tab: 'lab' },
+    redirect: (to) => ({ path: '/reviews', query: to.query, hash: to.hash }),
   },
   {
     path: '/history',
-    name: 'dashboard-history',
-    component: () => import('../views/DashboardView.vue'),
-    meta: { isPublic: true, tab: 'history' },
+    redirect: (to) => ({ path: '/trades', query: to.query, hash: to.hash }),
   },
   {
     path: '/docs',
@@ -98,13 +112,22 @@ router.beforeEach(async (to) => {
   if (to.meta.requiresAuth) {
     const verified = await auth.restoreSession()
     if (!verified || !auth.isAuthenticated) {
-      return { name: 'admin-login' }
+      const isSafeLocal =
+        typeof to.fullPath === 'string' &&
+        to.fullPath.startsWith('/') &&
+        !to.fullPath.startsWith('//') &&
+        to.fullPath !== '/admin/overview'
+      return isSafeLocal ? { name: 'admin-login', query: { next: to.fullPath } } : { name: 'admin-login' }
     }
   }
   // Redirect logged-in users away from login page
   if (to.name === 'admin-login') {
     const verified = await auth.restoreSession()
-    if (verified && auth.isAuthenticated) return { name: 'admin-overview' }
+    if (verified && auth.isAuthenticated) {
+      const rawNext = to.query?.next
+      const isSafeLocal = typeof rawNext === 'string' && rawNext.startsWith('/') && !rawNext.startsWith('//')
+      return isSafeLocal ? { path: rawNext } : { name: 'admin-overview' }
+    }
   }
 })
 

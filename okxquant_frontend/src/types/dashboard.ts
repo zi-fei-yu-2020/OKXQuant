@@ -227,7 +227,20 @@ export interface DashboardResponse {
   ai_trading_memory_md?: string
   factor_library?: any
   execution_profile?: ExecutionProfileSnapshot
-  horizon_stats?: Record<string, HorizonStat>
+  horizon_stats?: {
+    scalp?: HorizonStat
+    swing?: HorizonStat
+    unknown?: HorizonStat
+    periods?: {
+      today?: Record<string, HorizonStat | any>
+      all?: Record<string, HorizonStat | any>
+    }
+    timezone?: string
+    as_of?: string
+    scope?: string
+    version?: number
+    [key: string]: any
+  }
 }
 
 export interface CouncilMemberResult {

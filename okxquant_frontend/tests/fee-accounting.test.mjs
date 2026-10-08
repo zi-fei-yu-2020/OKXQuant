@@ -47,6 +47,7 @@ async function render(row){
     if(name.includes('feeAccounting'))return accounting
     if(name.includes('tradeSettlement'))return {isSettlementPending}
     if(name.includes('tradeDuration'))return {tradeDuration}
+    if(name.includes('sessionResponse'))return {getSessionToken:()=>'',buildAuthHeaders:()=>({Accept:'application/json'}),handleSessionResponse:()=>{}}
     if(name.endsWith('.vue'))return {__esModule:true,default:Box}
     throw Error(name)
   }

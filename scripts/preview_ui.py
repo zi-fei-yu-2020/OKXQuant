@@ -43,13 +43,20 @@ def main() -> int:
             'OKXQUANT_BUILD_BRANCH': 'isolated-ui-preview',
             'OKXQUANT_BUILD_COMMIT': 'preview-not-production',
             'OKXQUANT_UI_PREVIEW_PORT': str(args.port),
+            'OKXQUANT_AUTOTRADE_ENABLED': '0',
+            'OKXQUANT_RUNTIME_PROFILE': 'light',
         })
         # Source snapshots intentionally have no .git. Only the preview process
         # substitutes repository display metadata; the actual application is unchanged.
         bootstrap = (
-            'import os, uvicorn; '
-            'import okxquant_backend.app as backend; '
-            'backend.git = lambda command: "isolated-ui-preview"; '
+            'import os, uvicorn\n'
+            'import okxquant_backend.app as backend\n'
+            'backend.git = lambda command: "isolated-ui-preview"\n'
+            '@backend.app.middleware("http")\n'
+            'async def preview_marker(request, call_next):\n'
+            '    response = await call_next(request)\n'
+            '    response.headers["X-OKXQuant-Preview"] = "isolated-source-snapshot"\n'
+            '    return response\n'
             'uvicorn.run(backend.app, host="127.0.0.1", port=int(os.environ["OKXQUANT_UI_PREVIEW_PORT"]))'
         )
         print(f'Isolated UI preview: http://127.0.0.1:{args.port} (user: admin)', flush=True)

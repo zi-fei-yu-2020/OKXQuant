@@ -10,6 +10,7 @@ import * as support from '../src/utils/instrumentSupport.ts'
 import * as flight from '../src/utils/singleFlight.ts'
 import * as snapshot from '../src/utils/dashboardSnapshot.ts'
 import * as observation from '../src/utils/observationDisplay.ts'
+import * as session from '../src/utils/sessionResponse.ts'
 
 const source=readFileSync(new URL('../src/stores/dashboard.ts',import.meta.url),'utf8')
 const compiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText
@@ -17,7 +18,8 @@ const exports={}
 new Function('require','exports',compiled)(name=>{
  if(name==='vue')return Vue
  if(name==='pinia')return Pinia
- for(const [key,value] of Object.entries({macroAnalysis:macro,dashboardHealth:health,instrumentSupport:support,singleFlight:flight,dashboardSnapshot:snapshot,observationDisplay:observation}))if(name.endsWith('/'+key))return value
+ for(const [key,value] of Object.entries({macroAnalysis:macro,dashboardHealth:health,instrumentSupport:support,singleFlight:flight,dashboardSnapshot:snapshot,observationDisplay:observation,sessionResponse:session}))if(name.endsWith('/'+key))return value
+ if(name.endsWith('/auth') || name === './auth') return { useAuthStore: () => ({ logout: () => {}, expireSession: () => {} }) }
  throw Error(name)
 },exports)
 const flush=async()=>{for(let i=0;i<15;i++)await Promise.resolve()}
@@ -53,7 +55,7 @@ test('automatic polling keeps the full API and exact three-second cadence withou
  const h=harness(t);h.store.startPolling(3000);await flush()
  assert.equal(h.calls.length,1);assert.equal(h.store.isRefreshing,false)
  assert.ok(h.calls[0].url.startsWith('/api/all?_t='));assert.ok(!h.calls[0].url.includes('view='))
- assert.equal(h.store.data.ai_last_prompt,'complete prompt')
+ assert.equal(h.store.data.ai_last_prompt,'')
  const trades=h.store.data.trades
  await h.tick(2999);assert.equal(h.calls.length,1)
  await h.tick(1);assert.equal(h.calls.length,2);assert.equal(h.store.isRefreshing,false)
@@ -136,4 +138,191 @@ test('malformed responses never clear the last complete snapshot',async t=>{
   h.setResponse(async()=>reply(bad));await h.store.fetchDashboard(true)
   assert.equal(h.store.data,previous);assert.ok(h.store.error)
  }
+})
+
+test('delayed 200 from an old session is discarded and does not overwrite newer session', async t => {
+  const h = harness(t)
+  const storeMap = new Map()
+  globalThis.localStorage = {
+    getItem: k => storeMap.get(k) || null,
+    setItem: (k, v) => storeMap.set(k, String(v)),
+    removeItem: k => storeMap.delete(k),
+  }
+  try {
+    globalThis.localStorage.setItem('okxquant.admin.session.id', 'session-A')
+    await h.store.fetchDashboard(true)
+    assert.equal(h.store.data.account_source_id, 'demo:a')
+
+    const waitA = deferred()
+    h.setResponse(url => url.startsWith('/api/all') ? waitA.promise : reply(good()))
+    const slowA = h.store.fetchDashboard(true)
+    await flush()
+
+    // Switch session
+    h.store.stopPolling()
+    globalThis.localStorage.setItem('okxquant.admin.session.id', 'session-B')
+    h.setResponse(async () => reply(good({ account_source_id: 'scope:B', account: { total_eq: 888 } })))
+    await h.store.fetchDashboard(true)
+    assert.equal(h.store.data.account_source_id, 'scope:B')
+    assert.equal(h.store.data.account.total_eq, 888)
+
+    waitA.resolve(reply(good({ account_source_id: 'scope:A', account: { total_eq: 999 } })))
+    await slowA
+    await flush()
+
+    assert.equal(h.store.data.account_source_id, 'scope:B')
+    assert.equal(h.store.data.account.total_eq, 888)
+  } finally {
+    delete globalThis.localStorage
+  }
+})
+
+test('delayed 200 from old account does not overwrite newer account and prompt does not leak across scope', async t => {
+  const h = harness(t)
+  const storeMap = new Map()
+  globalThis.localStorage = {
+    getItem: k => storeMap.get(k) || null,
+    setItem: (k, v) => storeMap.set(k, String(v)),
+    removeItem: k => storeMap.delete(k),
+  }
+  globalThis.localStorage.setItem('okxquant.admin.session.id', 'stable-session')
+  try {
+    await h.store.fetchDashboard(true)
+    assert.equal(h.store.data.account_source_id, 'demo:a')
+
+    const waitPromptA = deferred()
+    h.setResponse(url => {
+      if (url === '/api/ai/last-prompt') return waitPromptA.promise
+      return reply(good())
+    })
+    const pendingPromptA = h.store.fetchLatestPrompt()
+    await flush()
+
+    // Switch to account B
+    h.setResponse(async url => {
+      if (url === '/api/ai/last-prompt') return reply({ prompt: 'prompt-B', scope: 'demo:b' })
+      return reply(good({ account_source_id: 'demo:b', ai_last_prompt: '' }))
+    })
+    await h.store.fetchDashboard(true)
+    assert.equal(h.store.data.account_source_id, 'demo:b')
+    assert.equal(h.store.data.ai_last_prompt, '')
+
+    waitPromptA.resolve(reply({ prompt: 'prompt-A-leaked', scope: 'demo:a' }))
+    const resultA = await pendingPromptA
+    await flush()
+
+    assert.equal(resultA, '')
+    assert.equal(h.store.data.ai_last_prompt, '')
+  } finally {
+    delete globalThis.localStorage
+  }
+})
+
+test('token switch during await fetchDashboard in fetchLatestPrompt returns empty and does not touch cache', async t => {
+  const h = harness(t)
+  const storeMap = new Map()
+  globalThis.localStorage = {
+    getItem: k => storeMap.get(k) || null,
+    setItem: (k, v) => storeMap.set(k, String(v)),
+    removeItem: k => storeMap.delete(k),
+  }
+  globalThis.localStorage.setItem('okxquant.admin.session.id', 'token-initial')
+  try {
+    const waitDash = deferred()
+    h.setResponse(url => {
+      if (url.startsWith('/api/all')) return waitDash.promise
+      return reply({ prompt: 'leak', scope: 'demo:a' })
+    })
+
+    // Start fetchLatestPrompt which awaits fetchDashboard
+    const pending = h.store.fetchLatestPrompt()
+    await flush()
+
+    // During fetchDashboard await, token switches in localStorage
+    globalThis.localStorage.setItem('okxquant.admin.session.id', 'token-switched')
+
+    // Dashboard fetch finishes with demo:a
+    waitDash.resolve(reply(good()))
+    await flush()
+
+    const result = await pending
+    assert.equal(result, '', 'Switched token must return empty')
+  } finally {
+    delete globalThis.localStorage
+  }
+})
+
+test('missing response scope or mismatched scope in fetchLatestPrompt returns empty and is not cached', async t => {
+  const h = harness(t)
+  const storeMap = new Map()
+  globalThis.localStorage = {
+    getItem: k => storeMap.get(k) || null,
+    setItem: (k, v) => storeMap.set(k, String(v)),
+    removeItem: k => storeMap.delete(k),
+  }
+  globalThis.localStorage.setItem('okxquant.admin.session.id', 'stable-session')
+  try {
+    // 1. Missing scope in response payload
+    h.setResponse(url => {
+      if (url === '/api/ai/last-prompt') return reply({ prompt: 'unscoped text' }) // no scope
+      return reply(good({ ai_last_prompt: '' }))
+    })
+    const unscopedResult = await h.store.fetchLatestPrompt()
+    assert.equal(unscopedResult, '', 'Unscoped nonempty prompt must be rejected')
+    assert.equal(h.store.data.ai_last_prompt, '')
+
+    // 2. Mismatched scope in response payload
+    h.setResponse(url => {
+      if (url === '/api/ai/last-prompt') return reply({ prompt: 'wrong scope text', scope: 'other:scope' })
+      return reply(good({ ai_last_prompt: '' }))
+    })
+    const mismatchedResult = await h.store.fetchLatestPrompt()
+    assert.equal(mismatchedResult, '', 'Mismatched scope prompt must be rejected')
+    assert.equal(h.store.data.ai_last_prompt, '')
+
+    // 3. Matched scope is accepted and cached
+    h.setResponse(url => {
+      if (url === '/api/ai/last-prompt') return reply({ prompt: 'valid prompt', scope: 'demo:a' })
+      return reply(good({ ai_last_prompt: '' }))
+    })
+    const validResult = await h.store.fetchLatestPrompt()
+    assert.equal(validResult, 'valid prompt', 'Matched scope prompt must be accepted')
+    assert.equal(h.store.data.ai_last_prompt, 'valid prompt')
+  } finally {
+    delete globalThis.localStorage
+  }
+})
+
+
+test('verified prompt rendering receipt is invalid after account or session change', async t => {
+ const h=harness(t); const values=new Map([['okxquant.admin.session.id','viewer-session']])
+ globalThis.localStorage={getItem:k=>values.get(k)||null,setItem:(k,v)=>values.set(k,String(v)),removeItem:k=>values.delete(k)}
+ try {
+  h.setResponse(url=>reply(url==='/api/ai/last-prompt'?{prompt:'owned text',scope:'demo:a'}:good()))
+  assert.equal(await h.store.fetchLatestPrompt(),'owned text')
+  assert.deepEqual(h.store.getVerifiedPrompt(),{prompt:'owned text',scope:'demo:a'})
+  h.store.data.account_source_id='demo:b'
+  assert.equal(h.store.getVerifiedPrompt(),null)
+  h.store.data.account_source_id='demo:a';values.set('okxquant.admin.session.id','new-session')
+  assert.equal(h.store.getVerifiedPrompt(),null)
+ } finally {delete globalThis.localStorage}
+})
+
+test('manual audit opens fetch the latest prompt rather than reusing stale text', async t => {
+ const h=harness(t);globalThis.localStorage={getItem:()=> 'viewer-session',setItem(){},removeItem(){}}
+ let reads=0
+ try {
+  h.setResponse(url=>reply(url==='/api/ai/last-prompt'?{prompt:'record-'+(++reads),scope:'demo:a'}:good()))
+  assert.equal(await h.store.fetchLatestPrompt(),'record-1')
+  assert.equal(await h.store.fetchLatestPrompt(),'record-2')
+  assert.equal(reads,2)
+ } finally {delete globalThis.localStorage}
+})
+
+test('prompt modal renders verified receipts and clears on context change',()=>{
+ const source=readFileSync(new URL('../src/components/FloatingActions.vue',import.meta.url),'utf8')
+ assert.match(source,/store\.getVerifiedPrompt\(\)/)
+ assert.match(source,/verified\?\.prompt === value/)
+ assert.match(source,/flush: 'sync'/)
+ assert.doesNotMatch(source,/computed\(.*store\.data\?\.ai_last_prompt/)
 })

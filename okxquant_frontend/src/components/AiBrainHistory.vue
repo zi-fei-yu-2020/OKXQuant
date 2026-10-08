@@ -1,17 +1,33 @@
 <script setup lang="ts">
 import AppCard from './ui/AppCard.vue'
 
-import { computed, ref } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useDashboardStore } from '../stores/dashboard'
 import { Brain, ChevronDown, Users } from 'lucide-vue-next'
+import { getSessionToken, buildAuthHeaders, handleSessionResponse } from '../utils/sessionResponse'
 
 const store = useDashboardStore()
 const visibleCount = ref(24)
-const allHistory = computed(() => store.data?.ai_brain_history || [])
-const history = computed(() => allHistory.value.slice(0, visibleCount.value))
 const expanded = ref<Set<string>>(new Set())
 const loadingDetails = ref<Set<string>>(new Set())
 const historyKey = (item: any) => item?.history_id || JSON.stringify(item)
+
+
+
+const serverHistory = ref<any[] | null>(null)
+const serverTotal = ref<number | null>(null)
+const loadingHistory = ref(false)
+let fetchEpoch = 0
+let activeController: AbortController | null = null
+
+const allHistory = computed(() => {
+  if (serverHistory.value !== null) {
+    return serverHistory.value
+  }
+  return store.data?.ai_brain_history || []
+})
+
+const history = computed(() => allHistory.value.slice(0, visibleCount.value))
 
 async function toggle(item: any) {
   const key = historyKey(item)
@@ -26,7 +42,15 @@ async function toggle(item: any) {
   if (!item?.history_id || item?.details_loaded || loadingDetails.value.has(key)) return
   loadingDetails.value = new Set(loadingDetails.value).add(key)
   try {
-    const resp = await fetch(`/api/ai/history/${encodeURIComponent(item.history_id)}`, { cache: 'no-store' })
+    const session = getSessionToken()
+    const resp = await fetch(`/api/ai/history/${encodeURIComponent(item.history_id)}`, {
+      cache: 'no-store',
+      headers: buildAuthHeaders(session),
+    })
+    if (resp.status === 401 || resp.status === 403) {
+      handleSessionResponse(resp.status, session)
+      return
+    }
     if (resp.ok) Object.assign(item, await resp.json(), { details_loaded: true })
   } finally {
     const pending = new Set(loadingDetails.value)
@@ -34,7 +58,92 @@ async function toggle(item: any) {
     loadingDetails.value = pending
   }
 }
-</script>
+
+async function fetchServerHistory(offset = 0) {
+  if (activeController) {
+    activeController.abort()
+  }
+  const controller = new AbortController()
+  activeController = controller
+  const epoch = ++fetchEpoch
+
+  loadingHistory.value = true
+  try {
+    const session = getSessionToken()
+    const resp = await fetch(`/api/ai/history?limit=25&offset=${offset}`, {
+      signal: controller.signal,
+      headers: buildAuthHeaders(session),
+    })
+    if (resp.status === 401 || resp.status === 403) {
+      handleSessionResponse(resp.status, session)
+      return
+    }
+    if (!resp.ok) return
+    const json = await resp.json()
+    if (epoch !== fetchEpoch) return
+
+    if (Array.isArray(json?.items)) {
+      const currentList = offset === 0 ? [] : (serverHistory.value || [...allHistory.value])
+      const merged = [...currentList]
+      const knownIds = new Set(merged.map((x: any) => historyKey(x)))
+      for (const it of json.items) {
+        if (!knownIds.has(historyKey(it))) {
+          merged.push(it)
+          knownIds.add(historyKey(it))
+        }
+      }
+      serverHistory.value = merged
+      if (typeof json?.total === 'number') serverTotal.value = json.total
+    }
+  } catch {
+    // Aborted or offline
+  } finally {
+    if (epoch === fetchEpoch) {
+      loadingHistory.value = false
+      if (activeController === controller) activeController = null
+    }
+  }
+}
+
+async function handleLoadMore() {
+  visibleCount.value += 24
+  const currentLen = allHistory.value.length
+  if (serverTotal.value !== null && currentLen >= serverTotal.value) return
+  if (currentLen > 0) {
+    await fetchServerHistory(currentLen)
+  }
+}
+
+// Watch account scope changes
+watch(
+  () => store.data?.account_source_id,
+  (newScope, oldScope) => {
+    if (newScope !== oldScope) {
+      if (activeController) {
+        activeController.abort()
+        activeController = null
+      }
+      serverHistory.value = null
+      visibleCount.value = 24
+      if (typeof window !== 'undefined') {
+        void fetchServerHistory(0)
+      }
+    }
+  },
+)
+
+onMounted(() => {
+  if (typeof window !== 'undefined') {
+    void fetchServerHistory(0)
+  }
+})
+
+onUnmounted(() => {
+  if (activeController) {
+    activeController.abort()
+    activeController = null
+  }
+})</script>
 
 <template>
   <AppCard
@@ -257,6 +366,6 @@ async function toggle(item: any) {
         </div>
       </div>
     </div>
-    <button v-if="history.length < allHistory.length" class="ui-button ui-button--secondary ui-button--sm" @click="visibleCount += 24">加载更多历史记录（剩余 {{ allHistory.length - history.length }} 条）</button>
+    <button v-if="history.length < allHistory.length" class="ui-button ui-button--secondary ui-button--sm" :disabled="loadingHistory" @click="handleLoadMore()">加载更多历史记录（剩余 {{ allHistory.length - history.length }} 条）</button>
   </AppCard>
 </template>

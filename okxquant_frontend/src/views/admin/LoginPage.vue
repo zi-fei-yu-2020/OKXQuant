@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { APP_LOGO_SRC } from '../../config/branding'
 import { useAuthStore } from '../../stores/auth'
 import { useTheme } from '../../composables/useTheme'
@@ -19,6 +19,7 @@ import AppButton from '../../components/ui/AppButton.vue'
 import AppField from '../../components/ui/AppField.vue'
 const auth = useAuthStore()
 const router = useRouter()
+const route = useRoute()
 const { theme, toggleTheme } = useTheme()
 const username = ref('admin')
 const password = ref('')
@@ -30,7 +31,9 @@ async function handleLogin() {
   try {
     if (await auth.login(username.value.trim(), password.value)) {
       password.value = ''
-      await router.push('/admin/overview')
+      const rawNext = route.query.next
+      const isSafeLocal = typeof rawNext === 'string' && rawNext.startsWith('/') && !rawNext.startsWith('//')
+      await router.push(isSafeLocal ? rawNext : '/admin/overview')
     }
   } finally {
     loading.value = false

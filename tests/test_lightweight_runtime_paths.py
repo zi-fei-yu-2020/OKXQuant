@@ -251,7 +251,7 @@ class BrainOwnershipRegressionTests(unittest.TestCase):
             with patch.object(ai_brain_trader, "DATA_DIR", temporary), \
                  patch.object(ai_brain_trader, "AI_LAST_PROMPT_FILE", str(prompt_path)), \
                  patch.object(ai_brain_trader, "assert_cycle_current") as validate:
-                text = "frozen prompt ??"
+                text = "frozen prompt \u4e2d\u6587"
                 metadata = ai_brain_trader.publish_last_prompt_snapshot(text, environment, 123.0)
             validate.assert_called_once_with(environment, 123.0)
             self.assertEqual(prompt_path.read_bytes(), text.encode("utf-8"))
@@ -265,4 +265,3 @@ class BrainOwnershipRegressionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

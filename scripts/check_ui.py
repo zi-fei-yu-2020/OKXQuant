@@ -14,8 +14,8 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright, expect
 
-ADMIN = ['overview', 'llm', 'council', 'promptlib', 'evolution', 'interceptors', 'security', 'gateway', 'notify', 'agents', 'plugins', 'backup', 'audit', 'adminsys', 'about', 'decisions']
-PUBLIC = ['/', '/factors', '/news', '/lab', '/history', '/docs']
+ADMIN = ['overview', 'accounts', 'llm', 'council', 'promptlib', 'evolution', 'interceptors', 'security', 'gateway', 'notify', 'agents', 'plugins', 'backup', 'audit', 'adminsys', 'about', 'decisions']
+PUBLIC = ['/', '/decisions', '/market-intelligence', '/reviews', '/trades', '/docs']
 LAYOUT = """() => {
   const width = window.innerWidth;
   const visible = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e); return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; };

@@ -1,10 +1,13 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useToast } from '../composables/useFeedback'
-import { checkSessionResponse, SESSION_EXPIRED_MESSAGE } from '../utils/sessionResponse'
-
-const SESSION_TOKEN_KEY = 'okxquant.admin.session.id'
-const SESSION_USER_KEY = 'okxquant.admin.session.user'
+import {
+  checkSessionResponse,
+  SESSION_EXPIRED_MESSAGE,
+  SESSION_TOKEN_KEY,
+  SESSION_USER_KEY,
+  registerSessionExpireCallback,
+} from '../utils/sessionResponse'
 
 export interface AdminUser {
   id?: number
@@ -24,6 +27,8 @@ export const useAuthStore = defineStore('auth', () => {
     logout(false)
     useToast().error(SESSION_EXPIRED_MESSAGE)
   }
+
+  registerSessionExpireCallback(expireSession)
 
   function checkResponse(response: Response, checkedToken: string) {
     checkSessionResponse(response.status, checkedToken, token.value, expireSession)

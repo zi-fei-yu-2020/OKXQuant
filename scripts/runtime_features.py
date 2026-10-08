@@ -125,4 +125,3 @@ def save_config(payload: Any) -> dict[str, Any]:
             if os.path.exists(temporary):
                 os.unlink(temporary)
     return status()
-

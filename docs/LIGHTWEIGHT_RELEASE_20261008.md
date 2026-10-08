@@ -32,3 +32,30 @@ Production release order: source commit/push, server fast-forward pull, image bu
 ## Verification ledger
 
 Exact test counts, browser findings, deployed commit, workload notes and before/after measurements are appended after the final release gate. Static code review and unit tests are not described as live fills or real production mutation testing.
+
+
+## Local release verification (completed)
+
+- Isolated backend suite: **1,893 tests passed**, no external-operation violations.
+- Final Linux frontend suite: **258 tests passed, zero failures and zero skips**. TypeScript checks and production client build passed.
+- Edge layout review: **230 page/viewport/theme combinations**, zero document overflow and zero JavaScript errors. Seventeen admin routes and six front/document routes were covered at 320/390/768/1024/1440 widths in light/dark themes, plus keyboard focus, confirmation cancellation and mocked error interactions.
+- Functional browser gate: **17 checks passed** on a marked disposable source snapshot without exchange credentials or scheduling. Coverage includes actual unmocked authenticated home API success, all private-request session headers, current-session revocation, ordinary-admin permissions and navigation, today/all totals, unknowns, full-ledger pagination/search, legacy deep links, and scoped prompt audit reopen. Benign HTML/script text remains inert text.
+- Private prompt handling validates session and scope after asynchronous success as well as failure. Manual audit opens fetch current records, and the modal renders only a bound receipt, clearing it on account/session changes rather than trusting a raw monitoring field.
+- The operator-approved production profile is light, but **it has not yet been activated on the server**.
+
+## Deployment gate - not completed
+
+The original SSH route became intermittently unavailable (connection/authentication timeouts). An alternative route returned a different SSH host key and was rejected before authentication. Host verification was not disabled. No production entry pause, feature switch, image replacement or rollback was attempted during this release.
+
+Before proceeding, recover a connection to the originally verified server or independently verify the intended host through the provider console. Then build/test the release image, apply the approved maintenance procedure, verify service-UID read/write access to derived SQLite caches and runtime files, restore the original automatic-entry setting, and take matched post-release workload measurements. Do not run application-writing diagnostic imports as root when the service runs as UID 10001.
+
+The new pre-change production sample consumed 371.935 CPU seconds over 300 seconds (**123.978% of one core**) in the existing standard profile. There is **no post-release CPU measurement yet**; no reduction is claimed for undeployed code. Original production image at the last successful identity-verified read: `okxquant:build-ddb1b35`.
+
+
+## Final review disposition
+
+GPT-6-astra approved the bounded final store/viewer and backend closures for a non-deploying repository push. GPT-6-luna implemented the backend workload/statistics slices; gemini-3.8-flash-high was actually invoked through the configured Codex/Paseo provider for frontend implementation. Main integration independently ran the final Linux/browser gates and tightened ordinary-admin shortcuts and verified prompt rendering.
+
+Private audit text is rendered from a session/account-bound verified receipt, cleared synchronously on context changes; it is not taken from generic monitor payloads. Manual opens fetch the latest record rather than treating a same-account private cache as indefinitely current. Delayed successful responses and delayed authentication failures cannot publish another session/account's content.
+
+Production approval is separate and remains withheld. Repository CI only validates ordinary pushes; image publication is release-event driven. No release event or production deployment was initiated.

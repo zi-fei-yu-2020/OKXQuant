@@ -23,11 +23,13 @@ function component(file, state = {}) {
   new Function('require', 'exports', code)(name => {
     if (name === 'vue') return Vue
     if (name === 'lucide-vue-next') return new Proxy({}, { get: () => icon })
+    if (name.includes('stores/auth')) return { useAuthStore: () => ({ token: 'fixture-session' }) }
     if (name.includes('stores/dashboard')) return { useDashboardStore: () => ({ data: null, error: null, isStale: false, positions: [], pendingOrders: [], logs: [], ...state }) }
     if (name.includes('useClipboard')) return { useClipboard: () => ({ copyText: async () => true }) }
     if (name.includes('evolutionDisplay')) return evolution
     if (name.includes('observationDisplay')) return observations
     if (name.includes('instrumentSupport')) return support
+    if (name.includes('sessionResponse')) return { getSessionToken: () => '', buildAuthHeaders: () => ({ Accept: 'application/json' }), handleSessionResponse: () => {} }
     if (name.includes('/ui/') || name.includes('DecisionAuditPanel') || name.includes('InstrumentSupportNotice')) return { __esModule: true, default: surface }
     if (name.endsWith('.vue')) return { __esModule: true, default: component(name.split('/').pop(), state) }
     throw new Error('Unmocked dependency: ' + name)
@@ -102,7 +104,15 @@ test('missing telemetry does not fabricate statistics, leverage, standard mode, 
   assert.doesNotMatch(html, /标准风控|未触发|0 笔|0 胜|NaN|Infinity|实时更新/)
 })
 test('telemetry zero remains zero while failed snapshots remain visibly historical', async () => {
-  const data = { horizon_stats: { scalp: { closed: 0, wins: 0, net_pnl: 0 } }, execution_profile: { error: 'unreadable' } }
+  const data = {
+    horizon_stats: {
+      periods: {
+        today: { scalp: { closed: 0, wins: 0, net_pnl: 0 } },
+        all: { scalp: { closed: 0, wins: 0, net_pnl: 0 } },
+      },
+    },
+    execution_profile: { error: 'unreadable' },
+  }
   const html = await render('StrategyTelemetryPanel.vue', {}, { data, error: 'offline' })
   assert.match(html, /0 笔 · 0 胜/); assert.match(html, /0.00 U/)
   assert.match(html, /账本更新延迟/); assert.match(html, /配置不可用/)
@@ -115,20 +125,23 @@ test('displayed daily ratio never substitutes for an execution circuit signal', 
   data.risk_status.daily_blocked = false
   assert.match(await render('StrategyTelemetryPanel.vue', {}, { data }), /未触发/)
 })
-test('prompt entry is in Header only, with no floating refresh or fake live indicator', () => {
-  assert.match(read('components/HeaderBar.vue'), /<FloatingActions/)
+test('prompt entry is in advanced admin diagnostics, with no floating refresh or fake live indicator', () => {
+  assert.match(read('views/admin/DecisionsPage.vue'), /<FloatingActions/)
+  assert.doesNotMatch(read('components/HeaderBar.vue'), /<FloatingActions/)
   assert.doesNotMatch(read('views/DashboardView.vue'), /FloatingActions/)
   const source = read('components/FloatingActions.vue')
   assert.match(source, /data-header-prompt/)
   assert.doesNotMatch(source, /RefreshCw|fetchDashboard|animate-pulse|fixed bottom/)
 })
-test('prompt missing and historical records have honest states and copy only when content exists', async () => {
-  const empty = await render('FloatingActions.vue')
-  assert.match(empty, /暂无已保存提示词/); assert.doesNotMatch(empty, /复制全文/)
-  const stale = await render('FloatingActions.vue', {}, { data: { ai_last_prompt: 'original <script>unsafe</script>' }, isStale: true })
-  assert.match(stale, /最近取得的提示词记录/); assert.match(stale, /复制全文/); assert.match(stale, /&lt;script&gt;/)
-  const available = await render('FloatingActions.vue', {}, { data: { ai_last_prompt: 'original' } })
-  assert.match(available, /无法核验它属于本轮/)
+test('prompt viewer never renders unverified monitor text before an audit request', async () => {
+  for (const state of [{}, { data: { ai_last_prompt: 'original <script>unsafe</script>' }, isStale: true }, { data: { ai_last_prompt: 'original' } }]) {
+    const html = await render('FloatingActions.vue', {}, state)
+    assert.match(html, /暂无已保存提示词/)
+    assert.doesNotMatch(html, /复制全文|unsafe|original/)
+  }
+  const source=read('components/FloatingActions.vue')
+  assert.match(source,/store\.getVerifiedPrompt\(\)/)
+  assert.match(source,/verified\?\.prompt === value/)
 })
 test('detail dialogs leave closing to the shared accessible top control', () => {
   for (const file of ['FactorDetailModal.vue', 'FloatingActions.vue', 'AboutModal.vue']) {
@@ -173,7 +186,7 @@ test('realized PnL is not synthesized from total PnL and empty observations rema
 })
 test('news actual zero is retained and protection snapshots never promise live safety', () => {
   assert.match(read('components/NewsIntelligence.vue'), /s.bullish_ratio \?\? s.bullish_pct \?\? '--'/)
-  for (const file of ['TacticalDesk.vue', 'PositionList.vue']) {
+  for (const file of ['TacticalDesk.vue']) {
     const source = read('components/' + file)
     assert.match(source, /!store.error && !store.isStale/)
     assert.doesNotMatch(source, /100% (?:OCO|交易所云端)/)

@@ -6,9 +6,10 @@ import AppTable from './ui/AppTable.vue'
 import { isSettlementPending } from '../utils/tradeSettlement'
 import { tradeDuration } from '../utils/tradeDuration'
 import { observedNumber } from '../utils/observationDisplay'
+import { getSessionToken, buildAuthHeaders, handleSessionResponse } from '../utils/sessionResponse'
 import { feeAccounting, feeText, ledgerValue, ledgerNumberText, ledgerNumberColor } from '../utils/feeAccounting'
 
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useDashboardStore } from '../stores/dashboard'
 import { Receipt, Search } from 'lucide-vue-next'
 
@@ -17,9 +18,149 @@ const filter = ref<'all' | 'active' | 'closed'>('all')
 const keyword = ref('')
 const feeTrade = ref<any>(null)
 const feeDialogOpen = ref(false)
-function showFees(trade: any) { feeTrade.value = trade; feeDialogOpen.value = true }
+
+function showFees(trade: any) {
+  feeTrade.value = trade
+  feeDialogOpen.value = true
+  if (trade?.id && !trade.fee_details_loaded) {
+    void fetchTradeDetail(trade)
+  }
+}
+
+// Server pagination and filter state
+const serverTrades = ref<any[] | null>(null)
+const serverTotal = ref<number | null>(null)
+const serverCounts = ref<{ all?: number; active?: number; closed?: number; pending?: number } | null>(null)
+const offset = ref(0)
+const pageSize = 30
+const loadingTrades = ref(false)
+const tradesError = ref<string | null>(null)
+
+let activeController: AbortController | null = null
+let fetchGeneration = 0
+let searchDebounceTimer: ReturnType<typeof setTimeout> | undefined
+
+
+
+async function fetchTradeDetail(trade: any) {
+  try {
+    const session = getSessionToken()
+    const resp = await fetch(`/api/trades/${encodeURIComponent(trade.id)}`, {
+      headers: buildAuthHeaders(session),
+    })
+    if (resp.status === 401 || resp.status === 403) {
+      handleSessionResponse(resp.status, session)
+      return
+    }
+    if (resp.ok) {
+      const data = await resp.json()
+      Object.assign(trade, data, { fee_details_loaded: true })
+      if (feeTrade.value && feeTrade.value.id === trade.id) {
+        Object.assign(feeTrade.value, data)
+      }
+    }
+  } catch {}
+}
+
+async function fetchPage(newOffset = 0) {
+  offset.value = Math.max(0, newOffset)
+  const gen = ++fetchGeneration
+
+  if (activeController) {
+    activeController.abort()
+  }
+  const controller = new AbortController()
+  activeController = controller
+
+  loadingTrades.value = true
+  tradesError.value = null
+
+  try {
+    const params = new URLSearchParams()
+    params.set('limit', String(pageSize))
+    params.set('offset', String(offset.value))
+    params.set('state', filter.value)
+    if (keyword.value.trim()) {
+      params.set('q', keyword.value.trim())
+    }
+
+    const session = getSessionToken()
+    const resp = await fetch(`/api/trades?${params.toString()}`, {
+      signal: controller.signal,
+      headers: buildAuthHeaders(session),
+    })
+
+    if (resp.status === 401 || resp.status === 403) {
+      handleSessionResponse(resp.status, session)
+      throw new Error('会话已失效，请重新登录')
+    }
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`)
+    }
+
+    const json = await resp.json()
+    if (gen !== fetchGeneration) return
+
+    if (Array.isArray(json?.items)) {
+      serverTrades.value = json.items
+      if (typeof json?.total === 'number') serverTotal.value = json.total
+      if (json?.counts && typeof json.counts === 'object') {
+        serverCounts.value = json.counts
+      }
+    }
+  } catch (e: any) {
+    if (controller.signal.aborted || gen !== fetchGeneration) return
+    tradesError.value = e.message || '加载成交记录失败'
+  } finally {
+    if (gen === fetchGeneration) {
+      loadingTrades.value = false
+      if (activeController === controller) activeController = null
+    }
+  }
+}
+
+watch(filter, () => {
+  offset.value = 0
+  void fetchPage(0)
+})
+
+watch(keyword, () => {
+  clearTimeout(searchDebounceTimer)
+  searchDebounceTimer = setTimeout(() => {
+    offset.value = 0
+    void fetchPage(0)
+  }, 250)
+})
+
+watch(
+  () => store.data?.account_source_id,
+  (newScope, oldScope) => {
+    if (newScope !== oldScope) {
+      offset.value = 0
+      serverTrades.value = null
+      void fetchPage(0)
+    }
+  },
+)
+
+onMounted(() => {
+  if (typeof window !== 'undefined') {
+    void fetchPage(0)
+  }
+})
+
+onUnmounted(() => {
+  clearTimeout(searchDebounceTimer)
+  if (activeController) {
+    activeController.abort()
+    activeController = null
+  }
+})
 
 const trades = computed(() => {
+  if (serverTrades.value !== null) {
+    return serverTrades.value
+  }
   const all: any[] = store.data?.trades || []
   return all.filter((t) => {
     if (filter.value === 'active' && t.status !== 'holding') return false
@@ -35,12 +176,16 @@ const trades = computed(() => {
   })
 })
 
-const holdingCount = computed(
-  () => (store.data?.trades || []).filter((t: any) => t.status === 'holding').length,
-)
-const closedCount = computed(
-  () => (store.data?.trades || []).filter((t: any) => t.status !== 'holding').length,
-)
+const holdingCount = computed(() => {
+  if (serverCounts.value?.active !== undefined) return serverCounts.value.active
+  return (store.data?.trades || []).filter((t: any) => t.status === 'holding').length
+})
+
+const closedCount = computed(() => {
+  if (serverCounts.value?.closed !== undefined) return serverCounts.value.closed
+  return (store.data?.trades || []).filter((t: any) => t.status !== 'holding').length
+})
+
 
 function marginText(value: unknown): string {
   const n = observedNumber(value)
@@ -78,8 +223,7 @@ function strategyLabel(t: any): string {
 function horizonLabel(v: unknown, t?: any): string {
   if (sourcePendingLabel(t)) return '待确认'
   return v === 'scalp' ? '短线' : v === 'swing' ? '波段' : '未知'
-}
-</script>
+}</script>
 
 <template>
   <div class="trade-ledger space-y-3.5 min-w-0 max-w-full">
@@ -104,7 +248,7 @@ function horizonLabel(v: unknown, t?: any): string {
             class="text-xs sm:text-sm font-black font-mono uppercase tracking-wide"
             style="color: var(--text-main)"
           >
-            完整成交台账与生命周期履历
+            成交台账与生命周期履历
           </h2>
           <p class="text-xs font-mono mt-0.5" style="color: var(--text-muted)">
             以交易所已结算净额为准；缺失金额保留未知，费用可单独核对
@@ -112,8 +256,7 @@ function horizonLabel(v: unknown, t?: any): string {
         </div>
       </div>
       <div class="text-xs font-mono" style="color: var(--text-muted)">
-        持仓 <strong style="color: var(--color-brand)">{{ holdingCount }}</strong> · 已平仓
-        <strong style="color: var(--text-main)">{{ closedCount }}</strong>
+        持仓 <strong style="color: var(--color-brand)">{{ holdingCount }}</strong> · 已平仓（含待结算） <strong style="color: var(--text-main)">{{ closedCount }}</strong>
       </div>
     </AppCard>
 
@@ -336,16 +479,45 @@ function horizonLabel(v: unknown, t?: any): string {
       </template>
 
       <!-- Table Footer Summary -->
+      <div v-if="tradesError" class="px-4 py-2 text-xs border-t flex items-center justify-between" style="border-color: var(--border-subtle); color: var(--color-down)">
+        <span>{{ tradesError }}</span>
+        <button type="button" class="ui-button ui-button--secondary ui-button--sm py-0.5 px-2 text-xs" @click="fetchPage(offset)">重试加载</button>
+      </div>
       <div
-        class="px-4 py-2.5 border-t flex items-center justify-between text-[11px] font-mono shrink-0"
+        class="px-4 py-2.5 border-t flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono shrink-0"
         style="
           border-color: var(--border-subtle);
           background-color: var(--bg-card-subtle);
           color: var(--text-faint);
         "
       >
-        <span>已载入 {{ trades.length }} 笔真实撮合成交记录</span>
-        <span class="hidden sm:inline">OKX 当前账户历史履历</span>
+        <span v-if="serverTotal !== null && serverTotal > pageSize">
+          已载入第 {{ offset + 1 }} - {{ Math.min(offset + trades.length, serverTotal) }} 笔，全账户共 {{ serverTotal }} 笔已保留的交易生命周期记录（含待结算，分页查阅）
+        </span>
+        <span v-else>已载入 {{ trades.length }} 笔已保留的交易生命周期记录（含待结算）</span>
+
+        <div v-if="serverTotal !== null && serverTotal > pageSize" class="flex items-center gap-2">
+          <button
+            type="button"
+            class="px-2 py-0.5 rounded border transition-colors text-xs"
+            style="border-color: var(--border-subtle); background: var(--bg-card)"
+            :disabled="offset === 0 || loadingTrades"
+            @click="fetchPage(offset - pageSize)"
+          >
+            上一页
+          </button>
+          <span class="num-tabular">{{ Math.floor(offset / pageSize) + 1 }} / {{ Math.ceil(serverTotal / pageSize) }}</span>
+          <button
+            type="button"
+            class="px-2 py-0.5 rounded border transition-colors text-xs"
+            style="border-color: var(--border-subtle); background: var(--bg-card)"
+            :disabled="offset + pageSize >= serverTotal || loadingTrades"
+            @click="fetchPage(offset + pageSize)"
+          >
+            下一页
+          </button>
+        </div>
+        <span v-else class="hidden sm:inline">OKX 当前账户历史履历</span>
       </div>
     </AppCard>
     <AppDialog v-model:open="feeDialogOpen" :title="(feeTrade?.inst || '') + ' 费用明细'" description="已结算交易的手续费证据；与订单操作无关。">

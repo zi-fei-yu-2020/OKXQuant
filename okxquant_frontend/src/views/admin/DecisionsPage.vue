@@ -6,6 +6,7 @@ import AppCard from '../../components/ui/AppCard.vue'
 import DecisionAuditPanel from '../../components/DecisionAuditPanel.vue'
 import CapitalPoolPanel from '../../components/CapitalPoolPanel.vue'
 import ScenarioShadowPanel from '../../components/ScenarioShadowPanel.vue'
+import FloatingActions from '../../components/FloatingActions.vue'
 import type { ScenarioShadowStatus } from '../../utils/scenarioShadow'
 import type { CapitalPoolStatus } from '../../utils/capitalPool'
 import type { WaitAuditState, DecisionCycle } from '../../utils/waitAudit'
@@ -73,20 +74,23 @@ onMounted(() => {
 <template>
   <div class="space-y-4 max-w-[2160px] mx-auto">
     <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading" @click="loadDecisions()">重试</button></div>
-    <div class="flex items-center justify-between">
+    <div class="flex flex-wrap items-center justify-between gap-3">
       <p class="text-sm font-sans" style="color: var(--text-muted)">
         核对 AI 宏观基调与逐币动作，并审查交易、后台与任务调度三路实时日志流。
       </p>
-      <span
-        class="text-xs font-sans px-2 py-1 rounded border font-bold"
-        style="
-          background-color: var(--color-brand-bg);
-          color: var(--color-brand);
-          border-color: var(--color-brand-border);
-        "
-      >
-        日常运行 · 决策与审计
-      </span>
+      <div class="flex items-center gap-2">
+        <FloatingActions />
+        <span
+          class="text-xs font-sans px-2 py-1 rounded border font-bold"
+          style="
+            background-color: var(--color-brand-bg);
+            color: var(--color-brand);
+            border-color: var(--color-brand-border);
+          "
+        >
+          日常运行 · 决策与审计
+        </span>
+      </div>
     </div>
 
     <CapitalPoolPanel :pool="capital" />

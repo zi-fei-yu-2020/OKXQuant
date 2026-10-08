@@ -1,3 +1,4 @@
+import { getSessionToken, buildAuthHeaders, handleSessionResponse } from '../utils/sessionResponse'
 import { resolveMacroAnalysis, macroStatusLabel } from '../utils/macroAnalysis'
 import { defineStore } from 'pinia'
 import { dashboardIsStale } from '../utils/dashboardHealth'
@@ -18,6 +19,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const isConnected = ref<boolean>(true)
   const pollingTimer = ref<any>(null)
   const showAboutModal = ref<boolean>(false)
+  const verifiedPromptCache = ref<{ session: string; scope: string; prompt: string } | null>(null)
   // Getters
   const account = computed(() => data.value?.account || null)
   const positions = computed<PositionItem[]>(() => data.value?.positions_summary?.items || [])
@@ -92,43 +94,77 @@ export const useDashboardStore = defineStore('dashboard', () => {
   let manualRequests = 0
   async function fetchDashboard(silent = false) {
     const generation = refreshGeneration
+    const session = getSessionToken()
     if (!silent) { manualRequests += 1; isRefreshing.value = true }
-    try { await sharedFetch('monitoring:' + generation, () => refreshDashboard(generation)) }
+    try { await sharedFetch('monitoring:' + session + ':' + generation, () => refreshDashboard(generation, session)) }
     finally { if (!silent) { manualRequests -= 1; isRefreshing.value = manualRequests > 0 } }
   }
 
-  async function refreshDashboard(generation: number) {
-    if (generation !== refreshGeneration) return
+  async function refreshDashboard(generation: number, session: string) {
+    if (generation !== refreshGeneration || session !== getSessionToken()) return
     const controller = new AbortController()
     activeController = controller
     const timeout = setTimeout(() => controller.abort(), 12000)
+    const headers = buildAuthHeaders(session)
     try {
       const resp = await fetch(`/api/all?_t=${Date.now()}`, {
         signal: controller.signal,
-        headers: {
-          'Accept': 'application/json',
-        },
+        headers,
       })
+      if (resp.status === 401 || resp.status === 403) {
+        handleSessionResponse(resp.status, session)
+      }
       if (!resp.ok) {
         throw new Error(`HTTP ${resp.status}: ${resp.statusText}`)
       }
       const json: DashboardResponse = await resp.json()
       if (generation !== refreshGeneration) return
+
+      // Token success guard: do not publish JSON from an obsolete session!
+      const currentToken = getSessionToken()
+      if (session !== currentToken) {
+        return
+      }
+
       if (!json || typeof json !== 'object' || Array.isArray(json) || !json.account || typeof json.account !== 'object' || Array.isArray(json.account)) {
         throw new Error('Invalid dashboard snapshot')
       }
+
+      // Always strip unsolicited json.ai_last_prompt from monitoring responses
+      if ('ai_last_prompt' in json) {
+        delete (json as any).ai_last_prompt
+      }
+      json.ai_last_prompt = ''
+
       const previous = data.value
       const sameScope = !!json.account_source_id && previous?.account_source_id === json.account_source_id
+      if (!sameScope) {
+        verifiedPromptCache.value = null
+        if (previous && !json.ai_last_prompt) {
+          json.ai_last_prompt = ''
+        }
+      }
+
       const retain = sameScope && observedNumber(previous?.account?.total_eq) !== null &&
         (json.initializing === true || observedNumber(json.account.total_eq) === null)
       const next = retain ? { ...previous!, initializing: true, is_stale: true,
         data_health: { ...json.data_health, status: 'STALE' as const, partial: true } } : json
+
+      // On same scope, restore verified prompt cache if available
+      if (
+        verifiedPromptCache.value &&
+        verifiedPromptCache.value.session === session &&
+        verifiedPromptCache.value.scope === json.account_source_id
+      ) {
+        next.ai_last_prompt = verifiedPromptCache.value.prompt
+      }
+
       data.value = sameScope ? shareSnapshot(previous, next) : next
       if (!retain) lastUpdated.value = new Date()
       isConnected.value = true
       error.value = null
     } catch (err: any) {
-      if (generation !== refreshGeneration) return
+      if (generation !== refreshGeneration || session !== getSessionToken()) return
       console.error('[DashboardStore] fetch failed:', err)
       error.value = err.message || '获取数据失败'
       isConnected.value = false
@@ -140,14 +176,64 @@ export const useDashboardStore = defineStore('dashboard', () => {
   }
 
   async function fetchLatestPrompt(): Promise<string> {
-    const existing = data.value?.ai_last_prompt?.trim()
-    if (existing) return existing
-    const resp = await fetch('/api/ai/last-prompt', { headers: { Accept: 'application/json' }, cache: 'no-store' })
+    const session = getSessionToken()
+    if (!session) return ''
+
+    // Always establish/validate fresh authoritative scope before using cache
+    await fetchDashboard(true)
+
+    // (a) Immediately AFTER await fetchDashboard(true), recheck session and connection
+    if (session !== getSessionToken() || !isConnected.value || error.value) {
+      return ''
+    }
+
+    const capturedScope = data.value?.account_source_id || ''
+    if (!capturedScope) {
+      // Unverified account ownership returns empty without caching
+      return ''
+    }
+
+    // Audit opens are rare: fetch the latest record instead of reusing a
+    // potentially stale private prompt merely because the account is unchanged.
+    const headers = buildAuthHeaders(session)
+    const resp = await fetch('/api/ai/last-prompt', { headers, cache: 'no-store' })
+    if (resp.status === 401 || resp.status === 403) {
+      handleSessionResponse(resp.status, session)
+    }
     if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`)
     const payload = await resp.json()
+
+    // Required post-await guards:
+    // 1. Session token must still match
+    const activeToken = getSessionToken()
+    if (session !== activeToken) {
+      return ''
+    }
+
+    // 2. Account scope must still match what was captured before the request
+    const activeScope = data.value?.account_source_id || ''
+    if (!capturedScope || capturedScope !== activeScope) {
+      return ''
+    }
+
+    // (b) Nonempty prompt MUST have payload.scope === capturedScope
     const prompt = typeof payload?.prompt === 'string' ? payload.prompt : ''
-    if (data.value) data.value = { ...data.value, ai_last_prompt: prompt }
+    if (prompt) {
+      if (payload?.scope !== capturedScope) {
+        return ''
+      }
+      verifiedPromptCache.value = { session, scope: capturedScope, prompt }
+      if (data.value && data.value.account_source_id === capturedScope) {
+        data.value = { ...data.value, ai_last_prompt: prompt }
+      }
+    }
     return prompt
+  }
+
+  function getVerifiedPrompt(): { prompt: string; scope: string } | null {
+    const record = verifiedPromptCache.value
+    if (!record || record.session !== getSessionToken() || record.scope !== data.value?.account_source_id) return null
+    return { prompt: record.prompt, scope: record.scope }
   }
 
   function onVisible() {
@@ -195,6 +281,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     showAboutModal,
     fetchDashboard,
     fetchLatestPrompt,
+    getVerifiedPrompt,
     startPolling,
     stopPolling,
   }

@@ -30,9 +30,23 @@ async function load() {
 }
 
 function statusColor(s: string) {
+  if (s === 'disabled') return 'text-[var(--text-muted)]'
   if (['success', 'running', 'online', 'idle'].includes(s)) return 'text-emerald-400'
   if (['failed', 'error', 'offline'].includes(s)) return 'text-rose-400'
   return 'text-amber-400'
+}
+
+function agentHealthLabel(a: any): string {
+  if (a.health === 'disabled' || a.automatic_enabled === false) {
+    return (a.id?.includes('evolution') || a.role?.includes('evolution')) ? '未启用（可手动复盘）' : '未启用'
+  }
+  return a.health || '--'
+}
+
+function agentOutputLabel(a: any): string {
+  if (a.output_age_seconds != null) return Math.round(a.output_age_seconds / 60) + ' 分钟前'
+  if (a.health === 'disabled' || a.automatic_enabled === false) return a.output ? '历史产物' : '未启用'
+  return a.output ? '冷启动' : '无产物'
 }
 
 onMounted(load)
@@ -105,7 +119,7 @@ useErrorFeedback(errText)
               >
                 <td class="py-2.5 px-4 font-bold" style="color: var(--text-main)">{{ a.name }}</td>
                 <td class="py-2.5 px-3" style="color: var(--text-muted)">{{ a.role }}</td>
-                <td class="py-2.5 px-3 font-bold" :class="statusColor(a.health)">{{ a.health }}</td>
+                <td class="py-2.5 px-3 font-bold" :class="statusColor(a.health)">{{ agentHealthLabel(a) }}</td>
                 <td class="py-2.5 px-3 num-tabular" style="color: var(--text-faint)">
                   {{ a.last_run_at || '尚未调度' }}
                 </td>
@@ -113,13 +127,7 @@ useErrorFeedback(errText)
                   {{ a.last_run_status }}
                 </td>
                 <td class="py-2.5 px-4 text-right" style="color: var(--text-muted)">
-                  {{
-                    a.output_age_seconds != null
-                      ? Math.round(a.output_age_seconds / 60) + ' 分钟前'
-                      : a.output
-                        ? '冷启动'
-                        : '无产物'
-                  }}
+                  {{ agentOutputLabel(a) }}
                 </td>
               </tr>
             </tbody>

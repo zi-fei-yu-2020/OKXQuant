@@ -1,29 +1,113 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import AppCard from './ui/AppCard.vue'
 import AppBadge from './ui/AppBadge.vue'
 import { useDashboardStore } from '../stores/dashboard'
+
 const store = useDashboardStore()
+const activePeriod = ref<'today' | 'all'>('today')
+
 const stats = computed(() => store.data?.horizon_stats || {})
 const profile = computed(() => store.data?.execution_profile)
 const wait = computed(() => store.data?.decision_cycle)
 const waitState = computed(() => store.data?.wait_state)
 const execution = computed(() => profile.value?.execution || {})
-const stat = (key: string) => stats.value[key] || {}
+
+const periodsData = computed(() => ((stats.value as any)?.periods as Record<string, any>) || null)
+const activePeriodData = computed(() => {
+  if (periodsData.value) {
+    return periodsData.value[activePeriod.value] || null
+  }
+  return null
+})
+
+const isUnavailable = computed(() => stats.value?.error === 'statistics_unavailable')
+
+function stat(key: string): any {
+  if (isUnavailable.value || !activePeriodData.value) return {}
+  return activePeriodData.value[key] || {}
+}
+
 const number = (v: unknown): number | null => {
   if (typeof v !== 'number' && (typeof v !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(v.trim()))) return null
   const n = Number(v)
   return Number.isFinite(n) ? n : null
 }
-const pct = (v: unknown) => { const n = number(v); return n === null || n < 0 ? '--' : Number((n * 100).toFixed(4)) + '%' }
-const money = (v: unknown) => { const n = number(v); return n === null ? '--' : n.toFixed(2) + ' U' }
-const count = (v: unknown) => { const n = number(v); return n !== null && Number.isSafeInteger(n) && n >= 0 ? n : '--' }
-const leverage = computed(() => { const limits = profile.value?.mode_limits; const scalp = number(limits?.scalp?.max_leverage), swing = number(limits?.swing?.max_leverage); if (scalp !== null && swing !== null) return `波段 ${swing}x · 短线最高 ${scalp}x`; const n = number(execution.value.max_leverage); return n !== null && n > 0 ? `${n}x（基础上限）` : '未提供' })
-const riskPerTrade = computed(() => { const limits = profile.value?.mode_limits; return limits ? `短线 ${pct(limits.scalp?.per_trade_equity_pct)} · 波段 ${pct(limits.swing?.per_trade_equity_pct)}` : pct(execution.value.per_trade_equity_pct) })
-const hasStats = computed(() => ['scalp', 'swing'].some(key => number(stat(key).closed) !== null))
-const statsStatusLabel = computed(() => store.data?.risk_status?.daily_blocked === true ? '日内熔断期间' : store.error || store.isStale ? '账本更新延迟' : '已结算样本')
-const profitTone = (v: unknown) => { const n = number(v); return n === null ? 'var(--text-muted)' : n >= 0 ? 'var(--color-up)' : 'var(--color-down)' }
-const profileLabel = computed(() => { const id = execution.value.id; return id === 'standard' ? '标准风控' : id === 'small300' ? '300U 小资金' : execution.value.label || '未设置' })
+
+const pct = (v: unknown) => {
+  const n = number(v)
+  return n === null || n < 0 ? '--' : Number((n * 100).toFixed(4)) + '%'
+}
+
+const money = (v: unknown) => {
+  const n = number(v)
+  return n === null ? '--' : n.toFixed(2) + ' U'
+}
+
+const count = (v: unknown) => {
+  const n = number(v)
+  return n !== null && Number.isSafeInteger(n) && n >= 0 ? n : '--'
+}
+
+function horizonNetPnlText(h: any): string {
+  const val = number(h?.net_pnl)
+  if (val !== null) return money(val)
+  const obs = number(h?.observed?.net_pnl)
+  if (obs !== null) return money(obs) + ' (部分)'
+  return '--'
+}
+
+function horizonWinRateText(h: any): string {
+  const closed = number(h?.closed)
+  if (closed === null || closed <= 0) return '--'
+  const rate = number(h?.win_rate)
+  if (rate !== null && rate >= 0 && rate <= 1) {
+    return (rate * 100).toFixed(1) + '%'
+  }
+  const wins = number(h?.wins)
+  if (wins !== null && closed > 0) {
+    return ((wins / closed) * 100).toFixed(1) + '%'
+  }
+  return '--'
+}
+
+const leverage = computed(() => {
+  const limits = profile.value?.mode_limits
+  const scalp = number(limits?.scalp?.max_leverage)
+  const swing = number(limits?.swing?.max_leverage)
+  if (scalp !== null && swing !== null) return `波段 ${swing}x · 短线最高 ${scalp}x`
+  const n = number(execution.value.max_leverage)
+  return n !== null && n > 0 ? `${n}x（基础上限）` : '未提供'
+})
+
+const riskPerTrade = computed(() => {
+  const limits = profile.value?.mode_limits
+  return limits ? `短线 ${pct(limits.scalp?.per_trade_equity_pct)} · 波段 ${pct(limits.swing?.per_trade_equity_pct)}` : pct(execution.value.per_trade_equity_pct)
+})
+
+const hasStats = computed(() => {
+  if (isUnavailable.value || !activePeriodData.value) return false
+  return ['scalp', 'swing'].some((key) => number(activePeriodData.value[key]?.closed) !== null)
+})
+
+const statsStatusLabel = computed(() => {
+  if (isUnavailable.value) return '统计暂不可用'
+  if (store.data?.risk_status?.daily_blocked === true) return '日内熔断期间'
+  if (store.error || store.isStale) return '账本更新延迟'
+  if (periodsData.value !== null && !activePeriodData.value) return '周期暂无数据'
+  return '已结算样本'
+})
+
+const profitTone = (v: unknown) => {
+  const n = number(v)
+  return n === null ? 'var(--text-muted)' : n >= 0 ? 'var(--color-up)' : 'var(--color-down)'
+}
+
+const profileLabel = computed(() => {
+  const id = execution.value.id
+  return id === 'standard' ? '标准风控' : id === 'small300' ? '300U 小资金' : execution.value.label || '未设置'
+})
+
 const statusLabel = computed(() => {
   if ((store.data?.risk_status?.unresolved_entries ?? 0) > 0) return '待核对'
   if (!wait.value && !waitState.value) return '尚未取得'
@@ -37,23 +121,211 @@ const statusLabel = computed(() => {
   if (status === 'running' || status === 'pending') return '处理中'
   return '等待'
 })
-const statusTone = computed(() => ['不可用', '待补全', '已熔断', '未通过', '待核对'].includes(statusLabel.value) ? 'warning' : statusLabel.value === '有候选' ? 'brand' : 'neutral')
+
+const statusTone = computed(() =>
+  ['不可用', '待补全', '已熔断', '未通过', '待核对'].includes(statusLabel.value)
+    ? 'warning'
+    : statusLabel.value === '有候选'
+      ? 'brand'
+      : 'neutral'
+)
+
 const dailyLossPct = computed(() => {
   const value = number(store.data?.risk_status?.daily_drawdown)
   return value === null ? null : -value * 100
 })
+
 const dailyLimitPct = computed(() => {
   const value = number(store.data?.risk_status?.daily_threshold ?? execution.value.daily_drawdown_pct)
   return value !== null && value > 0 ? value * 100 : null
 })
+
 const dailyCircuitTriggered = computed(() => store.data?.risk_status?.daily_blocked)
-const signedPct = (value: number | null) => value === null ? '--' : `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
+const signedPct = (value: number | null) => (value === null ? '--' : `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`)
+
+// Period metadata
+const metadataTimezone = computed(() => activePeriodData.value?.timezone || stats.value?.timezone || 'Asia/Shanghai')
+const metadataAsOf = computed(() => activePeriodData.value?.as_of || stats.value?.as_of || null)
+const metadataScope = computed(() => activePeriodData.value?.scope || stats.value?.scope || (store.data?.okx_environment === 'demo' ? '模拟盘' : '实盘'))
+const coverageStart = computed(() => activePeriodData.value?.coverage?.start || (stats.value as any)?.coverage?.start || null)
+
+// Unknown stats
+const unknownStat = computed(() => stat('unknown'))
+const hasUnknownOrders = computed(() => {
+  const u = unknownStat.value
+  const c = number(u?.closed) || 0
+  const o = number(u?.opened) || 0
+  const p = number(u?.pending_settlements) || 0
+  return c > 0 || o > 0 || p > 0
+})
+
+// Floating PnL from positions
+const floatingPnl = computed(() => {
+  const items = store.positions || []
+  let sum = 0
+  let hasValid = false
+  for (const it of items) {
+    const p = number(it?.upl || (it as any)?.floating_pnl)
+    if (p !== null) {
+      sum += p
+      hasValid = true
+    }
+  }
+  return hasValid ? sum : null
+})
 </script>
 <template>
   <div class="strategy-telemetry" data-strategy-telemetry>
-    <AppCard class="telemetry-card telemetry-card--profile"><div class="telemetry-card__heading"><div><p class="telemetry-card__eyebrow">执行模式</p><h3>{{ profileLabel }}</h3></div><AppBadge :tone="profile?.error ? 'warning' : execution.id ? 'brand' : 'neutral'">{{ profile?.error ? '配置不可用' : execution.id === 'standard' ? '标准风控' : execution.id === 'small300' ? '300U 小资金' : execution.id || '尚未取得' }}</AppBadge></div><div class="telemetry-card__body telemetry-card__params"><div><span>单笔风险</span><strong>{{ riskPerTrade }}</strong></div><div><span>最大杠杆</span><strong>{{ leverage }}</strong></div><div><span>持仓上限</span><strong>{{ count(execution.max_active_instruments) }} 个</strong></div><div><span>保证金上限</span><strong>{{ number(execution.total_margin_usdt) === null && execution.id === 'standard' ? '按账户可用资金' : money(execution.total_margin_usdt) }}</strong></div></div></AppCard>
-    <AppCard class="telemetry-card telemetry-card--stats"><div class="telemetry-card__heading"><div><p class="telemetry-card__eyebrow">策略统计</p><h3>短线 / 波段</h3></div><AppBadge :tone="store.error || store.isStale ? 'warning' : 'neutral'">{{ !hasStats ? '暂无统计' : statsStatusLabel }}</AppBadge></div><div class="telemetry-card__body telemetry-card__stats"><div class="telemetry-stat"><span>短线净盈亏</span><strong :style="{color:profitTone(stat('scalp').net_pnl)}">{{ money(stat('scalp').net_pnl) }}</strong><small>{{ count(stat('scalp').closed) }} 笔 · {{ count(stat('scalp').wins) }} 胜</small></div><div class="telemetry-stat"><span>波段净盈亏</span><strong :style="{color:profitTone(stat('swing').net_pnl)}">{{ money(stat('swing').net_pnl) }}</strong><small>{{ count(stat('swing').closed) }} 笔 · {{ count(stat('swing').wins) }} 胜</small></div></div></AppCard>
-    <AppCard class="telemetry-card telemetry-card--decision"><div class="telemetry-card__heading"><div><p class="telemetry-card__eyebrow">决策状态</p><h3>当前状态</h3></div><AppBadge :tone="statusTone" data-decision-status>{{ statusLabel }}</AppBadge></div><div class="telemetry-card__body telemetry-card__decision"><div class="telemetry-decision__meta"><span>已审查 <strong>{{ wait?.evaluated_count ?? '--' }}</strong></span><span>候选 <strong>{{ wait?.counts?.entry_candidate ?? '--' }}</strong></span><span title="执行层账户与资金分配的日内权益回撤，含已结账本检查">日内权益回撤 <strong>{{ signedPct(dailyLossPct) }}</strong></span><span>熔断阈值 <strong>{{ dailyLimitPct === null ? '--' : dailyLimitPct.toFixed(1) + '%' }}</strong></span><span>状态 <strong :style="{ color: dailyCircuitTriggered ? 'var(--color-down)' : 'var(--text-muted)' }">{{ dailyCircuitTriggered === true ? '已触发' : dailyCircuitTriggered === false ? '未触发' : '待核验' }}</strong></span></div></div></AppCard>
+    <!-- Card 1: Execution Profile -->
+    <AppCard class="telemetry-card telemetry-card--profile">
+      <div class="telemetry-card__heading">
+        <div>
+          <p class="telemetry-card__eyebrow">执行模式</p>
+          <h3>{{ profileLabel }}</h3>
+        </div>
+        <AppBadge :tone="profile?.error ? 'warning' : execution.id ? 'brand' : 'neutral'">
+          {{ profile?.error ? '配置不可用' : execution.id === 'standard' ? '标准风控' : execution.id === 'small300' ? '300U 小资金' : execution.id || '尚未取得' }}
+        </AppBadge>
+      </div>
+      <div class="telemetry-card__body telemetry-card__params">
+        <div><span>单笔风险</span><strong>{{ riskPerTrade }}</strong></div>
+        <div><span>最大杠杆</span><strong>{{ leverage }}</strong></div>
+        <div><span>持仓上限</span><strong>{{ count(execution.max_active_instruments) }} 个</strong></div>
+        <div><span>保证金上限</span><strong>{{ number(execution.total_margin_usdt) === null && execution.id === 'standard' ? '按账户可用资金' : money(execution.total_margin_usdt) }}</strong></div>
+      </div>
+    </AppCard>
+
+    <!-- Card 2: Strategy Telemetry with TODAY / ALL tabs -->
+    <AppCard class="telemetry-card telemetry-card--stats">
+      <div class="telemetry-card__heading">
+        <div>
+          <p class="telemetry-card__eyebrow">策略统计</p>
+          <div class="flex items-center gap-2">
+          <span v-if="isUnavailable" class="text-amber-500 font-medium">
+            统计提示：当前账户历史分段统计尚未完成聚合
+          </span>
+          <span v-else-if="periodsData !== null && !activePeriodData" class="text-amber-500 font-medium">
+            周期提示：当前所选周期 ({{ activePeriod === 'today' ? '当日统计' : '全局统计' }}) 暂无分段统计
+          </span>
+            <h3>短线 / 波段</h3>
+            <!-- Responsive accessible tabs for TODAY / ALL -->
+            <div
+              v-if="periodsData"
+              class="inline-flex rounded-md border p-0.5 text-xs font-mono"
+              role="tablist"
+              aria-label="策略统计周期"
+              style="background: var(--bg-card-subtle); border-color: var(--border-subtle)"
+            >
+              <button
+                type="button"
+                role="tab"
+                :aria-selected="activePeriod === 'today'"
+                class="px-2 py-0.5 rounded transition-colors text-[11px]"
+                :class="activePeriod === 'today' ? 'bg-[var(--bg-card)] font-bold text-[var(--color-brand)] shadow-xs' : 'text-[var(--text-muted)]'"
+                @click="activePeriod = 'today'"
+              >
+                当日统计
+              </button>
+              <button
+                type="button"
+                role="tab"
+                :aria-selected="activePeriod === 'all'"
+                class="px-2 py-0.5 rounded transition-colors text-[11px]"
+                :class="activePeriod === 'all' ? 'bg-[var(--bg-card)] font-bold text-[var(--color-brand)] shadow-xs' : 'text-[var(--text-muted)]'"
+                @click="activePeriod = 'all'"
+              >
+                全局统计
+              </button>
+            </div>
+          </div>
+        </div>
+        <AppBadge :tone="store.error || store.isStale ? 'warning' : 'neutral'">
+          {{ !hasStats ? '暂无统计' : statsStatusLabel }}
+        </AppBadge>
+      </div>
+
+      <div class="telemetry-card__body telemetry-card__stats">
+        <!-- Scalp Stats -->
+        <div class="telemetry-stat">
+          <div class="flex items-center justify-between">
+            <span>短线净盈亏</span>
+            <span v-if="horizonWinRateText(stat('scalp')) !== '--'" class="text-[10px] text-[var(--text-faint)]">
+              胜率 {{ horizonWinRateText(stat('scalp')) }}
+            </span>
+          </div>
+          <strong :style="{ color: profitTone(stat('scalp').net_pnl) }">
+            {{ horizonNetPnlText(stat('scalp')) }}
+          </strong>
+          <small>
+            {{ count(stat('scalp').closed) }} 笔 · {{ count(stat('scalp').wins) }} 胜
+            <template v-if="number(stat('scalp').pending_settlements)">
+              · {{ stat('scalp').pending_settlements }} 待结
+            </template>
+          </small>
+        </div>
+
+        <!-- Swing Stats -->
+        <div class="telemetry-stat">
+          <div class="flex items-center justify-between">
+            <span>波段净盈亏</span>
+            <span v-if="horizonWinRateText(stat('swing')) !== '--'" class="text-[10px] text-[var(--text-faint)]">
+              胜率 {{ horizonWinRateText(stat('swing')) }}
+            </span>
+          </div>
+          <strong :style="{ color: profitTone(stat('swing').net_pnl) }">
+            {{ horizonNetPnlText(stat('swing')) }}
+          </strong>
+          <small>
+            {{ count(stat('swing').closed) }} 笔 · {{ count(stat('swing').wins) }} 胜
+            <template v-if="number(stat('swing').pending_settlements)">
+              · {{ stat('swing').pending_settlements }} 待结
+            </template>
+          </small>
+        </div>
+      </div>
+
+      <!-- Additional Stats Info Row: Unclassified & Floating PnL & Metadata Note -->
+      <div
+        v-if="hasUnknownOrders || floatingPnl !== null || metadataAsOf"
+        class="telemetry-card__footer col-span-full pt-2 border-t flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono text-[var(--text-faint)]"
+        style="border-color: var(--border-subtle)"
+      >
+        <div class="flex items-center gap-2">
+          <span v-if="hasUnknownOrders" class="text-amber-500 font-medium">
+            未分类订单: {{ count(unknownStat.closed) }} 笔平仓 · {{ count(unknownStat.opened) }} 笔在途 (不计入胜率)
+          </span>
+          <span v-if="floatingPnl !== null">
+            持仓浮动盈亏: <strong :style="{ color: profitTone(floatingPnl) }">{{ money(floatingPnl) }}</strong>
+          </span>
+        </div>
+        <div class="flex items-center gap-1.5 ml-auto">
+          <span>{{ metadataScope }} · 时区 {{ metadataTimezone }}</span>
+          <span v-if="metadataAsOf">· 截至 {{ metadataAsOf }}</span>
+          <span v-if="coverageStart">· 起始 {{ coverageStart }}</span>
+          <span>(系统保留账本口径)</span>
+        </div>
+      </div>
+    </AppCard>
+
+    <!-- Card 3: Decision State -->
+    <AppCard class="telemetry-card telemetry-card--decision">
+      <div class="telemetry-card__heading">
+        <div>
+          <p class="telemetry-card__eyebrow">决策状态</p>
+          <h3>当前状态</h3>
+        </div>
+        <AppBadge :tone="statusTone" data-decision-status>{{ statusLabel }}</AppBadge>
+      </div>
+      <div class="telemetry-card__body telemetry-card__decision">
+        <div class="telemetry-decision__meta">
+          <span>已审查 <strong>{{ wait?.evaluated_count ?? '--' }}</strong></span>
+          <span>候选 <strong>{{ wait?.counts?.entry_candidate ?? '--' }}</strong></span>
+          <span title="执行层账户与资金分配的日内权益回撤，含已结账本检查">日内权益回撤 <strong>{{ signedPct(dailyLossPct) }}</strong></span>
+          <span>熔断阈值 <strong>{{ dailyLimitPct === null ? '--' : dailyLimitPct.toFixed(1) + '%' }}</strong></span>
+          <span>状态 <strong :style="{ color: dailyCircuitTriggered ? 'var(--color-down)' : 'var(--text-muted)' }">{{ dailyCircuitTriggered === true ? '已触发' : dailyCircuitTriggered === false ? '未触发' : '待核验' }}</strong></span>
+        </div>
+      </div>
+    </AppCard>
   </div>
 </template>
 <style scoped>
