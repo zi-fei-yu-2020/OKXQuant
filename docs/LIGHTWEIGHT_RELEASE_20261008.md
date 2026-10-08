@@ -41,16 +41,49 @@ Exact test counts, browser findings, deployed commit, workload notes and before/
 - Edge layout review: **230 page/viewport/theme combinations**, zero document overflow and zero JavaScript errors. Seventeen admin routes and six front/document routes were covered at 320/390/768/1024/1440 widths in light/dark themes, plus keyboard focus, confirmation cancellation and mocked error interactions.
 - Functional browser gate: **17 checks passed** on a marked disposable source snapshot without exchange credentials or scheduling. Coverage includes actual unmocked authenticated home API success, all private-request session headers, current-session revocation, ordinary-admin permissions and navigation, today/all totals, unknowns, full-ledger pagination/search, legacy deep links, and scoped prompt audit reopen. Benign HTML/script text remains inert text.
 - Private prompt handling validates session and scope after asynchronous success as well as failure. Manual audit opens fetch current records, and the modal renders only a bound receipt, clearing it on account/session changes rather than trusting a raw monitoring field.
-- The operator-approved production profile is light, but **it has not yet been activated on the server**.
+- The operator-approved light profile was activated on the server at approximately **2026-10-08 22:42 +08:00**; see the verified deployment section below.
 
-## Deployment gate - not completed
+## Verified production deployment
 
-The original SSH route became intermittently unavailable (connection/authentication timeouts). An alternative route returned a different SSH host key and was rejected before authentication. Host verification was not disabled. No production entry pause, feature switch, image replacement or rollback was attempted during this release.
+Code image: `okxquant:build-5d36af2`, independently built from the fast-forwarded server checkout. Its isolated image-level suite passed **1,893 tests in 355.218 seconds**, with networking disabled, one CPU, service UID 10001 and no production volumes.
 
-Before proceeding, recover a connection to the originally verified server or independently verify the intended host through the provider console. Then build/test the release image, apply the approved maintenance procedure, verify service-UID read/write access to derived SQLite caches and runtime files, restore the original automatic-entry setting, and take matched post-release workload measurements. Do not run application-writing diagnostic imports as root when the service runs as UID 10001.
+The operator independently confirmed the original SSH ED25519 fingerprint in the provider console. Connections pinned that identity; an alternative route with a different key was rejected before authentication. Intermittent SSH failures were handled by checking durable release markers rather than replaying uncertain mutations.
 
-The new pre-change production sample consumed 371.935 CPU seconds over 300 seconds (**123.978% of one core**) in the existing standard profile. There is **no post-release CPU measurement yet**; no reduction is claimed for undeployed code. Original production image at the last successful identity-verified read: `okxquant:build-ddb1b35`.
+A host-side locked controller journaled the original entry switch and feature configuration, then paused future entries, drained active entry cycles, checked exchange protection, persisted light mode, recreated only the app service, verified health/account binding/core jobs, and restored the original automatic-entry value `1`. Its completed journal and healthy new image were independently read back. No administrator password, account binding, account mode, risk limit, leverage or LIVE consent changed.
 
+At both protection gates there was **one DOGE-USDT-SWAP holding with verified cloud protection coverage and zero pending orders**. No position was forcibly closed and no cloud protection order was canceled. One old-container ledger run was interrupted by the planned restart; subsequent new-container ledger runs succeeded.
+
+Post-release checks confirmed:
+
+- Same configured DEMO account; automatic entries restored; gateway worker alive.
+- Light mode disables factor snapshots, market observations, entry research, scalp research and automatic review. Position guard, ledger/evidence sync, execution quality, news, AI trader, minute trader and scheduled backups remain available. Minute strategy jobs executed successfully after restart. By 23:01 there were 19 successful minute jobs and one safe writer-lock timeout (22:47:05; no order sent), plus 19 successful protection jobs, 18 successful ledger jobs and two successful AI-trader jobs. The minute strategy recovered on subsequent scheduled cycles; the exclusive trading writer was not bypassed or weakened.
+- Live Edge/Playwright anonymous smoke checks passed for all four legacy front routes plus admin overview: login redirects, canonical deep-link query/hash preservation and mobile layout, with zero JavaScript errors. No production login/configuration mutation was used.
+- Health returns 200. Anonymous requests to private overview/history/cache APIs return 401. Canonical front routes and admin shell return HTML with no-store/no-cache headers. Authenticated read/write/race testing was performed on the isolated preview, not by issuing production trades or resetting credentials.
+- At approximately 22:44, ledger state was OK with 626 retained rows, 21 known openings on **2026-10-08**, 21 settled closes that day, zero pending settlements and no estimated PnL. Openings and closes are separate calendar-day measures; these counts must not be treated as identical lifecycle cohorts.
+- Earlier exchange history gaps had already caught up before this image was activated. That upstream recovery is not attributed to this release.
+
+### Derived-cache ownership correction
+
+A previous root-run diagnostic/prewarm created `strategy_evidence_projections.db` as root with mode 0600. The real UID-10001 workers could not access it and therefore took the expensive authoritative-source fallback. Container recreation repaired runtime ownership through the existing entrypoint; a post-release service-UID check confirmed owner 10001 and read/write access. A service-UID funnel warmup completed in approximately 0.240 CPU seconds without an error. This is an operational correction contributing to runtime savings, not solely an algorithm improvement. Future application imports/prewarms must use `docker exec -u 10001:10001`.
+
+### CPU and disk acceptance
+
+The latest natural-workload pre-build baseline was **21:51:51-21:56:51 +08:00**: 118.260 CPU seconds over 300 seconds, or **39.420% of one core**, in standard mode with the derived-cache permission problem. The older 123.978% sample came from a different workload and is not the primary before/after denominator. Deployment started with a protected holding, whereas the preceding baseline had no holding; natural activity changes are an explicit comparison limitation.
+
+The first post-release window, **22:48:51-22:53:51 +08:00**, consumed **142.673 CPU seconds / 47.558% of one core** after service-UID cache warmup, with automatic entries enabled. It included anonymous browser route smoke checks; there was no authenticated dashboard polling or image build/test-suite run. This is numerically about 58.5% below the original afternoon 114.512% sample, but about 20.6% above the immediately preceding idle 39.420% sample. Different holdings, strategy phases and API activity prevent either percentage from isolating the causal effect of light mode. No constant CPU ceiling or further reduction against the idle baseline is claimed.
+
+The second window, **23:03:18-23:08:18 +08:00**, consumed **110.278 CPU seconds / 36.759% of one core**. It began after read-only verification of one protected DOGE holding and zero pending orders, with automatic entries enabled. There were no manual UI/API checks, profiles, builds or test suites during this window. The container PID remained unchanged. The same new image was healthy when results were retrieved despite intermittent SSH connection failures.
+
+| Window (all 2026-10-08, Asia/Shanghai) | CPU seconds / approximately 300s | CPU, one core = 100% | Context |
+| --- | ---: | ---: | --- |
+| Original incident, 16:10:46-16:15:46 | 343.538 | 114.512% | Original code/workload; historical context |
+| Latest pre-build, 21:51:51-21:56:51 | 118.260 | 39.420% | Prior standard profile, no holding, cache ownership defect |
+| Light sample 1, 22:48:51-22:53:51 | 142.673 | 47.558% | Trading enabled, holding, anonymous page smoke checks |
+| Light sample 2, 23:03:18-23:08:18 | 110.278 | 36.759% | Trading enabled, holding confirmed before sample, no manual checks |
+
+Both post-release samples are retained rather than selecting only the lower value. They demonstrate approximately 0.37-0.48 CPU cores in the observed windows, not a guaranteed ceiling or a matched-load estimate of light-mode-only savings. The original incident's 114.512% figure must not be presented as the immediate baseline for this second release.
+
+Earlier cleanup removed 18 unused old OKXQuant images and 944.6 MB of expired reconstructible build cache, freeing approximately 2.70 GB at that time. After this release build, the 22:48 root-filesystem check showed 61,186,306,048 bytes used, 31,284,846,592 bytes available (67% used). The current image plus rollback images `ddb1b35`, `74ba776` and `60b1c0a` remain. No named volumes, ledger/evidence data or unrelated-service images were removed. No further image pruning was needed for this release.
 
 ## Final review disposition
 
@@ -58,4 +91,4 @@ GPT-6-astra approved the bounded final store/viewer and backend closures for a n
 
 Private audit text is rendered from a session/account-bound verified receipt, cleared synchronously on context changes; it is not taken from generic monitor payloads. Manual opens fetch the latest record rather than treating a same-account private cache as indefinitely current. Delayed successful responses and delayed authentication failures cannot publish another session/account's content.
 
-Production approval is separate and remains withheld. Repository CI only validates ordinary pushes; image publication is release-event driven. No release event or production deployment was initiated.
+The earlier non-deploying review gate was subsequently followed by the operator-authorized maintenance procedure documented above. Source was pushed, the server fast-forwarded, and the server built/tested/recreated the app explicitly. A documentation-only follow-up commit does not require rebuilding or restarting the verified code image.

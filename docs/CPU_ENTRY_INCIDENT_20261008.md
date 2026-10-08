@@ -58,3 +58,10 @@ The Compose image/build metadata keys are persisted in the server checkout's ign
 A subsequent read-only check observed a naturally scheduled SUI minute candidate completing `maker_canceled -> fallback_result(status=accepted)`, with its cycle recorded as `submitted`. No manual/test opening was triggered. Acceptance is not a guarantee of fill or profitability. This supersedes the earlier observation that no post-release fallback event had yet occurred.
 
 At the final health check the ledger reported **9 known openings today / 8 pending settlements / 1 settled close today**, and the container remained healthy. An active/changed-position ledger cycle used 21.24 CPU seconds; the 12.793-13.989-second figures above describe unchanged warm reconciliation, not every possible future cycle. The historical-settlement gap is still unresolved upstream.
+
+
+## Subsequent light release and measurement correction
+
+The earlier sections record observations at their stated times, not the final state of October 8. By 21:46 the upstream settlement-history gap had caught up; this recovery preceded the light release and is not credited to its code. At approximately 22:42, image `5d36af2` replaced `ddb1b35` through the approved protected maintenance procedure. See `LIGHTWEIGHT_RELEASE_20261008.md` for release gates and final measurements.
+
+An intervening root diagnostic/prewarm had created the derived evidence-projection SQLite file as root:0600. UID-10001 production workers could not use that cache and fell back to full source parsing. The light-release restart repaired ownership, and subsequent service-UID checks and warmup verified cache access. Earlier same-data warm-cache benchmarks remain isolated benchmark results; they must not be represented as proof that the prior production workers were actually benefiting from that cache. This operational mistake and correction are included in the before/after interpretation.

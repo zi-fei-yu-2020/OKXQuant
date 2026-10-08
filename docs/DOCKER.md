@@ -132,3 +132,17 @@ npm run build
 The first-install generator never overwrites existing configuration. New installs default to light optional workloads and paused automatic entries; existing deployments retain their saved flags. The console can change the optional runtime profile separately from the confirmed automatic-entry switch. Financial monitoring now requires login. Use the combined backend image entry point, not a separately launched dashboard ASGI object.
 
 See `LIGHTWEIGHT_RELEASE_20261008.md` for feature boundaries, migration, authentication, statistical coverage and controlled rollback. Keep Node/OKX CLI in this compatibility image while OAuth/fallback consumers remain; removing it without auditing those paths is unsupported.
+
+
+## Runtime diagnostics: use the application UID
+
+The entrypoint starts as root only to initialize volume permissions, then runs application processes as UID/GID **10001:10001**. A bare `docker exec` may still default to root. Any Python import, cache warmup, reconciliation diagnostic or CLI read that can create runtime files must explicitly use the service user:
+
+```bash
+docker compose -f compose.yaml exec --user 10001:10001 app \
+  python -c 'import os; assert os.geteuid() == 10001; print("service UID verified")'
+```
+
+Do not run application-writing diagnostics as root. A root-owned mode-0600 derived SQLite cache forces normal workers onto the more expensive authoritative-source fallback. Check ownership and service-user read/write access before interpreting CPU profiles; repair runtime ownership only within a controlled maintenance procedure. Do not delete ledger/evidence databases to rebuild an optional cache.
+
+For CPU acceptance, warm only rebuildable caches under the service UID before sampling. Record cgroup CPU-time deltas over equal windows, account activity/holdings, strategy phase and viewer traffic. Keep builds, test suites and manual diagnostic work outside the measured window; do not compare lifetime process CPU percentages across a restart. Report changing holdings, strategy phases and viewer traffic explicitly: mismatched windows cannot establish a causal performance improvement.
