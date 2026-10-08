@@ -208,14 +208,14 @@ class CrossReviewContracts(unittest.TestCase):
         self.assertEqual(saved['baselines'][self.env.identity]['initial_capital'],300)
         self.assertFalse(account_baseline.load_account_baseline('okx:live:other')['baseline_configured'])
 
-    def test_public_snapshot_does_not_return_previous_account_data(self):
+    def test_authenticated_snapshot_does_not_return_previous_account_data(self):
         from dashboard import app as dash
         old={'account_source_id':'okx:demo:previous','account':{'total_equity':12345},'private_marker':'previous-account-only'}
         with patch.object(dash,'CACHE_DATA',old),patch.object(dash,'LAST_CACHE_TIME',time.time()),patch.object(dash,'request_cache_refresh') as refresh:
             client=TestClient(dash.app)
             self.addCleanup(client.close)
             for path in ('/api/all','/api/overview'):
-                result=client.get(path)
+                result=client.get(path,headers=self.reader)
                 self.assertEqual(result.status_code,200)
                 self.assertEqual(result.json()['account_source_id'],self.env.identity)
                 self.assertTrue(result.json()['initializing'])
@@ -357,7 +357,7 @@ class CrossReviewContracts(unittest.TestCase):
         self.assertEqual(response.status_code,400)
         self.assertEqual(account_baseline.BASELINE_FILE.read_text(),'{broken')
 
-    def test_public_snapshot_reports_effective_mode_limits_and_unknown_risk(self):
+    def test_authenticated_snapshot_reports_effective_mode_limits_and_unknown_risk(self):
         from dashboard import app as dash
         from scripts.operational_status import execution_snapshot
         source=self.create(source='small300')
@@ -371,7 +371,7 @@ class CrossReviewContracts(unittest.TestCase):
         self.assertEqual(current['mode_limits']['swing']['max_leverage'],5)
         cached={'account_source_id':self.env.identity,'execution_profile':current,'data_health':{},'positions_summary':{'items':[]}}
         with patch.object(dash,'DATA_DIR',str(self.root)),patch.object(dash,'CACHE_DATA',cached),patch.object(dash,'LAST_CACHE_TIME',time.time()):
-            response=self.client.get('/api/all')
+            response=self.client.get('/api/all',headers=self.reader)
         self.assertEqual(response.status_code,200,response.text)
         actual=response.json()
         self.assertEqual(actual['execution_profile']['mode_limits'],current['mode_limits'])
@@ -379,7 +379,7 @@ class CrossReviewContracts(unittest.TestCase):
         self.assertIsNone(actual['risk_status']['daily_drawdown'])
         self.assertEqual(actual['risk_status']['account_scope'],self.env.identity)
 
-    def test_public_risk_status_scopes_observations_and_distinguishes_false_from_unknown(self):
+    def test_authenticated_risk_status_scopes_observations_and_distinguishes_false_from_unknown(self):
         import sqlite3
         from datetime import datetime,timezone,timedelta
         from dashboard import app as dash
@@ -391,7 +391,7 @@ class CrossReviewContracts(unittest.TestCase):
             db.execute('INSERT INTO intents VALUES (?,?)',(self.env.identity,'unknown'))
         cached={'account_source_id':self.env.identity,'data_health':{},'positions_summary':{'items':[]}}
         with patch.object(dash,'DATA_DIR',str(self.root)),patch.object(dash,'CACHE_DATA',cached),patch.object(dash,'LAST_CACHE_TIME',now),patch.object(risk_policy,'ledger_daily_drawdown',return_value={'reason':'baseline_unavailable'}):
-            response=self.client.get('/api/all')
+            response=self.client.get('/api/all',headers=self.reader)
         self.assertEqual(response.status_code,200,response.text)
         result=response.json()['risk_status']
         self.assertFalse(result['daily_blocked'])

@@ -40,19 +40,28 @@ class GenerationCacheTests(unittest.TestCase):
             with self.assertRaises(OSError):view.read(path)
 
     def test_scheduler_preserves_fast_paths_but_does_not_parse_ledger_each_tick(self):
-        with tempfile.TemporaryDirectory() as d,patch.object(monitor,'DATA',Path(d)):
-            monitor.atomic('trading_ledger.json',[{'status':'holding'}])
-            with patch.object(cache.json,'load',wraps=json.load) as decode:
-                for now in range(1,60):self.assertFalse(monitor.should_run(0,now))
-                self.assertEqual(decode.call_count,0)
-                for now in range(60,100):self.assertTrue(monitor.should_run(0,now))
-                self.assertEqual(decode.call_count,1)
-                monitor.atomic('trading_ledger.json',[{'status':'closed'}])
-                self.assertFalse(monitor.should_run(0,100))
-                self.assertEqual(decode.call_count,2)
-                monitor.atomic('ledger_refresh_request.json',{'id':'new','at':100})
-                self.assertFalse(monitor.should_run(100,104))
-                self.assertTrue(monitor.should_run(100,105))
+        from scripts import strategy_evidence
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as d, patch.object(monitor,'DATA',Path(d)):
+            scope='okx:demo:generation-cache-test'
+            db_path=Path(d)/'strategy_evidence.db'
+            with patch.object(strategy_evidence,'DB_PATH',db_path), \
+                 patch('scripts.okx_runtime.selected_environment',return_value=SimpleNamespace(identity=scope)):
+                with strategy_evidence.connection():pass
+                monitor.atomic('ledger_sync_status.json',{'status':'ok','environment_id':scope,
+                    'pending_settlements':0,'handled_request':'none'})
+                monitor.atomic('trading_ledger.json',[{'status':'holding','environment_id':scope}])
+                with patch.object(cache.json,'load',wraps=json.load) as decode:
+                    for now in range(1,60):self.assertFalse(monitor.should_run(0,now))
+                    self.assertEqual(decode.call_count,0)
+                    for now in range(60,100):self.assertTrue(monitor.should_run(0,now))
+                    self.assertEqual(decode.call_count,1)
+                    monitor.atomic('trading_ledger.json',[{'status':'closed','environment_id':scope}])
+                    self.assertFalse(monitor.should_run(0,100))
+                    self.assertEqual(decode.call_count,2)
+                    monitor.atomic('ledger_refresh_request.json',{'id':'new','at':100})
+                    self.assertFalse(monitor.should_run(100,104))
+                    self.assertTrue(monitor.should_run(100,105))
 
     def test_daily_risk_projection_is_account_scoped_and_invalidates_on_replacement(self):
         with tempfile.TemporaryDirectory() as d:
@@ -132,12 +141,12 @@ class RevisionTests(unittest.TestCase):
 class DashboardIncrementalTests(unittest.TestCase):
     def test_ai_summaries_parse_only_when_source_changes(self):
         import dashboard.app as dash
-        with tempfile.TemporaryDirectory() as d,patch.object(dash,'AI_HISTORY_FILE',str(Path(d)/'history.json')):
-            Path(dash.AI_HISTORY_FILE).write_text(json.dumps([{'id':'a','macro_assessment':'text','ai_last_prompt':'full'}]))
+        with tempfile.TemporaryDirectory() as d,patch.object(dash,'AI_HISTORY_FILE',str(Path(d)/'history.json')),patch('scripts.okx_runtime.selected_environment',return_value=SimpleNamespace(identity='scope-a')):
+            Path(dash.AI_HISTORY_FILE).write_text(json.dumps([{'id':'a','account_scope':'scope-a','macro_assessment':'text','ai_last_prompt':'full'}]))
             with patch.object(cache.json,'load',wraps=json.load) as decode:
                 for _ in range(20):self.assertEqual(dash._ai_history_summaries()[0]['history_id'],'a')
                 self.assertEqual(decode.call_count,1)
-                Path(dash.AI_HISTORY_FILE).write_text(json.dumps([{'id':'b'}]))
+                Path(dash.AI_HISTORY_FILE).write_text(json.dumps([{'id':'b','account_scope':'scope-a'}]))
                 self.assertEqual(dash._ai_history_summaries()[0]['history_id'],'b')
                 self.assertEqual(decode.call_count,2)
 

@@ -118,6 +118,40 @@ class LedgerLifecycleTests(unittest.TestCase):
         with patch.object(self.ledger, "read_snapshot", side_effect=[history, list(positions), []]):
             return self.ledger.build_lifecycle_ledger(notify=False)
 
+    def test_pre_reset_closed_fact_is_retained_and_not_renotified(self):
+        old = {
+            "id": "canonical-pre-reset-close",
+            "environment_id": SCOPE,
+            "instId": INST,
+            "inst": "BTC",
+            "side": "long",
+            "status": "closed",
+            "open_time": "1969-12-31 23:50:00",
+            "close_time": "1970-01-01 00:00:00",
+            "close_notification_status": "sent",
+            "pnl": 7.25,
+            "net_pnl": 7.25,
+            "exit_reason": "previously recorded",
+        }
+        (self.root/"ledger.json").write_text(json.dumps([old]), encoding="utf-8")
+        reset = {"initial_capital": 1000, "reset_time": "1970-01-01 00:00:01", "baseline_configured": True}
+        with patch("okxquant_backend.account_baseline.load_account_baseline", return_value=reset), \
+             patch.object(self.ledger, "read_snapshot", side_effect=[[receipt()], [], []]) as read, \
+             patch("qq_notifier.notify_trade_close") as notify:
+            rows = self.ledger.build_lifecycle_ledger()
+
+        retained = next(row for row in rows if row["id"] == old["id"])
+        current = [row for row in rows if row["id"] != old["id"] and row.get("status") == "closed"]
+        self.assertEqual(retained, old)
+        self.assertEqual(len(current), 1)
+        self.assertEqual(len({row["id"] for row in rows}), len(rows))
+        self.assertEqual(read.call_count, 3)
+        # The prior notification remains deduplicated; the current receipt is notified once.
+        notify.assert_called_once()
+        self.assertEqual(notify.call_args.kwargs["stage"], current[0]["exit_reason"])
+        saved = json.loads((self.root/"ledger.json").read_text(encoding="utf-8"))
+        self.assertTrue(any(row["id"] == old["id"] and row["environment_id"] == SCOPE for row in saved))
+
     def test_updated_receipt_replaces_one_lifecycle_not_double_pnl_or_fees(self):
         first = self.build([receipt()])[0]
         rows = self.build([receipt(uTime="2001000", realizedPnl="3.95", fundingFee="-.02")])

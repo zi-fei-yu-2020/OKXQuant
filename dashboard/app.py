@@ -63,29 +63,10 @@ PUBLIC_FEE_RECONCILIATION_FIELDS = (
     "status", "reason", "currency", "basis", "matched_fills", "opening_size",
     "closing_size", "receipt_fee", "allocated_fee", "tolerance",
 )
-_LEDGER_READ_CACHE = {"path": "", "mtime_ns": None, "size": None, "rows": []}
-_LEDGER_READ_LOCK = threading.Lock()
-
-
 def _read_ledger_rows():
-    """Read the large lifecycle ledger only when the file actually changes."""
-    try:
-        stat = os.stat(LEDGER_JSON_FILE)
-    except OSError:
-        return []
-    key = (os.path.abspath(LEDGER_JSON_FILE), stat.st_mtime_ns, stat.st_size)
-    with _LEDGER_READ_LOCK:
-        if (_LEDGER_READ_CACHE["path"], _LEDGER_READ_CACHE["mtime_ns"], _LEDGER_READ_CACHE["size"]) == key:
-            return _LEDGER_READ_CACHE["rows"]
-        try:
-            with open(LEDGER_JSON_FILE, "r", encoding="utf-8") as handle:
-                rows = json.load(handle)
-            if not isinstance(rows, list):
-                rows = []
-        except (OSError, ValueError, TypeError):
-            return []
-        _LEDGER_READ_CACHE.update(path=key[0], mtime_ns=key[1], size=key[2], rows=rows)
-        return rows
+    """One shared parse and memory graph per ledger generation, not per endpoint."""
+    from okxquant_backend.monitor_statistics import read_ledger
+    return read_ledger(LEDGER_JSON_FILE)
 
 
 def _public_trade_row(row):
@@ -145,18 +126,24 @@ def _public_history_row(item):
     return result
 
 
-_AI_HISTORY_SUMMARIES=VersionedJsonProjection(lambda rows:[_public_history_row(item) for item in rows[:25]]
-    if isinstance(rows,list) else [])
+def _history_owned(row, scope):
+    if not isinstance(row,dict):return False
+    markers=[row.get(k) for k in ("account_scope","environment_id","account_source_id","scope") if row.get(k)]
+    return bool(markers) and all(value==scope for value in markers)
+
+
+_AI_HISTORY_RAW=VersionedJsonProjection(lambda rows:rows if isinstance(rows,list) else [])
 
 
 def _ai_history_summaries():
-    try:return _AI_HISTORY_SUMMARIES.read(AI_HISTORY_FILE)
-    except (OSError,ValueError,TypeError):return []
+    return [_public_history_row(row) for row in _read_ai_history_records()[:25]]
 
 
 def _public_monitoring_snapshot(snapshot):
     """Project the cached operational snapshot into a small polling payload."""
     data = dict(snapshot or {})
+    from scripts.runtime_features import status as feature_status
+    data["runtime_features"]=feature_status()
     data["trades"] = [_public_trade_row(row) for row in (data.get("trades") or [])]
     data["ai_brain_history"] = [_public_history_row(row) for row in (data.get("ai_brain_history") or [])]
     data["factors"] = [
@@ -188,6 +175,8 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="OKXQuant AI Quantitative Matrix", docs_url=None, redoc_url=None, lifespan=lifespan)
+from okxquant_backend.monitor_access import protect_monitor_data
+app.middleware("http")(protect_monitor_data)
 templates = Jinja2Templates(directory=os.path.join(DASHBOARD_DIR, "templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(DASHBOARD_DIR, "static")), name="static")
 
@@ -308,6 +297,9 @@ def enrich_position_risk_fields(positions, trackers=None):
 
 def _load_local_factor_library():
     """Load factor_library_snapshot.json — a local file independent of OKX private API."""
+    from scripts.runtime_features import is_enabled
+    if not is_enabled("factor_snapshots"):
+        return {"status":"disabled","required":False,"instruments":[]}
     if os.path.exists(FACTOR_LIBRARY_FILE):
         try:
             with open(FACTOR_LIBRARY_FILE, "r", encoding="utf-8") as f:
@@ -317,13 +309,44 @@ def _load_local_factor_library():
     return {}
 
 
-def _read_horizon_stats():
+def _read_horizon_stats(scope=None):
+    from scripts.okx_runtime import selected_environment
+    from okxquant_backend.monitor_statistics import read_periods
+    scope=selected_environment().identity if scope is None else scope
     try:
-        with open(os.path.join(DATA_DIR, "horizon_stats.json"), encoding="utf-8") as handle:
-            value=json.load(handle)
-        return value if isinstance(value, dict) else {}
-    except (OSError, ValueError, TypeError):
-        return {}
+        with open(os.path.join(DATA_DIR,"horizon_stats.json"),encoding="utf8") as handle:value=json.load(handle)
+        if not isinstance(value,dict) or value.get("scope")!=scope:value={}
+    except (OSError,ValueError,TypeError):value={}
+    try:return {**value,**read_periods(LEDGER_JSON_FILE,scope)}
+    except (OSError,ValueError,TypeError):return {"scope":scope,"error":"statistics_unavailable","periods":{}}
+
+
+def _today_stats_payload(stats, floating=None):
+    """Preserve unknowns and completeness; never label a partial sum as total PnL."""
+    from scripts.trade_quality import finite
+    value={k:v for k,v in stats.items() if k!="settled_rows"}
+    for key in ("net_realized","realized_gross","fees_paid","funding_paid"):
+        amount=finite(value.get(key));value[key]=round(amount,2) if amount is not None else None
+    net=value.get("net_realized");upl=finite(floating)
+    value["total_pnl"]=round(net+upl,2) if net is not None and upl is not None else None
+    return value
+
+
+def _today_from_periods(snapshot, floating=None):
+    period=(snapshot.get("periods") or {}).get("today")
+    if not isinstance(period,dict):return {"source":"unavailable","net_realized":None,"closed_trades":None,"win_rate":None,"total_pnl":None}
+    groups=[period[h] for h in ("scalp","swing","unknown")]
+    result={"source":"lifecycle_ledger","pending_settlements":period.get("pending_settlements",0),"observed":{},"coverage":period.get("coverage"),"day":str(snapshot.get("as_of","") )[:10]}
+    for target,field in (("net_realized","net_pnl"),("realized_gross","gross_pnl"),("fees_paid","fees"),("funding_paid","funding_fee")):
+        values=[g.get(field) for g in groups]
+        complete=all(isinstance(v,(int,float)) and not isinstance(v,bool) for v in values)
+        result[target]=sum(values) if complete else None
+        result["observed"][target]=sum((g.get("observed") or {}).get(field,0) or 0 for g in groups)
+        result[target+"_complete"]=complete
+    result.update(win_trades=sum(g.get("wins",0) for g in groups),loss_trades=sum(g.get("losses",0) for g in groups),breakeven_trades=sum(g.get("breakeven",0) for g in groups),outcome_trades=sum(g.get("closed",0) for g in groups),unsettled_amount_rows=sum((g.get("observed") or {}).get("unknown_net_rows",0) for g in groups))
+    result["closed_trades"]=result["outcome_trades"]+result["unsettled_amount_rows"]
+    result["win_rate"]=round(result["win_trades"]/result["outcome_trades"]*100,1) if result["outcome_trades"] else None
+    return _today_stats_payload(result,floating)
 
 
 def _wait_state(state_data, factors, execution_profile):
@@ -542,11 +565,13 @@ def _inject_local_data_into_stale(stale, positions, timestamp_full):
         from okxquant_backend.account_baseline import load_account_baseline
         _today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime("%Y-%m-%d")
         _reset = load_account_baseline().get("reset_time", "1970-01-01 00:00:00")
-        _local_today = today_lifecycle_stats(local_ledger_rows, _today, _reset)
+        _local_today = today_lifecycle_stats(local_ledger_rows, _today)
         _old_today = dict(stale.get("today_stats") or {})
         _local_today.pop("settled_rows", None)
-        _local_today["total_pnl"] = _local_today["net_realized"] + _safe_float(_old_today.get("total_pnl"), 0.0) - _safe_float(_old_today.get("net_realized"), 0.0)
-        stale["today_stats"] = {**_old_today, **_local_today, "source": "lifecycle_ledger_stale_account"}
+        from scripts.trade_quality import finite
+        old_total=finite(_old_today.get("total_pnl"));old_net=finite(_old_today.get("net_realized"))
+        floating=old_total-old_net if old_total is not None and old_net is not None else None
+        stale["today_stats"] = {**_today_stats_payload(_local_today,floating), "source": "lifecycle_ledger_stale_account"}
     except Exception:
         pass
 
@@ -559,6 +584,7 @@ def _inject_local_data_into_stale(stale, positions, timestamp_full):
         for row in ledger_monitor.project_rows(stale.get('trades', []), selected_environment().identity)
     ]
     stale['ledger_sync']=ledger_monitor.load('ledger_sync_status.json', {})
+    stale['horizon_stats']=_read_horizon_stats()
     from scripts.wait_audit import public_status as wait_status
     stale['evolution_review']=evolution_status(DATA_DIR)
     stale['memory_publication']=memory_publication(DATA_DIR,selected_environment().identity)
@@ -585,6 +611,10 @@ def load_persisted_dashboard_cache():
 
 
 MONITOR_REFRESH_SECONDS=5.0
+MONITOR_IDLE_REFRESH_SECONDS=300.0
+MONITOR_VIEWER_WINDOW_SECONDS=30.0
+_LAST_MONITOR_REQUEST=float("-inf")
+_LAST_MONITOR_ATTEMPT=float("-inf")
 PERSIST_MIN_INTERVAL_SECONDS=10.0
 _PERSIST_STATE={}
 _PERSIST_LOCK=threading.Lock()
@@ -656,13 +686,23 @@ SYNC_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="dashboard_
 _BG_WORKER_THREAD = None
 _BG_WORKER_RUNNING = False
 
+def _monitor_background_due(*, wall=None, monotonic=None):
+    wall=time.time() if wall is None else wall
+    monotonic=time.monotonic() if monotonic is None else monotonic
+    active=0<=monotonic-_LAST_MONITOR_REQUEST<=MONITOR_VIEWER_WINDOW_SECONDS
+    # A brand-new unvisited monitor needs no private account polling at all.
+    if not CACHE_DATA and not active:return False
+    interval=MONITOR_REFRESH_SECONDS if active else MONITOR_IDLE_REFRESH_SECONDS
+    return monotonic-_LAST_MONITOR_ATTEMPT>=interval and (not CACHE_DATA or wall-LAST_CACHE_TIME>=interval)
+
+
 def _dashboard_background_worker_loop():
     global _BG_WORKER_RUNNING
     # Initial small pause so server boots cleanly
     time.sleep(0.5)
     while _BG_WORKER_RUNNING:
         try:
-            if not CACHE_DATA or time.time()-LAST_CACHE_TIME>=MONITOR_REFRESH_SECONDS:
+            if _monitor_background_due():
                 update_cache_cycle()
         except Exception:
             pass
@@ -694,6 +734,8 @@ def get_cache_lock():
     return CACHE_LOCK
 
 def _refresh_owned_cache():
+    global _LAST_MONITOR_ATTEMPT
+    _LAST_MONITOR_ATTEMPT=time.monotonic()
     try:
         _update_cache_cycle()
     finally:
@@ -1294,7 +1336,7 @@ def _update_cache_cycle():
     # Lifecycle ledger is the authoritative trade-count/PnL source. Bills remain
     # useful for funding and reconciliation, but recent-bill pagination cannot
     # represent one trade reliably when fills and fees are split across rows.
-    lifecycle_today = today_lifecycle_stats(ledger_trades, today_bj_str, reset_time_str)
+    lifecycle_today = today_lifecycle_stats(ledger_trades, today_bj_str)
     if lifecycle_today['source'] == 'lifecycle_ledger':
         today_win_trades = lifecycle_today['win_trades']
         today_loss_trades = lifecycle_today['loss_trades']
@@ -1433,19 +1475,7 @@ def _update_cache_cycle():
             "cum_total_fees": round(cum_total_fees, 2),
             "margin_usage_pct": round(((total_eq - avail_eq) / total_eq * 100) if total_eq > 0 else 0, 1)
         },
-        "today_stats": {
-            "realized_gross": round(today_realized_gross, 2),
-            "fees_paid": round(today_fees, 2),
-            "funding_paid": round(today_funding, 2),
-            "net_realized": round(today_net_realized_pnl, 2),
-            "total_pnl": round(today_net_realized_pnl + total_pos_upl, 2),
-            "win_trades": today_win_trades,
-            "loss_trades": today_loss_trades,
-            "win_rate": today_win_rate,
-            "closed_trades": today_win_trades + today_loss_trades,
-            "breakeven_trades": lifecycle_today.get("breakeven_trades", 0),
-            "source": lifecycle_today.get("source", "bills")
-        },
+        "today_stats": _today_stats_payload(lifecycle_today,total_pos_upl),
         "performance": {
             "all_trades": all_closed,
             "win_trades": all_win_trades,
@@ -1471,7 +1501,7 @@ def _update_cache_cycle():
         "pending_orders": pending_orders_list,
         "factors": factors_list,
         "funding_settlements": {
-            "total_funding_pnl": round(today_funding, 4),
+            "total_funding_pnl": round(today_funding, 4) if today_funding is not None else None,
             "items": sorted(funding_history_list, key=lambda x: x["time"], reverse=True)[:30]
         },
         "adaptive_config": adaptive_cfg,
@@ -1657,6 +1687,10 @@ async def docs_spa_root(request: Request, subpath: str = ""):
     return _vue_build_missing()
 
 
+@app.get("/decisions", response_class=HTMLResponse, include_in_schema=False)
+@app.get("/market-intelligence", response_class=HTMLResponse, include_in_schema=False)
+@app.get("/reviews", response_class=HTMLResponse, include_in_schema=False)
+@app.get("/trades", response_class=HTMLResponse, include_in_schema=False)
 @app.get("/trading", response_class=HTMLResponse, include_in_schema=False)
 @app.get("/factors", response_class=HTMLResponse, include_in_schema=False)
 @app.get("/news", response_class=HTMLResponse, include_in_schema=False)
@@ -1673,6 +1707,8 @@ async def public_tab_spa_routes(request: Request):
 # --- Realtime Public Polling APIs (with Cloudflare Edge Micro-Caching) ---
 
 def monitoring_snapshot():
+    global _LAST_MONITOR_REQUEST
+    _LAST_MONITOR_REQUEST=time.monotonic()
     from scripts.okx_runtime import selected_environment
     environment = selected_environment()
     cached = CACHE_DATA
@@ -1691,6 +1727,8 @@ def monitoring_snapshot():
         }
     # Copy only envelopes; never mutate the cached snapshot while serving it.
     data = dict(cached)
+    data["horizon_stats"]=_read_horizon_stats(environment.identity)
+    data["today_stats"]=_today_from_periods(data["horizon_stats"],(data.get("account") or {}).get("pos_upl_total"))
     data['trades'] = project_live_holding_rows(cached.get('trades') or [],
         (cached.get('positions_summary') or {}).get('items') or [], environment.identity, cached.get('timestamp'))
     from scripts.instrument_pool import load_instruments
@@ -1705,34 +1743,53 @@ def monitoring_snapshot():
     from scripts.operational_status import risk_snapshot
     try: data['risk_status'] = risk_snapshot(DATA_DIR, env=environment)
     except Exception: data['risk_status'] = {'status':'unavailable'}
+    # One response has one account generation. A mid-read switch is not a
+    # license to combine old balances with another account's fresh statistics.
+    def binding(value):
+        return tuple(getattr(value,k,None) for k in ('identity','mode','connection_id','binding_version'))
+    try:
+        current=selected_environment()
+        changed=binding(current)!=binding(environment)
+    except Exception:
+        current=environment;changed=True
+    if changed:
+        request_cache_refresh()
+        return {"timestamp":"","okx_environment":current.mode,"account_source_id":current.identity,
+                "initializing":True,"data_health":{"status":"OFFLINE","partial":True,"refreshing":True,"errors":["account_changed_during_read"]},
+                "account":{},"positions_summary":{"items":[],"total":0},"pending_orders":[],"factors":[],"trades":[],"logs":[],"horizon_stats":{}}
     return data
 
 
-def _read_ai_history_records():
-    try:
-        with open(AI_HISTORY_FILE, "r", encoding="utf-8") as handle:
-            rows = json.load(handle)
-        return rows if isinstance(rows, list) else []
-    except (OSError, ValueError, TypeError):
-        return []
+def _read_ai_history_records(scope=None):
+    from scripts.okx_runtime import selected_environment
+    scope=scope or selected_environment().identity
+    try:return [row for row in _AI_HISTORY_RAW.read(AI_HISTORY_FILE) if _history_owned(row,scope)]
+    except (OSError,ValueError,TypeError):return []
 
 
 @app.get("/api/trades")
-async def get_trades(limit: int = 30, offset: int = 0):
+async def get_trades(limit: int = 30, offset: int = 0, state: str = "all", q: str = ""):
     from scripts.okx_runtime import selected_environment
-    limit = min(100, max(1, int(limit)))
-    offset = max(0, int(offset))
-    rows = scoped_rows(_read_ledger_rows(), selected_environment().identity)
-    return JSONResponse({
-        "items": [_public_trade_row(row) for row in rows[offset:offset + limit]],
-        "total": len(rows), "limit": limit, "offset": offset,
-    }, headers={"Cache-Control": "no-store"})
+    from scripts.horizon_stats import canonical_rows
+    if state not in {"all","active","closed"}:raise HTTPException(status_code=422,detail="Unknown trade state filter")
+    scope=selected_environment().identity
+    limit=min(100,max(1,int(limit)));offset=max(0,int(offset));query=q.strip().casefold()[:128]
+    rows=canonical_rows(_read_ledger_rows(),scope)
+    counts={"all":len(rows),"active":sum(r.get("status")=="holding" for r in rows),"closed":sum(r.get("status")!="holding" for r in rows),"pending":sum(r.get("status")=="closed_pending" for r in rows)}
+    def matches(row):
+        if state=="active" and row.get("status")!="holding":return False
+        if state=="closed" and row.get("status")=="holding":return False
+        return not query or any(query in str(row.get(key) or "").casefold() for key in ("instId","inst","strategy","exit_reason"))
+    rows=[row for row in rows if matches(row)]
+    return JSONResponse({"items":[_public_trade_row(row) for row in rows[offset:offset+limit]],
+        "total":len(rows),"counts":counts,"limit":limit,"offset":offset,"state":state,"q":q[:128],"account_source_id":scope},headers={"Cache-Control":"no-store"})
 
 
 @app.get("/api/trades/{trade_id}")
 async def get_trade_detail(trade_id: str):
     from scripts.okx_runtime import selected_environment
-    rows = scoped_rows(_read_ledger_rows(), selected_environment().identity)
+    from scripts.horizon_stats import canonical_rows
+    rows = canonical_rows(_read_ledger_rows(), selected_environment().identity)
     for row in rows:
         if str(row.get("id") or "") == trade_id:
             return JSONResponse(row, headers={"Cache-Control": "no-store"})
@@ -1741,19 +1798,27 @@ async def get_trade_detail(trade_id: str):
 
 @app.get("/api/ai/last-prompt")
 async def get_ai_last_prompt():
+    from scripts.okx_runtime import selected_environment
+    scope=selected_environment().identity
     try:
-        prompt = Path(AI_LAST_PROMPT_FILE).read_text(encoding="utf-8")
-    except OSError:
-        prompt = ""
-    return JSONResponse({"prompt": prompt}, headers={"Cache-Control": "no-store"})
+        prompt=Path(AI_LAST_PROMPT_FILE).read_text(encoding="utf-8")
+        meta=json.loads(Path(AI_LAST_PROMPT_FILE).with_name("ai_brain_last_prompt_meta.json").read_text(encoding="utf8"))
+        if not _history_owned(meta,scope) or meta.get("sha256")!=hashlib.sha256(prompt.encode()).hexdigest():
+            raise ValueError("Prompt ownership or content revision not verified")
+    except (OSError,ValueError,TypeError):
+        return JSONResponse({"prompt":"","status":"ownership_unverified"},headers={"Cache-Control":"no-store"})
+    return JSONResponse({"prompt":prompt,"status":"recorded","recorded_at":meta.get("generated_at"),"scope":scope},headers={"Cache-Control":"no-store"})
 
 
 @app.get("/api/ai/history")
 async def get_ai_history(limit: int = 25, offset: int = 0):
     limit = min(100, max(1, int(limit)))
     offset = max(0, int(offset))
-    rows = _read_ai_history_records()
+    from scripts.okx_runtime import selected_environment
+    scope=selected_environment().identity
+    rows = _read_ai_history_records(scope)
     return JSONResponse({
+        "account_source_id":scope,
         "items": [_public_history_row(row) for row in rows[offset:offset + limit]],
         "total": len(rows), "limit": limit, "offset": offset,
     }, headers={"Cache-Control": "no-store"})
@@ -1784,4 +1849,5 @@ async def get_overview():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    # Supported launch includes session acquisition and the monitoring mount.
+    uvicorn.run("okxquant_backend.app:app", host="0.0.0.0", port=8080)

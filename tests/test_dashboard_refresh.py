@@ -79,7 +79,8 @@ class DashboardRefreshTests(unittest.TestCase):
             prompt_file=Path(temp_dir) / 'prompt.txt'
             history_file=Path(temp_dir) / 'history.json'
             prompt_file.write_text('FULL PROMPT', encoding='utf-8')
-            record={'time':'2026-10-06 01:00:00','macro_assessment':'summary',
+            (Path(temp_dir)/'ai_brain_last_prompt_meta.json').write_text(json.dumps({'account_scope':self.env.identity,'sha256':__import__('hashlib').sha256(b'FULL PROMPT').hexdigest()}))
+            record={'time':'2026-10-06 01:00:00','macro_assessment':'summary','account_scope':self.env.identity,
                     'council_transcript':{'advisors':{'risk':{'role_name':'risk','content':'FULL TRANSCRIPT'}}}}
             history_file.write_text(json.dumps([record]), encoding='utf-8')
             history_id=dashboard._history_id(record)

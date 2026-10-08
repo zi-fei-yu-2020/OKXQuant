@@ -8,9 +8,12 @@ from datetime import datetime,timezone,timedelta
 from functools import wraps
 from pathlib import Path
 import json
+import math
 import os
+import sqlite3
 import sys
 import tempfile
+import threading
 import time
 import uuid
 ROOT=Path(__file__).resolve().parents[1]
@@ -19,9 +22,38 @@ for p in (ROOT,ROOT/'scripts'):
 DATA=ROOT/'data'
 ACTIVE_INTERVAL_SECONDS=60
 IDLE_INTERVAL_SECONDS=300
+PENDING_SETTLEMENT_INTERVAL_SECONDS=300
 from scripts.json_projection_cache import VersionedJsonProjection
-_ACTIVITY_CACHE=VersionedJsonProjection(lambda rows:isinstance(rows,list) and any(
-    isinstance(row,dict) and row.get('status') in {'holding','closed_pending'} for row in rows))
+
+
+def _project_ledger_activity(rows):
+    if not isinstance(rows, list):
+        raise ValueError('ledger activity must be a list')
+    scopes = {}
+    unscoped_active = False
+    for row in rows:
+        if not isinstance(row, dict) or row.get('status') not in {'holding', 'closed_pending', 'closed'}:
+            raise ValueError('ledger activity row is malformed')
+        scope = row.get('environment_id')
+        if scope is None or scope == '':
+            if row['status'] != 'closed':
+                unscoped_active = True
+            continue
+        if not isinstance(scope, str):
+            raise ValueError('ledger activity account scope is malformed')
+        counts = scopes.setdefault(scope, {'holding_count': 0, 'closed_pending_count': 0})
+        counts['holding_count'] += row['status'] == 'holding'
+        counts['closed_pending_count'] += row['status'] == 'closed_pending'
+    return {'scopes': scopes, 'unscoped_active': unscoped_active}
+
+
+_LEDGER_ACTIVITY_CACHE = VersionedJsonProjection(_project_ledger_activity)
+_INTENT_CACHE_LOCK = threading.Lock()
+_INTENT_CACHE_KEY = None
+_INTENT_CACHE_VALUE = None
+_INTENT_DB_CONNECTION = None
+_INTENT_DB_PATH = None
+_INTENT_DB_SIGNATURE = None
 
 def load(name,default):
     try:return json.loads((DATA/name).read_text(encoding='utf-8'))
@@ -109,21 +141,130 @@ def project_rows(rows,scope,*,positions=None):
         result.append(row)
     return result
 
+def _control_file(name):
+    """Return (object, valid); missing is distinct from unreadable/corrupt."""
+    try:
+        payload = json.loads((DATA / name).read_text(encoding='utf-8'))
+        return (payload, isinstance(payload, dict))
+    except FileNotFoundError:
+        return {}, True
+    except (OSError, ValueError, TypeError):
+        return {}, False
+
+
+def _db_file_signature(path):
+    stat = path.stat()
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+def _has_unresolved_intents(scope):
+    """Generation-cached account-scoped existence query; never reads payloads."""
+    global _INTENT_CACHE_KEY, _INTENT_CACHE_VALUE
+    global _INTENT_DB_CONNECTION, _INTENT_DB_PATH, _INTENT_DB_SIGNATURE
+    if not isinstance(scope, str) or not scope:
+        raise ValueError('account scope unavailable')
+    from scripts import strategy_evidence
+    path = Path(strategy_evidence.DB_PATH).absolute()
+    with _INTENT_CACHE_LOCK:
+        for _ in range(2):
+            before = _db_file_signature(path)  # Missing/corrupt evidence fails closed.
+            if (_INTENT_DB_CONNECTION is None or _INTENT_DB_PATH != str(path)
+                    or _INTENT_DB_SIGNATURE != before):
+                if _INTENT_DB_CONNECTION is not None:
+                    _INTENT_DB_CONNECTION.close()
+                uri = path.as_uri() + '?mode=ro'
+                _INTENT_DB_CONNECTION = sqlite3.connect(uri, uri=True, timeout=1.0)
+                _INTENT_DB_CONNECTION.execute('PRAGMA query_only=ON')
+                _INTENT_DB_PATH = str(path)
+                _INTENT_DB_SIGNATURE = before
+                _INTENT_CACHE_KEY = None
+                _INTENT_CACHE_VALUE = None
+
+            db = _INTENT_DB_CONNECTION
+            data_version = db.execute('PRAGMA data_version').fetchone()[0]
+            key = (str(path), before, scope, data_version)
+            if key == _INTENT_CACHE_KEY:
+                return _INTENT_CACHE_VALUE
+            row = db.execute(
+                "SELECT 1 FROM intents WHERE scope=? AND state IN ('unknown','acknowledged','pending') LIMIT 1",
+                (scope,),
+            ).fetchone()
+            version_after = db.execute('PRAGMA data_version').fetchone()[0]
+            after = _db_file_signature(path)
+            if before == after and data_version == version_after:
+                _INTENT_CACHE_KEY = key
+                _INTENT_CACHE_VALUE = row is not None
+                return _INTENT_CACHE_VALUE
+        raise OSError('strategy evidence changed during intent read')
+
+
+def _active_reconciliation_state(status, *, require_pending=False):
+    """Prove current-account flatness; any unavailable/ambiguous source is active."""
+    try:
+        from scripts.okx_runtime import selected_environment
+        current_scope = selected_environment().identity
+        # Always consult the generation-cached ledger projection. On ordinary
+        # cadence the currently selected account scopes known rows; long
+        # settlement backoff additionally requires the sync status to prove
+        # that its pending count belongs to this same account generation.
+        activity = _LEDGER_ACTIVITY_CACHE.read(DATA / 'trading_ledger.json')
+        ledger_scope = status.get('environment_id')
+        if not isinstance(ledger_scope, str) or not ledger_scope:
+            return True
+        if ledger_scope != current_scope:
+            return True
+        if activity['unscoped_active']:
+            return True
+        scoped = activity['scopes'].get(current_scope, {'holding_count': 0, 'closed_pending_count': 0})
+        if scoped['holding_count']:
+            return True
+        if require_pending and scoped['closed_pending_count'] <= 0:
+            return True
+        return _has_unresolved_intents(current_scope)
+    except Exception:
+        # Missing, corrupt, stale-account, or unreadable evidence must never
+        # convert a reconciliation into the long flat-pending/idle interval.
+        return True
+
+
 def should_run(last_run,now=None):
     now=time.time() if now is None else now
-    status=load('ledger_sync_status.json',{});request=load('ledger_refresh_request.json',{})
-    if status.get('status')=='error' and status.get('last_error_at',0)>=request.get('at',0) and now-last_run<60:
-        return False
-    if request.get('id') and request['id']!=status.get('handled_request'):
+    status,status_valid=_control_file('ledger_sync_status.json')
+    request,request_valid=_control_file('ledger_refresh_request.json')
+    if not request_valid:
+        # A malformed request marker cannot prove that no urgent request exists.
+        return now-last_run>=ACTIVE_INTERVAL_SECONDS
+    if request.get('id') and request.get('id')!=status.get('handled_request'):
         return now-last_run>=5
-    if status.get('pending_settlements',0) and now-(status.get('pending_since') or 0)<120:
-        return now-last_run>=10
-    # No regular reconciliation is due before the active minimum. The urgent
-    # request/pending-settlement paths above retain their 5s/10s response.
+
+    pending = status.get('pending_settlements', 0)
+    pending_since = status.get('pending_since')
+    pending_valid = (status_valid and type(pending) is int and pending >= 0
+                     and (pending == 0 or (type(pending_since) in (int, float)
+                         and math.isfinite(pending_since) and 0 <= pending_since <= now)))
+    if not pending_valid:
+        return now-last_run>=ACTIVE_INTERVAL_SECONDS
+    if pending_valid and pending:
+        if now-pending_since<120:
+            return now-last_run>=10
+        # Long settlement polling is allowed only with a current, validated
+        # account ledger, no live holding, and no unresolved durable entry intent.
+        if not _active_reconciliation_state(status, require_pending=True):
+            return now-last_run>=PENDING_SETTLEMENT_INTERVAL_SECONDS
+        return now-last_run>=ACTIVE_INTERVAL_SECONDS
+
+    if (status_valid and status.get('status')=='error'
+            and isinstance(status.get('last_error_at'), (int, float))
+            and status.get('last_error_at', 0) >= request.get('at', 0)
+            and now-last_run<ACTIVE_INTERVAL_SECONDS):
+        return False
+
     if now-last_run<ACTIVE_INTERVAL_SECONDS:return False
-    try:active=_ACTIVITY_CACHE.read(DATA/'trading_ledger.json')
-    except (OSError,ValueError,TypeError):active=False
+    if not status_valid:
+        return True
+    active = _active_reconciliation_state(status)
     return now-last_run>=(ACTIVE_INTERVAL_SECONDS if active else IDLE_INTERVAL_SECONDS)
+
 
 def settlement_diagnostics(rows, scope, history_latest_ms=0, now=None):
     """Show known openings separately from settled receipts; never estimate PnL."""

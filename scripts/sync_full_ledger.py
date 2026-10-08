@@ -85,7 +85,9 @@ def build_lifecycle_ledger(*, notify=True):
             old_trades = json.load(f)
         if not isinstance(old_trades, list) or any(not isinstance(t, dict) for t in old_trades):
             raise ValueError('Invalid existing ledger; preserved for reconciliation')
-        existing_closed_rows = [t for t in old_trades if t.get("status") == "closed" and t.get("id") and str(t.get("close_time", "")) >= reset_time]
+        # Baseline reset scopes cycle/risk views, never retained canonical facts.
+        # All existing closed IDs also suppress duplicate close notifications.
+        existing_closed_rows = [t for t in old_trades if t.get("status") == "closed" and t.get("id")]
         existing_closed_ids = {t["id"] for t in existing_closed_rows}
 
     trackers = {}
@@ -377,7 +379,9 @@ def build_lifecycle_ledger(*, notify=True):
     fresh_ids={row['id'] for row in trades_lifecycle}
     for row in old_trades:
         if row.get('id') in fresh_ids or id(row) in replaced_rows:continue
-        if row.get('status')=='closed' and str(row.get('close_time',''))>=reset_time:
+        if row.get('status')=='closed':
+            # Retain previously recorded finalized facts across baseline resets.
+            # This does not backfill older exchange receipts or alter cycle views.
             trades_lifecycle.append(row)
         elif row.get('status') in {'holding','closed_pending'}:
             # A new position on the same side does not settle the previous one.

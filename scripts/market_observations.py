@@ -188,6 +188,9 @@ def _atomic(path,value):
 
 
 def collect():
+    from scripts.runtime_features import is_enabled
+    if not is_enabled("market_observations"):
+        return {"status": "disabled", "not_required": True, "feature": "market_observations"}
     from scripts.instrument_pool import load_instruments
     history=_read_history();history_index=_history_index(history)
     rows=[collect_one(item,history=history,history_index=history_index)

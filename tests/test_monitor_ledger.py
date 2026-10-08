@@ -99,16 +99,19 @@ class MonitorTests(unittest.TestCase):
         monitor.atomic('ledger_refresh_request.json', {'id': 'new', 'at': 100})
         self.assertFalse(monitor.should_run(100, 104))
         self.assertTrue(monitor.should_run(100, 105))
-        monitor.atomic('ledger_sync_status.json', {'status': 'error', 'last_error_at': 106})
+        monitor.atomic('ledger_sync_status.json', {'status': 'error', 'last_error_at': 106, 'handled_request': 'new'})
         self.assertFalse(monitor.should_run(105, 115))
         self.assertTrue(monitor.should_run(105, 165))
 
     def test_pending_fast_poll_expires(self):
         monitor.atomic('ledger_sync_status.json', {'pending_settlements': 1, 'pending_since': 100})
-        self.assertTrue(monitor.should_run(100, 110))
-        self.assertFalse(monitor.should_run(220, 230))
-        self.assertFalse(monitor.should_run(220, 280))
-        self.assertTrue(monitor.should_run(220, 520))
+        # This test isolates timing thresholds; proven-flat eligibility is
+        # covered separately by the generation/state regression tests.
+        with patch.object(monitor, '_active_reconciliation_state', return_value=False):
+            self.assertTrue(monitor.should_run(100, 110))
+            self.assertFalse(monitor.should_run(220, 230))
+            self.assertFalse(monitor.should_run(220, 280))
+            self.assertTrue(monitor.should_run(220, 520))
 
     def test_active_lifecycle_keeps_minute_reconciliation(self):
         monitor.atomic('trading_ledger.json',[self.row])

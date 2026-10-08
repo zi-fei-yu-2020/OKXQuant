@@ -67,6 +67,14 @@ def closed_frame_time():
     return now
 
 
+def run_optional_scalp_research(identity, packages, candidates, result):
+    from scripts.runtime_features import is_enabled
+    if not is_enabled('scalp_research'):
+        return {'status':'disabled','not_required':True,'feature':'scalp_research','order_authorized':False}
+    from scripts.scalp_research import observe
+    return observe(identity,packages,candidates,result)
+
+
 def run(*, observe_only=False):
     from scripts.okx_runtime import freeze_environment, unfreeze_environment
     import ai_factor_trader as trader
@@ -179,8 +187,7 @@ def run(*, observe_only=False):
         # Research runs AFTER releasing the position writer gate and after the
         # real submission result is durable. A research failure never repeats an order.
         try:
-            from scripts.scalp_research import observe
-            result['research']=observe(env.identity,packages,candidates,result)
+            result['research']=run_optional_scalp_research(env.identity,packages,candidates,result)
         except Exception as exc:
             result['research']={'status':'unavailable','error_type':type(exc).__name__,'order_authorized':False}
         try:atomic('demo_scalp_status.json',result)

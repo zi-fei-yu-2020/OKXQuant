@@ -108,6 +108,18 @@ def current_jobs() -> tuple[JobSpec, ...]:
     from scripts.okx_runtime import _load_dotenv
     automatic = _load_dotenv().get("OKXQUANT_AUTOTRADE_ENABLED", "1") == "1"
     jobs = tuple(job for job in JOBS if automatic or job.name not in {"trader", "demo_scalp"})
+    from scripts.runtime_features import status as runtime_status
+    features = runtime_status()["features"]
+    disabled_jobs = set()
+    if not features["factor_snapshots"]:
+        disabled_jobs.add("factor_library")
+    if not features["market_observations"]:
+        disabled_jobs.add("market_observations")
+    if not features["automatic_review"]:
+        disabled_jobs.add("self_improvement")
+    # Manual self-improvement requests are dispatched separately below and
+    # remain available even when its automatic schedule is disabled.
+    jobs = tuple(job for job in jobs if job.name not in disabled_jobs)
     return (*jobs, *backup_job_specs())
 
 

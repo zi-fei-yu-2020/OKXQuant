@@ -10,6 +10,7 @@ import dashboard.app as dashboard
 
 SPA_PATHS = (
     '/', '/trading', '/factors', '/news', '/lab', '/history',
+    '/decisions','/market-intelligence','/reviews','/trades',
     '/docs', '/docs/', '/docs/getting-started', '/doc',
     '/admin', '/admin/', '/admin/settings',
 )

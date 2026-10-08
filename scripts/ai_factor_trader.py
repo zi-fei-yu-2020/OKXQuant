@@ -164,9 +164,13 @@ def run_cmd_result(cmd, timeout=15):
     """Return process metadata; callers must inspect returncode before mutating local state."""
     try:
         from okxquant_backend.account_connections import assert_current
-        assert_current(market._selected())
-        with algo_reader.command_barrier(cmd, market._selected()):
-            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, env=market._selected().cli_env())
+        environment = market._selected()
+        assert_current(environment)
+        from scripts.okx_read_commands import read_result
+        res = read_result(cmd, environment)
+        if res is None:
+            with algo_reader.command_barrier(cmd, environment):
+                res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, env=environment.cli_env())
         parsed = None
         if res.stdout.strip():
             try:
@@ -197,8 +201,14 @@ def run_cmd(cmd, timeout=15):
 
 def run_json_cmd(cmd, timeout=15):
     try:
-        with algo_reader.command_barrier(cmd, market._selected()):
-            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, env=market._selected().cli_env())
+        environment = market._selected()
+        from okxquant_backend.account_connections import assert_current
+        assert_current(environment)
+        from scripts.okx_read_commands import read_result
+        res = read_result(cmd, environment)
+        if res is None:
+            with algo_reader.command_barrier(cmd, environment):
+                res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, env=environment.cli_env())
         if res.returncode == 0 and res.stdout.strip():
             return json.loads(res.stdout.strip())
         return None

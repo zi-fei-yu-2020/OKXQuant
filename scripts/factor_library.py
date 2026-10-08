@@ -457,6 +457,9 @@ def compute_instrument_factors(item: Dict[str, Any], smart_money_pool: Dict[str,
     return factors
 
 def update_factor_library() -> Dict[str, Any]:
+    from scripts.runtime_features import is_enabled
+    if not is_enabled("factor_snapshots"):
+        return {"status": "disabled", "not_required": True, "feature": "factor_snapshots"}
     market.begin_signal_frame()
     """Single-flight refresh; a reused snapshot keeps its original timestamps."""
     started = time.time()

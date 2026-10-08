@@ -20,7 +20,7 @@
 在项目根目录执行：
 
 ```bash
-cp env.example .env
+python3 scripts/init_env.py
 chmod 600 .env
 ```
 
@@ -125,3 +125,10 @@ npm run build
 测试入口会创建临时源码副本，不复制真实 `.env`、`data/`、日志、备份或用户主目录，并阻止未 mock 的网络访问和子进程启动。不要在实盘目录直接运行旧的 `unittest discover` 命令。
 
 详细说明见 `docs/TESTING.md`。通过单元测试和前端构建不代表容器镜像或实盘交易已经验证通过。
+
+
+## Lightweight release (2026-10-08)
+
+The first-install generator never overwrites existing configuration. New installs default to light optional workloads and paused automatic entries; existing deployments retain their saved flags. The console can change the optional runtime profile separately from the confirmed automatic-entry switch. Financial monitoring now requires login. Use the combined backend image entry point, not a separately launched dashboard ASGI object.
+
+See `LIGHTWEIGHT_RELEASE_20261008.md` for feature boundaries, migration, authentication, statistical coverage and controlled rollback. Keep Node/OKX CLI in this compatibility image while OAuth/fallback consumers remain; removing it without auditing those paths is unsupported.

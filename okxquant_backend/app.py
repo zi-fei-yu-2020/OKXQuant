@@ -100,6 +100,8 @@ async def lifespan(_: FastAPI):
 from fastapi.middleware.gzip import GZipMiddleware
 app = FastAPI(title="OKXQuant Standalone Backend", version="0.1.0", lifespan=lifespan, docs_url="/api/docs", redoc_url="/api/redoc")
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+from okxquant_backend.monitor_access import protect_monitor_data
+app.middleware("http")(protect_monitor_data)
 
 
 @app.middleware("http")
@@ -594,6 +596,58 @@ def get_admin_configuration() -> dict[str, str]:
     }
 
 
+@app.get("/api/v1/admin/runtime-controls")
+def runtime_controls_get():
+    require_admin_header()
+    from okxquant_gateway.scheduler import runtime_controls
+    return runtime_controls()
+
+
+@app.put("/api/v1/admin/runtime-controls")
+def runtime_controls_put(payload: dict[str, Any] = Body(...)):
+    user=require_superadmin()
+    if set(payload)!={"automatic_trader","confirmation"} or type(payload.get("automatic_trader")) is not bool:
+        raise HTTPException(status_code=422,detail="Specify a boolean automatic_trader and exact confirmation")
+    enabled=payload["automatic_trader"]
+    from okxquant_backend.account_connections import registry_guard, assert_current
+    from okxquant_backend.settings_store import ENV_FILE
+    from scripts.config_lock import configuration_write
+    from scripts.okx_runtime import selected_environment
+    from okxquant_gateway.scheduler import runtime_controls
+    with registry_guard(),configuration_write(ENV_FILE):
+        env=selected_environment()
+        expected="ENABLE "+env.mode.upper()+" AUTO" if enabled else "PAUSE AUTO"
+        if payload["confirmation"]!=expected:
+            raise HTTPException(status_code=422,detail="Confirmation must be: "+expected)
+        if enabled and not env.configured:
+            raise HTTPException(status_code=409,detail="Verify the selected trading account credentials before enabling entries")
+        if enabled:assert_current(env)
+        update_env({"OKXQUANT_AUTOTRADE_ENABLED":enabled})
+    audit_record("runtime.automatic_trader.update","success",{"actor":user.get("username"),"enabled":enabled,"scope":env.identity,"future_cycles_only":True})
+    return {**runtime_controls(),"future_cycles_only":True,"protection_unchanged":True,"orders_canceled":False}
+
+
+@app.get("/api/v1/admin/runtime-features")
+def runtime_features_get():
+    require_admin_header()
+    from scripts.runtime_features import status
+    return status()
+
+
+@app.put("/api/v1/admin/runtime-features")
+def runtime_features_put(payload: dict[str, Any] = Body(...)):
+    user=require_superadmin()
+    if set(payload)-{"profile","overrides","features"} or ("overrides" in payload and "features" in payload):
+        raise HTTPException(status_code=422,detail="Unsupported runtime configuration fields")
+    from scripts.runtime_features import save_config
+    document={k:v for k,v in payload.items() if k!="overrides"}
+    if "overrides" in payload:document["features"]=payload["overrides"]
+    try:result=save_config(document)
+    except (ValueError,TypeError) as exc:raise HTTPException(status_code=422,detail=str(exc)) from None
+    audit_record("runtime.features.update","success",{"actor":user.get("username"),"configuration":result})
+    return result
+
+
 def runtime_overview() -> dict[str, Any]:
     from okxquant_gateway.scheduler import runtime_controls
     from okxquant_backend.account_connections import runtime_credentials, trading_connection_summary
@@ -603,7 +657,12 @@ def runtime_overview() -> dict[str, Any]:
         file_health("news_sentiment.json", 10 * 60),
         file_health("trading_ledger.json", 15 * 60),
     ]
-    all_fresh = all(h.get("fresh", False) for h in health_files)
+    from scripts.runtime_features import status as feature_status
+    feature_state=feature_status()
+    if not feature_state["features"]["factor_snapshots"]:
+        for item in health_files:
+            if item["name"]=="factor_library_snapshot.json":item.update(status="disabled",required=False,fresh=None)
+    all_fresh = all(h.get("fresh", False) for h in health_files if h.get("required",True))
     health_payload = {
         "overall": "LIVE" if all_fresh else "STALE",
         "files": health_files,
@@ -612,6 +671,7 @@ def runtime_overview() -> dict[str, Any]:
     return {
         "service": {"version": "0.1.0", "pid": os.getpid(), "uptime_seconds": int(time.time() - STARTED_AT)},
         "runtime_controls": runtime_controls(),
+        "runtime_features": feature_state,
         "credentials": runtime_credentials(bool(settings.llm_api_key)),
         "trading_connection": trading_connection_summary(),
         "configuration": get_admin_configuration(),
@@ -687,9 +747,13 @@ def top_sitemap_xml() -> Response:
     pf = ROOT / "okxquant_frontend" / "public" / "sitemap.xml"
     if pf.is_file():
         return FileResponse(str(pf), media_type="application/xml", headers={"Cache-Control": "public, max-age=86400, s-maxage=604800"})
-    return Response(content="""<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://trade.112102.xyz/</loc><priority>1.0</priority></url><url><loc>https://trade.112102.xyz/factors</loc><priority>0.9</priority></url><url><loc>https://trade.112102.xyz/news</loc><priority>0.8</priority></url><url><loc>https://trade.112102.xyz/lab</loc><priority>0.8</priority></url><url><loc>https://trade.112102.xyz/history</loc><priority>0.8</priority></url><url><loc>https://trade.112102.xyz/docs</loc><priority>0.9</priority></url></urlset>""", media_type="application/xml")
+    return Response(content="""<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://trade.112102.xyz/</loc><priority>1.0</priority></url><url><loc>https://trade.112102.xyz/decisions</loc><priority>0.9</priority></url><url><loc>https://trade.112102.xyz/market-intelligence</loc><priority>0.8</priority></url><url><loc>https://trade.112102.xyz/reviews</loc><priority>0.8</priority></url><url><loc>https://trade.112102.xyz/trades</loc><priority>0.8</priority></url><url><loc>https://trade.112102.xyz/docs</loc><priority>0.9</priority></url></urlset>""", media_type="application/xml")
 
 
+@app.get("/decisions", include_in_schema=False)
+@app.get("/market-intelligence", include_in_schema=False)
+@app.get("/reviews", include_in_schema=False)
+@app.get("/trades", include_in_schema=False)
 @app.get("/trading", include_in_schema=False)
 @app.get("/factors", include_in_schema=False)
 @app.get("/news", include_in_schema=False)
@@ -2706,7 +2770,7 @@ def cache(resource: str, x_okxquant_admin_token: str | None = Header(default=Non
             cached=payload if isinstance(payload,dict) else {}
             payload=rebuild(scoped_rows(read_json('trading_ledger.json',[]),scope),scope=scope)
             for key in ('funnel','allocation'):
-                if key in cached:payload[key]=cached[key]
+                if isinstance(cached,dict) and cached.get('scope')==scope and key in cached:payload[key]=cached[key]
         else:
             payload=_scoped_cached_payload(payload,scope)
     return JSONResponse(payload,headers={'Cache-Control':'no-store'})

@@ -252,7 +252,8 @@ def _archive_runtime(keep_financial=False):
     preserve_account_baseline()
     target=DATA/'account-switch-archive'/uuid.uuid4().hex
     names=('ai_brain_decisions.json','trading_state.json','trading_ledger.json','position_trackers.json',
-           'web_data.json','state_snapshot.json','ledger_sync_status.json')
+           'web_data.json','state_snapshot.json','ledger_sync_status.json',
+           'ai_brain_history.json','ai_brain_last_prompt.txt','ai_brain_last_prompt_meta.json','horizon_stats.json')
     if keep_financial: names=tuple(n for n in names if n not in {'trading_ledger.json','account_initial_state.json'})
     for name in names:
         source=DATA/name

@@ -19,6 +19,9 @@ def agent_statuses(job_runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     latest_by_job: dict[str, dict[str, Any]] = {}
     for run in job_runs:
         latest_by_job.setdefault(str(run.get("job_name")), run)
+    from scripts.runtime_features import status as feature_status
+    features=feature_status()["features"]
+    optional={"factor_engine":"factor_snapshots","self_improvement":"automatic_review"}
     result = []
     for agent in AGENTS:
         output = ROOT / "data" / agent["output"] if agent["output"] else None
@@ -29,5 +32,7 @@ def agent_statuses(job_runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
             health = "degraded"
         if agent["output"] and age is None:
             health = "cold"
-        result.append({**agent, "health": health, "output_age_seconds": age, "last_run_status": run.get("status", "not-run"), "last_run_at": run.get("started_at", "")})
+        automatic_enabled=features.get(optional.get(agent["id"]),True)
+        if not automatic_enabled:health="disabled"
+        result.append({**agent, "automatic_enabled":automatic_enabled, "manual_available":agent["id"]=="self_improvement", "health": health, "output_age_seconds": age, "last_run_status": run.get("status", "not-run"), "last_run_at": run.get("started_at", "")})
     return result

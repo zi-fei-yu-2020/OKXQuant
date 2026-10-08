@@ -10,6 +10,7 @@ from .config import ROOT, environment_file, refresh_settings
 
 ENV_FILE = environment_file()
 MANAGED_KEYS = {
+    "OKXQUANT_AUTOTRADE_ENABLED",
     "OKX_BASE_URL",
     "OKXQUANT_OKX_ENV",
     "OKX_API_KEY",

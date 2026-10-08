@@ -31,9 +31,8 @@ The system distinguishes scalp and swing horizons. Daily drawdown protection sto
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
-cp env.example .env
+python scripts/init_env.py
 python -m uvicorn okxquant_backend.app:app --host 0.0.0.0 --port 8080
-python -m okxquant_gateway.worker
 ```
 
 Frontend:
@@ -45,6 +44,22 @@ npm run typecheck
 npm run test:unit
 npm run build
 ```
+
+## First-run workflow and lightweight operation
+
+1. Run `python scripts/init_env.py` once. It refuses to overwrite an existing `.env`, creates a unique temporary administrator password in that private file, and starts new installations in DEMO, light profile, with automatic entries paused.
+2. Build and start the combined backend with Docker Compose below. Use the setup token from `.env` for the initial `admin` login; change the password after login. Never put credentials into Git, URLs, screenshots or support reports.
+3. In **Account & trading**, connect and verify the intended DEMO account, instrument pool and capital baseline. In **Strategy & risk**, review the actual limits. Model setup is separate from account authorization.
+4. Review the overview readiness indicators. A healthy API is not proof of exchange connectivity, trading permission or protection coverage. Explicitly enable future automatic cycles from the overview only after validation.
+5. Explore `/decisions`, `/market-intelligence`, `/reviews`, and `/trades`. Old front URLs redirect. Monitoring financial data and audit details require a valid session; market candles and documentation stay public.
+
+The seven primary console sections are overview, account & trading, strategy & risk, model services, runtime & logs, notifications & backups, and system settings. Advanced capabilities remain under contextual subnavigation rather than seventeen always-visible primary entries.
+
+`light` disables optional factor snapshots, market-observation collection, entry-opportunity research, scalp research, and scheduled AI reviews. It does **not** disable position protection, risk checks, news risk input, ledger/evidence collection or existing published strategy memory. A manual review remains available. Saved `data/runtime_features.json` settings override bootstrap environment defaults. Missing settings in an existing deployment preserve standard behavior; unreadable feature settings disable optional work and report an error rather than silently enabling it.
+
+Pausing automatic entries affects **future scheduled cycles only**; it does not cancel exchange orders, interrupt an already-running inference, or stop position protection. LIVE minute consent remains separate. Upgrading never silently changes an existing user's environment, risk parameters or entry switch.
+
+The supported authenticated server entry point is `okxquant_backend.app:app`. The old `python dashboard/app.py` launcher delegates to it; do not launch the dashboard-only ASGI object independently because it is the mounted monitoring component, not a second control plane.
 
 ## Docker
 

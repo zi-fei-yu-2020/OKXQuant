@@ -647,6 +647,33 @@ def validate_and_filter_decision(p: Dict[str, Any], d_item: Dict[str, Any], acti
             rr = (entry - take_profit) / (stop_loss - entry)
         return "WAIT", f"拦截插件管线调用异常: {exc}，安全降级为 WAIT", rr
 
+def _refresh_optional_factor_snapshot():
+    from scripts.runtime_features import is_enabled
+    if not is_enabled("factor_snapshots"):
+        return {"status": "disabled", "not_required": True, "feature": "factor_snapshots"}
+    import factor_library
+    return factor_library.update_factor_library()
+
+
+def _record_optional_entry_research(identity, packages, risk_contract, signature):
+    from scripts.runtime_features import is_enabled
+    if not is_enabled("entry_research"):
+        return {"status": "disabled", "not_required": True, "feature": "entry_research"}
+    from scripts.entry_opportunities import record_cycle
+    return record_cycle(identity, packages, risk_contract, signature)
+
+
+def _read_pending_orders_command(command, environment, timeout=8):
+    """Use the native allowlisted GET when eligible, otherwise preserve CLI behavior."""
+    from scripts.okx_read_commands import read_result
+    result = read_result(command, environment)
+    if result is not None:
+        return result
+    cli_env = environment.cli_env() if callable(getattr(environment, "cli_env", None)) else None
+    return subprocess.run(command, shell=True, capture_output=True, text=True,
+                          timeout=timeout, env=cli_env)
+
+
 @single_brain_cycle
 def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", active_positions_detail: List[Dict[str, Any]] = None, usdt_available: float = 0.0) -> Optional[Dict[str, Any]]:
     """Fetch all six crypto symbols, call the LLM once, then persist an auditable result."""
@@ -698,11 +725,10 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
     }
     package_by_id = {p["instId"]: p for p in packages}
 
-    # Automatically Update & Persist Comprehensive Factor Library Snapshot
+    # Optional research only; the trading/risk cycle continues in light mode.
     try:
         sys.path.append(os.path.join(WORKSPACE_DIR, "scripts"))
-        import factor_library
-        factor_library.update_factor_library()
+        _refresh_optional_factor_snapshot()
     except Exception as e:
         print(f"[AI Brain Batch] Factor Library update warning: {e}")
 
@@ -711,7 +737,8 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
     pending_verified = False
     try:
         ord_cmd = okx_private_command("okx swap orders --json 2>/dev/null")
-        ord_res = subprocess.run(ord_cmd, shell=True, capture_output=True, text=True, timeout=8)
+        read_env = market._selected()
+        ord_res = _read_pending_orders_command(ord_cmd, read_env)
         if ord_res.returncode == 0 and ord_res.stdout:
             pending_orders_list = json.loads(ord_res.stdout)
             if not isinstance(pending_orders_list, list) or any(not isinstance(o,dict) or not o.get("instId") or not o.get("ordId") for o in pending_orders_list):
@@ -754,18 +781,17 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
 
     # Same frozen data, shadow only. A research failure never blocks risk management.
     try:
-        from scripts.entry_opportunities import record_cycle
-        record_cycle(market._selected().identity, packages, prompt_bundle.risk_contract, cycle_execution['signature'])
+        _record_optional_entry_research(market._selected().identity, packages,
+                                        prompt_bundle.risk_contract, cycle_execution['signature'])
     except Exception as exc:
         print('[Entry Shadow] observation unavailable: ' + type(exc).__name__)
 
-    # Save Realtime Prompt Snapshot for Web Transparent Inspection
+    # Save a paired, account-bound prompt snapshot for Web inspection.
     try:
-        tmp_prompt = AI_LAST_PROMPT_FILE + ".tmp"
-        with open(tmp_prompt, "w", encoding="utf-8") as f:
-            f.write(f"【SYSTEM PROMPT】:\n{effective_system_prompt.strip()}\n\n{'='*70}\n【USER PROMPT ({time_str})】：\n{prompt.strip()}")
-        os.replace(tmp_prompt, AI_LAST_PROMPT_FILE)
         atomic_write_json(os.path.join(DATA_DIR, "trading_prompt_manifest.json"), prompt_bundle.manifest)
+        full_prompt_text = (f"?SYSTEM PROMPT??\n{effective_system_prompt.strip()}\n\n"
+                            f"{'='*70}\n?USER PROMPT ({time_str})??\n{prompt.strip()}")
+        publish_last_prompt_snapshot(full_prompt_text, cycle_environment, cycle_as_of)
     except Exception:
         pass
 
@@ -1115,8 +1141,8 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
         })
 
         # Record durable history for Web Audit
-        full_prompt_text = f"【SYSTEM PROMPT】：\n{effective_system_prompt.strip()}\n\n{'='*70}\n【USER PROMPT ({time_str})】：\n{prompt.strip()}"
         history_record = {
+            **account_basis(cycle_environment),
             "time": time_str,
             "status": "success",
             "macro_assessment": macro_summary,
@@ -1177,7 +1203,7 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
         if json_report:
             strategy_evidence.best_effort(market._selected().identity, 'model_json_response', json_report)
         try:
-            append_ai_history({
+            failure_record = {
                 'time': time_str,
                 'status': 'failed',
                 'macro_assessment': '',
@@ -1189,16 +1215,49 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                 'position_management': [],
                 'council_transcript': None,
                 'top_opportunities': [],
-            })
+            }
+            original_environment = locals().get('cycle_environment')
+            if original_environment is not None:
+                failure_record.update(account_basis(original_environment))
+            append_ai_history(failure_record)
         except (OSError, ValueError, TypeError):
             print('[AI Brain Batch] Failed to persist inference failure history')
         telemetry.finish('failed', error=e)
         print(f'[AI Brain Batch] Error in batch inference: {LAST_INFERENCE_ERROR}')
         return None
 
+def publish_last_prompt_snapshot(text, cycle_environment, cycle_as_of):
+    """Publish prompt bytes with non-secret ownership and integrity metadata."""
+    import hashlib
+    metadata_path = os.path.join(DATA_DIR, "ai_brain_last_prompt_meta.json")
+    encoded = text.encode("utf-8")
+    metadata = {
+        "account_scope": cycle_environment.identity,
+        "environment_id": cycle_environment.identity,
+        "generated_at": time.time(),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+    }
+    os.makedirs(DATA_DIR, exist_ok=True)
+    text_fd, text_tmp = tempfile.mkstemp(prefix=".ai-prompt-", suffix=".tmp", dir=DATA_DIR)
+    try:
+        with os.fdopen(text_fd, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # Check the original frozen frame immediately before publication.
+        assert_cycle_current(cycle_environment, cycle_as_of)
+        os.replace(text_tmp, AI_LAST_PROMPT_FILE)
+        atomic_write_json(metadata_path, metadata)
+    finally:
+        if os.path.exists(text_tmp):
+            os.unlink(text_tmp)
+    return metadata
+
+
 def account_basis(environment):
     """Non-secret provenance shared by cache and management consumers."""
-    return {'account_scope': environment.identity, 'connection_id': getattr(environment, 'connection_id', ''),
+    return {'account_scope': environment.identity, 'environment_id': environment.identity,
+            'connection_id': getattr(environment, 'connection_id', ''),
             'binding_version': getattr(environment, 'binding_version', 0)}
 
 
