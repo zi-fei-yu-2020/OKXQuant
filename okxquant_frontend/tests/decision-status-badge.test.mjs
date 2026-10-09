@@ -1,4 +1,5 @@
 import test from 'node:test'
+import * as entryQuota from '../src/utils/entryQuota.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import * as Vue from 'vue'
@@ -13,6 +14,7 @@ async function render(status,code,counts={}) {
  const exports={}
  new Function('require','exports',js)(name=>{
   if(name==='vue')return Vue
+  if(name.includes('entryQuota'))return entryQuota
   if(name.includes('stores/dashboard'))return {useDashboardStore:()=>({data:{decision_cycle:{status,counts},wait_state:{code,detail:'SHOULD_NOT_RENDER_LONG_COPY'},execution_profile:{execution:{id:'standard'}}}})}
   if(name.endsWith('.vue'))return {__esModule:true,default:{setup:(_,{slots})=>()=>Vue.h('section',slots.default?.())}}
   throw Error(name)

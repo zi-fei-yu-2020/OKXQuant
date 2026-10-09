@@ -168,7 +168,9 @@ class BrainRegressions(unittest.TestCase):
         self.council_config.return_value = {"enabled": False}
         self.run_cycle()
         self.llm.assert_called_once()
-        self.telemetry.finish.assert_called_once_with("success", {"usage": {}}, output_chars=len(self.llm.return_value[0]))
+        chars=len(self.llm.return_value[0])
+        self.telemetry.finish.assert_called_once_with("success", {"usage": {"_transport":{
+            "output_validation":"valid_json","output_chars":chars}}}, output_chars=chars)
 
     def test_council_failure_never_launches_an_extra_single_model(self):
         self.council_config.return_value = {"enabled": True}

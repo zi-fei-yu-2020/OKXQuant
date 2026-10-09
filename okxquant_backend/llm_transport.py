@@ -217,11 +217,11 @@ def safe_transport_diagnostics(value):
     """No provider bodies, endpoints, arbitrary headers or credentials may escape."""
     if not isinstance(value, dict): return {}
     out = {}
-    for key in ('attempts','http_status','total_ms','first_byte_ms','first_content_ms','max_gap_ms','bytes_received','heartbeat_count'):
+    for key in ('attempts','http_status','total_ms','first_byte_ms','first_content_ms','max_gap_ms','bytes_received','heartbeat_count','output_chars','max_output_tokens'):
         v=value.get(key)
         if key=='http_status' and not (isinstance(v,int) and not isinstance(v,bool) and 100<=v<=599):continue
         if isinstance(v,(int,float)) and not isinstance(v,bool) and math.isfinite(v) and 0 <= v <= 1e12: out[key]=v
-    for key,allowed in {'transport_mode':{'stream','json'},'failure_phase':{'connect','headers','first_byte','body','idle','total','protocol','http','configuration','complete','network','cancelled','async_context','worker'}}.items():
+    for key,allowed in {'transport_mode':{'stream','json'},'failure_phase':{'connect','headers','first_byte','body','idle','total','protocol','http','configuration','complete','network','cancelled','async_context','worker','json'},'output_validation':{'valid_json','truncated_json','invalid_json'},'finish_reason':{'stop','length','max_tokens','end_turn','stop_sequence','completed','incomplete','content_filter','refusal'}}.items():
         if value.get(key) in allowed:out[key]=value[key]
     if type(value.get('completion_seen')) is bool:out['completion_seen']=value['completion_seen']
     patterns={'request_id':r'(?:[0-9]{20}[A-Za-z0-9]{8,64}|req_[A-Za-z0-9_-]{8,100}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})',
@@ -229,3 +229,18 @@ def safe_transport_diagnostics(value):
     for key,pattern in patterns.items():
         if isinstance(value.get(key),str) and re.fullmatch(pattern,value[key]):out[key]=value[key]
     return out
+
+
+def normalize_legacy_failure_record(record):
+    """Render known damaged legacy labels without rewriting evidence or inferring tokens."""
+    if not isinstance(record,dict):return record
+    failure=record.get("model_failure")
+    if not isinstance(failure,dict) or failure.get("category")!="truncated_model_output":return record
+    message=str(record.get("failure_reason") or failure.get("message") or "")
+    if "?????JSON???????" not in message:return record
+    status=failure.get("http_status");attempts=failure.get("attempts")
+    if type(status) is not int or status!=200 or type(attempts) is not int or not 1<=attempts<=10:return record
+    corrected=str(LLMRequestError(status,attempts,"truncated_model_output"))
+    result=dict(record);result["failure_reason"]=corrected
+    result["model_failure"]={**failure,"message":corrected,"legacy_label_corrected":True}
+    return result

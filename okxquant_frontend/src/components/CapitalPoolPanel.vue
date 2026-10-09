@@ -21,7 +21,7 @@ defineProps<{ pool?: CapitalPoolStatus }>()
     <p v-if="pool.message" role="status" class="text-xs break-words" style="color: var(--text-main)">{{ pool.message }}</p>
     <p class="text-[11px] leading-relaxed break-words" style="color: var(--text-muted)">
       这不是额外现金或交易所隔离钱包，也不是最大亏损保证。持仓和入场挂单共用额度；全仓模式仍可能影响池外权益。
-      <span v-if="pool.max_active_instruments">最多同时占用 {{ pool.max_active_instruments }} 个标的名额。</span>
+      <span v-if="pool.quantity_limits_enabled === true && pool.max_active_instruments">最多同时占用 {{ pool.max_active_instruments }} 个标的名额。</span>
     </p>
   </AppCard>
 </template>

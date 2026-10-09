@@ -9,7 +9,7 @@ import hashlib
 import json
 import math
 
-VERSION = 'closed-candle-plans-v5'
+VERSION = 'closed-candle-plans-v6'
 # Entry-quality guardrails: do not sell the exhausted tail of a move or buy the
 # panic low. These are deterministic filters, not probability claims.
 MIN_PULLBACK_ATR = 0.35
@@ -214,6 +214,13 @@ def _swing_catalog(package, policy=None):
                 from scripts.structure_targets import calibrate_stop,layers
                 calibrate_stop(plan,{'15M':f,'1H':h},policy)
                 plan['target_layers']=layers(plan,{'15M':f,'1H':h},policy)
+                from scripts.entry_quality import attach
+                quality=attach(package,plan,policy)
+                if quality['veto']:
+                    rejected(setup,side,quality['enforced_reasons'][0],entry_quality=quality)
+                elif quality['reasons']:
+                    result['checks'].append({'setup':setup,'side':side,'status':'observed',
+                        'reason':quality['reasons'][0],'entry_quality':quality})
                 plan['id']=hashlib.sha256(json.dumps(plan,sort_keys=True,ensure_ascii=False,allow_nan=False).encode()).hexdigest()[:24]
                 result['plans'].append(plan)
         return result
@@ -257,7 +264,7 @@ def validate_live_quote(package, candidate_id, current, policy=None):
     if plan is None: raise ValueError('program_plan_no_longer_matches_evidence_or_policy')
     if package.get('strategy_engine') == 'demo_scalp_v2':
         from scripts.scalp_candidates import validate_quote
-        return validate_quote(package,plan,current)
+        return validate_quote(package,plan,current,policy)
     bars=verified_bars(package,'15M');bar=bars[-1];sign=1 if plan['action']=='BUY_LONG' else -1
     if plan['setup'] in {'pullback_reclaim','range_reversion'}:level=bars[-2]['close']
     else:level=max(b['high'] for b in bars[-9:-1]) if sign==1 else min(b['low'] for b in bars[-9:-1])
@@ -266,4 +273,9 @@ def validate_live_quote(package, candidate_id, current, policy=None):
     if (current-bar['close'])*sign>atr*.25:raise ValueError('program_trigger_chase_limit_exceeded')
     if not (plan['stop_loss_price']<current<plan['take_profit_price'] if sign==1 else plan['take_profit_price']<current<plan['stop_loss_price']):
         raise ValueError('program_quote_outside_stop_target')
+    from scripts.entry_quality import evaluate,enforced_reasons
+    from scripts.risk_policy import Policy
+    quality=evaluate(package,plan,policy or vars(Policy()),entry_price=current)
+    reasons=enforced_reasons(quality)
+    if reasons:raise ValueError(reasons[0])
     return plan

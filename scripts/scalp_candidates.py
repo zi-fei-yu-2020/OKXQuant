@@ -4,7 +4,7 @@ Momentum targets are volatility projections; range-edge targets use sealed 15M b
 import hashlib
 import json
 
-VERSION = 'scalp-minute-v8'
+VERSION = 'scalp-minute-v9'
 
 
 def catalog(package, policy):
@@ -77,6 +77,7 @@ def catalog(package, policy):
                   'BUY_LONG' if sign==1 else 'SELL_SHORT',
                   'entry_price':entry,'stop_loss_price':stop,'take_profit_price':target,
                   'horizon':'scalp','strategy_mode':mode,'entry_policy':descriptor(),
+                  'quality_policy':{k:policy[k] for k in ('minimum_net_rr','taker_fee','maker_fee','slippage')},
                   'created_at':number(package['data_as_of']),'trigger_close_ms':last['close_ms'],
                   'valid_for_seconds':60,'net_rr':rr,'entry_timeframe':'1M',
                   'trigger_level':level,'entry_atr':a1,'chase_atr':.6,
@@ -100,6 +101,13 @@ def catalog(package, policy):
             series={'1M':one,'5M':five,'15M':bias}
             calibrate_stop(plan,series,policy)
             plan['target_layers']=layers(plan,{'5M':five,'15M':bias},policy)
+            from scripts.entry_quality import attach
+            quality=attach(package,plan,policy)
+            if quality['veto']:
+                reject(side,quality['enforced_reasons'][0],setup=setup,entry_quality=quality)
+            elif quality['reasons']:
+                result['checks'].append({'setup':setup,'side':side,'status':'observed',
+                    'reason':quality['reasons'][0],'entry_quality':quality})
             plan['id']=hashlib.sha256(json.dumps(plan,sort_keys=True,
                                   ensure_ascii=False,allow_nan=False).encode()).hexdigest()[:24]
             result['plans'].append(plan)
@@ -183,7 +191,7 @@ def catalog(package, policy):
     return result
 
 
-def validate_quote(package, plan, current):
+def validate_quote(package, plan, current, policy=None):
     from scripts.entry_candidates import number, verified_bars
     current=number(current); sign=1 if plan['action']=='BUY_LONG' else -1
     bar=verified_bars(package,'1M')[-1]
@@ -197,4 +205,9 @@ def validate_quote(package, plan, current):
     if sign*(current-bar['close'])>plan['entry_atr']*plan['chase_atr']: raise ValueError('program_trigger_chase_limit_exceeded')
     if not (plan['stop_loss_price']<current<plan['take_profit_price'] if sign==1 else plan['take_profit_price']<current<plan['stop_loss_price']):
         raise ValueError('program_quote_outside_stop_target')
+    from scripts.entry_quality import evaluate,enforced_reasons
+    from scripts.risk_policy import Policy
+    quality=evaluate(package,plan,policy or plan.get('quality_policy') or vars(Policy()),entry_price=current)
+    reasons=enforced_reasons(quality)
+    if reasons:raise ValueError(reasons[0])
     return plan

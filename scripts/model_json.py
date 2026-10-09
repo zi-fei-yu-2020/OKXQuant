@@ -104,7 +104,10 @@ def decode_with_regeneration(initial, regenerate=None, *, report=None, clock=tim
             # fresh generation for this 15-minute slot.
             report['status'] = 'rejected'
             from okxquant_backend.llm_transport import LLMRequestError
-            raise LLMRequestError(200, 1, 'truncated_model_output') from exc
+            error=LLMRequestError(200, 1, 'truncated_model_output')
+            error.transport_diagnostics={'failure_phase':'json','output_validation':'truncated_json',
+                                         'output_chars':report.get('output_chars',0)}
+            raise error from exc
     except ContractError:
         if regenerate is None:
             report['status'] = 'rejected'

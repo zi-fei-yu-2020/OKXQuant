@@ -1162,6 +1162,7 @@ def execute_llm_request(
     if selected_policy['mode'] == 'auto':
         raise ValueError('An explicit transport override must select stream or json')
     diagnostics = transport_diagnostics if transport_diagnostics is not None else {}
+    diagnostics["max_output_tokens"] = max_tokens
 
     endpoint, headers, payload = build_request_spec(
         model=target_model,
@@ -1181,6 +1182,15 @@ def execute_llm_request(
         retry_options["attempt_timeout"] = attempt_timeout
     res_json, _, latency_ms, attempts = request_json(endpoint, headers, payload, timeout,
         protocol=target_format, transport_policy=selected_policy, diagnostics=diagnostics, **retry_options)
+
+    diagnostics["max_output_tokens"] = max_tokens
+    if target_format == "claude_messages":
+        diagnostics["finish_reason"] = res_json.get("stop_reason")
+    elif target_format == "openai_responses":
+        diagnostics["finish_reason"] = res_json.get("status")
+    else:
+        choice=(res_json.get("choices") or [{}])[0]
+        if isinstance(choice,dict):diagnostics["finish_reason"] = choice.get("finish_reason")
 
     # Structured trading output must never consume a provider-declared partial answer.
     if require_complete:

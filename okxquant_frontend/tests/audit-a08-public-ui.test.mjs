@@ -1,4 +1,5 @@
 import test from 'node:test'
+import * as entryQuota from '../src/utils/entryQuota.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import * as Vue from 'vue'
@@ -22,6 +23,7 @@ function component(file, state = {}) {
   const exports = {}
   new Function('require', 'exports', code)(name => {
     if (name === 'vue') return Vue
+    if (name.includes('entryQuota')) return entryQuota
     if (name === 'lucide-vue-next') return new Proxy({}, { get: () => icon })
     if (name.includes('stores/auth')) return { useAuthStore: () => ({ token: 'fixture-session' }) }
     if (name.includes('stores/dashboard')) return { useDashboardStore: () => ({ data: null, error: null, isStale: false, positions: [], pendingOrders: [], logs: [], ...state }) }

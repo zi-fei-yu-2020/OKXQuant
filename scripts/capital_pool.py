@@ -260,7 +260,9 @@ def admit(env,observation,balance,positions,orders,metadata,*,inst_id,available,
     if state is not previous:_save(state)
     if state['drawdown']['blocked'] or state['risk_equity']<=0:raise RiskRejected('Capital pool drawdown/depletion gate')
     instruments={p['instId'] for p in held}|{p['instId'] for p in pending}
-    if len(instruments|{inst_id})>config.max_active_instruments:raise RiskRejected('Capital pool active/pending instrument cap')
+    from scripts.horizon_allocation import quantity_limits_enabled
+    if quantity_limits_enabled() and len(instruments|{inst_id})>config.max_active_instruments:
+        raise RiskRejected('Capital pool active/pending instrument cap')
     committed=reserved_margin(held,pending,metadata,leverage_reader)
     equity=state['risk_equity'];total_cap=equity*config.total_margin_fraction
     free=min(number(available),max(0.,total_cap-committed))
@@ -268,12 +270,14 @@ def admit(env,observation,balance,positions,orders,metadata,*,inst_id,available,
     effective_policy=replace(policy,single_asset_margin_usdt=min(policy.single_asset_margin_usdt,equity*config.single_asset_margin_fraction))
     detail={'allocation_id':config.allocation_id,'pool_nav':state['pool_nav'],'risk_equity':equity,
             'account_equity':state['account_equity'],'reserved_margin':committed,'total_margin_cap':total_cap,
-            'single_asset_margin_cap':effective_policy.single_asset_margin_usdt,'max_active_instruments':config.max_active_instruments,
+            'single_asset_margin_cap':effective_policy.single_asset_margin_usdt,'quantity_limits_enabled':quantity_limits_enabled(),
+            'max_active_instruments':config.max_active_instruments if quantity_limits_enabled() else None,
             'warning':state['warning']}
     return Budget(True,equity,free,effective_policy,detail,config_signature(config))
 
 
 def status(env):
+    from scripts.horizon_allocation import quantity_limits_enabled
     try:
         config=load_config()
         if not config.enabled:return {'enabled':False,'status':'disabled','version':VERSION}
@@ -287,6 +291,7 @@ def status(env):
                 'currency':'USDT','configured_cap':config.budget_usdt,'pool_nav':state['pool_nav'],'risk_equity':state['risk_equity'],
                 'strategy_pnl_since_allocation':state['strategy_pnl_since_allocation'],'account_equity':state['account_equity'],
                 'updated_at':state.get('checked_at',state['at']),'balance_version_at':state['at'],'stale':time.time()-state.get('checked_at',state['at'])>120,'drawdown':state['drawdown'],
-                'max_active_instruments':config.max_active_instruments,'warning':state['warning']}
+                'quantity_limits_enabled':quantity_limits_enabled(),
+                'max_active_instruments':config.max_active_instruments if quantity_limits_enabled() else None,'warning':state['warning']}
     except RiskRejected as exc:return {'enabled':True,'status':'error','version':VERSION,'message':str(exc)}
     except (KeyError,TypeError):return {'enabled':True,'status':'error','version':VERSION,'message':'Capital allocation state/config unavailable; new exposure blocked, protection remains active'}

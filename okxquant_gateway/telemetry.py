@@ -50,7 +50,8 @@ class ModelCallTelemetry:
         }
         from okxquant_backend.llm_transport import safe_transport_diagnostics
         record['transport'] = safe_transport_diagnostics(
-            getattr(error, 'transport_diagnostics', {}) if error else usage.get('_transport', {}))
+            {**safe_transport_diagnostics(usage.get('_transport')),
+             **safe_transport_diagnostics(getattr(error, 'transport_diagnostics', {}))})
         call_id = None
         try:
             store = GatewayStore(DB_PATH)

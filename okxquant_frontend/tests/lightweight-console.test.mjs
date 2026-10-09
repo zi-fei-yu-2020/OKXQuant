@@ -1,4 +1,5 @@
 import test from 'node:test'
+import * as entryQuota from '../src/utils/entryQuota.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import * as Vue from 'vue'
@@ -139,6 +140,7 @@ test('StrategyTelemetryPanel renders unknown/no-stats when periods is empty or u
     const exports = {}
     new Function('require', 'exports', code)((name) => {
       if (name === 'vue') return Vue
+    if (name.includes('entryQuota')) return entryQuota
       if (name.includes('stores/dashboard')) return { useDashboardStore: () => ({ data: dataState, error: null, isStale: false, positions: [] }) }
       if (name.includes('/ui/')) return { __esModule: true, default: surface }
       throw new Error('Unmocked: ' + name)

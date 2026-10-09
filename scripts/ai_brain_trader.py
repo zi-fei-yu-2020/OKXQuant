@@ -894,6 +894,9 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
             # JSON is rejected fail-closed instead of launching a second billable
             # generation after the provider may already have completed the first.
             brain_output = decode_with_regeneration(initial_json, report=json_report)
+            if isinstance(raw_res,dict):
+                raw_res.setdefault("usage",{}).setdefault("_transport",{}).update(
+                    output_validation="valid_json",output_chars=len(content))
         original_brain_output = brain_output
         # Shared boundary for single-model and council output, before any model-directed write.
         brain_output = trading_prompt.validate_response(brain_output, packages,
@@ -1172,7 +1175,13 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                 atomic_write_json(path, empty)
             except OSError:
                 print('[AI Brain Batch] Failed to invalidate decision artifacts')
-        from okxquant_backend.llm_transport import public_failure
+        from okxquant_backend.llm_transport import public_failure,LLMRequestError,safe_transport_diagnostics
+        observed_response=locals().get("raw_res")
+        observed_response=observed_response if isinstance(observed_response,dict) else None
+        if isinstance(e,LLMRequestError):
+            usage=(observed_response or {}).get("usage") or {}
+            e.transport_diagnostics=safe_transport_diagnostics({**safe_transport_diagnostics(usage.get("_transport")),
+                **safe_transport_diagnostics(getattr(e,"transport_diagnostics",{}))})
         failure = public_failure(e)
         if failure:
             LAST_INFERENCE_ERROR = failure['message']
@@ -1195,6 +1204,7 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                 'macro_assessment': '',
                 'failure_reason': LAST_INFERENCE_ERROR,
                 'model_failure': failure,
+                'output_validation': {'json_response':json_report},
                 'prompt_composition': prompt_bundle.manifest,
                 'prompt_fingerprint': str(getattr(telemetry, 'prompt_fingerprint', '') or ''),
                 'input_chars': getattr(telemetry, 'input_chars', None) if isinstance(getattr(telemetry, 'input_chars', None), int) else len(effective_system_prompt) + len(prompt),
@@ -1208,7 +1218,8 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
             append_ai_history(failure_record)
         except (OSError, ValueError, TypeError):
             print('[AI Brain Batch] Failed to persist inference failure history')
-        telemetry.finish('failed', error=e)
+        if observed_response is None:telemetry.finish('failed',error=e)
+        else:telemetry.finish('failed',observed_response,error=e)
         print(f'[AI Brain Batch] Error in batch inference: {LAST_INFERENCE_ERROR}')
         return None
 

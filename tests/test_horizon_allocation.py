@@ -19,6 +19,7 @@ class HorizonAllocationTests(unittest.TestCase):
         self.now=datetime(2026,10,7,12,0,tzinfo=BJ).timestamp()
         self.env=SimpleNamespace(mode='demo',identity='okx:demo:test')
         self.stack=[]
+        legacy=patch.dict("os.environ",{"OKXQUANT_ENTRY_QUOTAS_ENABLED":"1"});legacy.start();self.stack.append(legacy)
         for name,path in [('LEDGER_PATH',self.root/'ledger.json'),('TRACKERS_PATH',self.root/'trackers.json'),
                           ('INTENTS_PATH',self.root/'intents.json'),('STATUS_PATH',self.root/'status.json')]:
             item=patch.object(allocation,name,path);item.start();self.stack.append(item)
@@ -100,7 +101,7 @@ class HorizonAllocationTests(unittest.TestCase):
             self.admit(ledger_rows=rows,durable_intents=durable)
 
     def test_small_execution_profile_clamps_active_scalp_slots(self):
-        config=allocation.effective_config('demo',2,values={})
+        config=allocation.effective_config('demo',2,values={'OKXQUANT_ENTRY_QUOTAS_ENABLED':'1'})
         self.assertEqual(config.total_active_slot_limit,2)
         self.assertEqual(config.scalp_active_position_limit,1)
         self.assertEqual(config.swing_reserved_slots,1)

@@ -49,6 +49,8 @@ def runtime(profile=None):
         if requested and requested!=profile['id']:
             raise ValueError('Execution profile activation inconsistent; new risk blocked')
     config=settings_for(profile)
+    from scripts.horizon_allocation import quantity_limits_enabled
+    config["quantity_limits_enabled"]=quantity_limits_enabled()
     identity={'profile_id':profile['id'],'execution':config}
     return {**identity,'signature':hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest()}
 
@@ -59,7 +61,9 @@ def cap_allocation(allocation, config, positions, pending, metadata, inst_id, le
     from scripts.risk_policy import RiskRejected
     held=capital_pool.active_positions(positions); orders=capital_pool.entry_orders(pending)
     names={p['instId'] for p in held}|{p['instId'] for p in orders}|{inst_id}
-    if len(names)>config['max_active_instruments']:raise RiskRejected('300U preset active/pending instrument cap')
+    from scripts.horizon_allocation import quantity_limits_enabled
+    if quantity_limits_enabled() and len(names)>config['max_active_instruments']:
+        raise RiskRejected('300U preset active/pending instrument cap')
     reserved=capital_pool.reserved_margin(held,orders,metadata,leverage_reader)
     free=min(allocation.available,max(0.,config['total_margin_usdt']-reserved))
     if free<=0:raise RiskRejected('300U preset total margin budget exhausted; existing positions unchanged')

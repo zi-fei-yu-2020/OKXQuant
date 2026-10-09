@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { positionQuotaLabel } from '../utils/entryQuota'
 import { computed, ref } from 'vue'
 import AppCard from './ui/AppCard.vue'
 import AppBadge from './ui/AppBadge.vue'
@@ -186,7 +187,7 @@ const floatingPnl = computed(() => {
       <div class="telemetry-card__body telemetry-card__params">
         <div><span>单笔风险</span><strong>{{ riskPerTrade }}</strong></div>
         <div><span>最大杠杆</span><strong>{{ leverage }}</strong></div>
-        <div><span>持仓上限</span><strong>{{ count(execution.max_active_instruments) }} 个</strong></div>
+        <div><span>数量控制</span><strong>{{ positionQuotaLabel(execution) }}</strong></div>
         <div><span>保证金上限</span><strong>{{ number(execution.total_margin_usdt) === null && execution.id === 'standard' ? '按账户可用资金' : money(execution.total_margin_usdt) }}</strong></div>
       </div>
     </AppCard>

@@ -7,7 +7,8 @@ export interface CapitalPoolStatus {
   risk_equity?: number
   account_equity?: number
   strategy_pnl_since_allocation?: number
-  max_active_instruments?: number
+  quantity_limits_enabled?: boolean
+  max_active_instruments?: number | null
   stale?: boolean
   message?: string
 }

@@ -104,6 +104,7 @@ def _public_history_row(item):
         "status": item.get("status") or "success",
         "failure_reason": item.get("failure_reason") or "",
         "model_failure": item.get("model_failure"),
+        "output_validation": item.get("output_validation"),
         "position_management": item.get("position_management") or [],
         "details_available": True,
     }
@@ -1764,7 +1765,8 @@ def monitoring_snapshot():
 def _read_ai_history_records(scope=None):
     from scripts.okx_runtime import selected_environment
     scope=scope or selected_environment().identity
-    try:return [row for row in _AI_HISTORY_RAW.read(AI_HISTORY_FILE) if _history_owned(row,scope)]
+    from okxquant_backend.llm_transport import normalize_legacy_failure_record
+    try:return [normalize_legacy_failure_record(row) for row in _AI_HISTORY_RAW.read(AI_HISTORY_FILE) if _history_owned(row,scope)]
     except (OSError,ValueError,TypeError):return []
 
 

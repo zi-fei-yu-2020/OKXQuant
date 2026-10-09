@@ -142,7 +142,12 @@ class PoolAdmissionTests(unittest.TestCase):
         self.assertEqual(result.detail['reserved_margin'],40)
         self.assertEqual(result.available,110)
         positions=[{'instId':'OTHER','pos':'1','imr':'10'}]
-        with self.assertRaises(RiskRejected):self.admit(positions,orders=[order])
+        with patch.dict("os.environ",{"OKXQUANT_ENTRY_QUOTAS_ENABLED":"1"}):
+            with self.assertRaises(RiskRejected):self.admit(positions,orders=[order])
+        with patch.dict("os.environ",{"OKXQUANT_ENTRY_QUOTAS_ENABLED":"0"}):
+            result=self.admit(positions,orders=[order])
+            self.assertEqual(result.detail["reserved_margin"],50)
+            self.assertEqual(result.available,100)
 
     def test_unknown_position_or_pending_margin_is_not_guessed(self):
         self.admit()

@@ -160,6 +160,7 @@ export interface ExecutionProfileSnapshot {
     per_trade_equity_pct?: number
     single_asset_margin_usdt?: number
     total_margin_usdt?: number
+    quantity_limits_enabled?: boolean
     max_active_instruments?: number
     max_same_direction_positions?: number
     max_leverage?: number

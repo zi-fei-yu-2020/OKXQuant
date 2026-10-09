@@ -379,7 +379,9 @@ def execution_limits():
         cfg=execution_runtime()['execution']
     except Exception:
         cfg={}
+    from scripts.horizon_allocation import quantity_limits_enabled
     return {
+        'quantity_limits_enabled': quantity_limits_enabled(),
         'max_positions': int(cfg.get('max_active_instruments', MAX_CONCURRENT_POSITIONS)),
         'max_same_direction': int(cfg.get('max_same_direction_positions', cfg.get('max_active_instruments', MAX_SAME_DIRECTION_POSITIONS))),
         'single_asset_margin': float(cfg.get('single_asset_margin_usdt', MAX_SINGLE_ASSET_MARGIN)),
@@ -2340,6 +2342,8 @@ def execute_portfolio():
     long_count = real_long_count
     short_count = real_short_count
     limits = execution_limits()
+    from scripts.horizon_allocation import quantity_limits_enabled
+    quotas_enabled = limits.get('quantity_limits_enabled', quantity_limits_enabled())
     max_active_positions = limits['max_positions']
     max_same_direction = limits['max_same_direction']
     single_asset_margin = limits['single_asset_margin']
@@ -2535,7 +2539,7 @@ def execute_portfolio():
 
                 # Case A: Standard Initial Entry (No existing position & slot available)
                 related_key = 'correlated_crypto_long' if inst_id.split('-')[0].upper() in {'BTC','ETH','SOL','DOGE','SUI','XRP'} else f"{inst_id.split('-')[0].upper()}_long"
-                if not curr_pos and inst_id not in pending_inst_ids and related_key not in related_cycle_claims and reserved_slot_count < max_active_positions and reserved_long_count < max_same_direction:
+                if not curr_pos and inst_id not in pending_inst_ids and (not quotas_enabled or (related_key not in related_cycle_claims and reserved_slot_count < max_active_positions and reserved_long_count < max_same_direction)):
                     allow_entry = True  # Evidence/geometry and account risk, never model score.
 
                 # Case B: Strict Pyramiding Scale-In (Existing long position in profit/breakeven)
@@ -2575,9 +2579,9 @@ def execute_portfolio():
                             print(f"[Pyramiding 拦截] {f['name']} 数理数据无效、动能衰竭或延续概率偏低 (加速度={c_accel:+.2f}, 概率={p_cont:.1f}%)，禁止追多加仓")
 
                 if not allow_entry:
-                    record_entry_rejection(inst_id, ai_info, "entry_gate_blocked", active_position=bool(curr_pos), pending_order=inst_id in pending_inst_ids, slots_full=reserved_slot_count >= max_active_positions, correlated_cycle_claim=related_key in related_cycle_claims, action=action)
+                    record_entry_rejection(inst_id, ai_info, "entry_gate_blocked", active_position=bool(curr_pos), pending_order=inst_id in pending_inst_ids, slots_full=quotas_enabled and reserved_slot_count >= max_active_positions, correlated_cycle_claim=quotas_enabled and related_key in related_cycle_claims, action=action)
                 if not allow_entry:
-                    record_entry_rejection(inst_id, ai_info, "entry_gate_blocked", active_position=bool(curr_pos), pending_order=inst_id in pending_inst_ids, slots_full=reserved_slot_count >= max_active_positions, action=action)
+                    record_entry_rejection(inst_id, ai_info, "entry_gate_blocked", active_position=bool(curr_pos), pending_order=inst_id in pending_inst_ids, slots_full=quotas_enabled and reserved_slot_count >= max_active_positions, action=action)
                 if allow_entry:
                     limit_px = float(ai_decision.get("entry_price") or f.get("bidPx") or f["price"])
                     tp_px = float(ai_decision.get("take_profit_price") or (limit_px + tp_dist))
@@ -2646,7 +2650,7 @@ def execute_portfolio():
 
                 # Case A: Standard Initial Entry
                 related_key = 'correlated_crypto_short' if inst_id.split('-')[0].upper() in {'BTC','ETH','SOL','DOGE','SUI','XRP'} else f"{inst_id.split('-')[0].upper()}_short"
-                if not curr_pos and inst_id not in pending_inst_ids and related_key not in related_cycle_claims and reserved_slot_count < max_active_positions and reserved_short_count < max_same_direction:
+                if not curr_pos and inst_id not in pending_inst_ids and (not quotas_enabled or (related_key not in related_cycle_claims and reserved_slot_count < max_active_positions and reserved_short_count < max_same_direction)):
                     allow_entry = True  # Evidence/geometry and account risk, never model score.
 
                 # Case B: Strict Pyramiding Scale-In (Existing short position in profit/breakeven)
@@ -2755,7 +2759,8 @@ def execute_portfolio():
     state_payload = {
         "timestamp": timestamp_full,
         "active_positions_count": active_pos_count,
-        "max_positions": max_active_positions,
+        "max_positions": max_active_positions if quotas_enabled else None,
+        "quantity_limits_enabled": quotas_enabled,
         "long_count": long_count,
         "short_count": short_count,
         "circuit_breaker": {"active": cb_active, "reason": cb_reason},
@@ -2808,7 +2813,8 @@ def execute_portfolio():
     except Exception as e:
         print(f"[Ledger Sync Warning] {e}")
 
-    log_entry = f"[{timestamp_full}] 巡检完成 | 持仓 {active_pos_count}/{MAX_CONCURRENT_POSITIONS} (多{long_count}/空{short_count}) | 动作: {format_actions(executed_actions)} | 决策: {format_summary(decision_cycle)}\n"
+    slot_label = str(max_active_positions) if quotas_enabled else "不限（日内熔断控制）"
+    log_entry = f"[{timestamp_full}] 巡检完成 | 持仓 {active_pos_count}/{slot_label} (多{long_count}/空{short_count}) | 动作: {format_actions(executed_actions)} | 决策: {format_summary(decision_cycle)}\n"
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(log_entry)
     print(log_entry.strip())

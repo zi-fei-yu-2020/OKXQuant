@@ -1,8 +1,8 @@
-"""Deterministic demo horizon allocation gate.
+"""Deterministic horizon risk-budget caps with explicitly opt-in legacy quotas.
 
-This module limits short-horizon sampling without forcing swing entries.  It is
-active for the OKX demo environment by default and remains disabled for live
-trading unless an operator explicitly opts in.
+Default entry quantity control belongs to the fresh daily equity breaker;
+counts, per-day limits and swing-slot reservations do not authorize or veto
+orders unless an operator explicitly re-enables legacy quantity quotas.
 """
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ BEIJING = timezone(timedelta(hours=8))
 class Config:
     version: str = VERSION
     enabled: bool = True
+    quantity_limits_enabled: bool = False
     environment: str = "demo"
     scalp_daily_filled_limit: int = 18
     scalp_per_instrument_daily_limit: int = 4
@@ -65,26 +66,37 @@ def _amount(values, name, default):
     return value
 
 
+def quantity_limits_enabled(values=None):
+    """Quantity quotas are opt-in; the final daily equity gate remains mandatory."""
+    values = os.environ if values is None else values
+    return _bool(values.get("OKXQUANT_ENTRY_QUOTAS_ENABLED"), False)
+
+
 def load_config(mode, values=None):
     values = os.environ if values is None else values
     mode = str(mode or "demo").lower()
     master = _bool(values.get("OKXQUANT_HORIZON_ALLOCATION_ENABLED"), True)
     live = _bool(values.get("OKXQUANT_HORIZON_ALLOCATION_LIVE"), False)
     enabled = master and (mode == "demo" or (mode == "live" and live))
+    quotas=quantity_limits_enabled(values)
+    def quota(name,default,minimum):
+        # Disabled obsolete quota settings cannot veto otherwise valid entries.
+        return _integer(values,name,default,minimum) if quotas else default
     config = Config(
         enabled=enabled,
+        quantity_limits_enabled=quotas,
         environment=mode,
-        scalp_daily_filled_limit=_integer(values, "OKXQUANT_SCALP_DAILY_FILLED_LIMIT", 18, 1),
-        scalp_per_instrument_daily_limit=_integer(values, "OKXQUANT_SCALP_INSTRUMENT_DAILY_LIMIT", 4, 1),
-        scalp_active_position_limit=_integer(values, "OKXQUANT_SCALP_ACTIVE_LIMIT", 2, 1),
-        total_active_slot_limit=_integer(values, "OKXQUANT_HORIZON_TOTAL_SLOTS", 4, 1),
-        swing_reserved_slots=_integer(values, "OKXQUANT_SWING_RESERVED_SLOTS", 1, 0),
+        scalp_daily_filled_limit=quota("OKXQUANT_SCALP_DAILY_FILLED_LIMIT", 18, 1),
+        scalp_per_instrument_daily_limit=quota("OKXQUANT_SCALP_INSTRUMENT_DAILY_LIMIT", 4, 1),
+        scalp_active_position_limit=quota("OKXQUANT_SCALP_ACTIVE_LIMIT", 2, 1),
+        total_active_slot_limit=quota("OKXQUANT_HORIZON_TOTAL_SLOTS", 4, 1),
+        swing_reserved_slots=quota("OKXQUANT_SWING_RESERVED_SLOTS", 1, 0),
         scalp_risk_budget_cap_usdt=_amount(values, "OKXQUANT_SCALP_RISK_CAP_USDT", 8),
         swing_risk_budget_cap_usdt=_amount(values, "OKXQUANT_SWING_RISK_CAP_USDT", 20),
     )
-    if config.swing_reserved_slots >= config.total_active_slot_limit:
+    if config.quantity_limits_enabled and config.swing_reserved_slots >= config.total_active_slot_limit:
         raise RiskRejected("Swing reserved slots must be below total horizon slots")
-    if config.scalp_active_position_limit > config.total_active_slot_limit - config.swing_reserved_slots:
+    if config.quantity_limits_enabled and config.scalp_active_position_limit > config.total_active_slot_limit - config.swing_reserved_slots:
         raise RiskRejected("Scalp active limit would consume reserved swing slots")
     return config
 
@@ -95,7 +107,7 @@ def config_signature(config):
 
 def effective_config(mode, total_slot_limit=None, values=None):
     config=load_config(mode,values)
-    if total_slot_limit is None:return config
+    if not config.quantity_limits_enabled or total_slot_limit is None:return config
     try:external=int(total_slot_limit)
     except (TypeError,ValueError):external=0
     if external<=0 or external==config.total_active_slot_limit:return config
@@ -284,6 +296,14 @@ def admit(env, *, horizon, inst_id, side, requested_budget, positions, pending,
           "adjusted_budget_usdt":min(requested,cap)}
     if not config.enabled:
         result={**base,"adjusted_budget_usdt":requested,"outcome":"disabled"};_atomic_status(result);return result
+
+    if not config.quantity_limits_enabled:
+        # Counts are observations, not entry permissions. Do not scan the large
+        # lifecycle ledger solely to enforce a quota that the operator removed.
+        # Account reconciliation, duplicate-intent fencing and the fresh daily
+        # equity breaker are still enforced by the final entry gateway.
+        result={**base,"outcome":"admitted","quantity_control":"daily_equity_circuit_only"}
+        _atomic_status(result);return result
 
     ledger_error=tracker_error=intent_error=durable_error=None
     if ledger_rows is None:ledger_rows,ledger_error=_read_json(LEDGER_PATH,list,[])

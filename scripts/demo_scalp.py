@@ -145,7 +145,9 @@ def run(*, observe_only=False):
                     occupied.update(o['instId'] for o in pending['data'])
                     limits=trader.execution_limits()
                     eligible=[(p,q) for p,q in candidates if p['instId'] not in occupied and not q.get('shadow_only')]
-                    if len(occupied)>=limits['max_positions']:
+                    from scripts.horizon_allocation import quantity_limits_enabled
+                    quotas_enabled=limits.get('quantity_limits_enabled',quantity_limits_enabled())
+                    if quotas_enabled and len(occupied)>=limits['max_positions']:
                         result.update(status='position_limit')
                     elif eligible:
                         p,plan=eligible[0]; result['selected']={'instrument':p['instId'],'candidate_id':plan['id'],'net_rr':plan['net_rr']}

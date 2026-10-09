@@ -5,7 +5,7 @@ import math
 from scripts.entry_candidates import verified_bars, number
 from scripts.execution_costs import from_policy
 
-VERSION='scalp-ranking-v4'
+VERSION='scalp-ranking-v5'
 # Ranking changes priority only. It never removes candidates or authorizes an order.
 WEIGHTS={'net_rr':.14,'observed_range_coverage':.26,'cost_efficiency':.15,'candle_body':.06,'quote_quality':.08,'direction_alignment':.07,'regime_fit':.18,'breakout_quality':.06}
 
@@ -87,8 +87,17 @@ def describe(package,plan,policy):
             breakout_quality=(.5*clip(close_location)+
                               .3*clip(sign*(last['close']-trigger)/(entry_atr*.5))+
                               .2*clip(last['volume']/(recent_volume*1.5))) if candle_range>0 and recent_volume>0 else .5
-        terms={'net_rr':clip(conservative_rr/3),'observed_range_coverage':clip(observed_range/reward),
-               'cost_efficiency':clip(1-cost/reward),'candle_body':clip(body),
+        quality=plan.get('entry_quality') or {}
+        first_rr=quality.get('first_target_net_rr')
+        known_first_rr=isinstance(first_rr,(int,float)) and not isinstance(first_rr,bool) and math.isfinite(first_rr)
+        score_rr=float(first_rr) if known_first_rr else conservative_rr
+        score_cost=float(quality.get("round_trip_cost",cost)) if known_first_rr else cost
+        if not math.isfinite(score_cost) or score_cost<0:raise ValueError("Invalid first structure cost")
+        first_price=quality.get('first_observed_target')
+        score_reward=sign*(float(first_price)-entry) if known_first_rr else reward
+        if score_reward<=0:raise ValueError('Invalid first structure reward')
+        terms={'net_rr':clip(score_rr/3),'observed_range_coverage':clip(observed_range/reward),
+               'cost_efficiency':clip(1-score_cost/score_reward),'candle_body':clip(body),
                'quote_quality':clip(1-chase/.6),'direction_alignment':alignment,
                'regime_fit':regime_fit,'breakout_quality':breakout_quality}
         score=100*sum(WEIGHTS[k]*v for k,v in terms.items())
@@ -96,7 +105,9 @@ def describe(package,plan,policy):
         return {'version':VERSION,'candidate_id':plan['id'],'instrument':package['instId'],
                 'score':round(score,8),'semantics':'heuristic_not_win_probability','status':'evaluated',
                 'terms':terms,'weights':dict(WEIGHTS),'admission_net_rr':plan['net_rr'],
-                'conservative_net_rr':conservative_rr,'cost_model':costs,
+                'conservative_net_rr':conservative_rr,'first_target_net_rr':first_rr if known_first_rr else None,
+                'score_rr_basis':'first_observed_structure' if known_first_rr else 'full_target_reference',
+                'cost_model':costs,
                 'target_projection_distance':reward,'observed_5m_range':observed_range,
                 'market_regime':regime_label,'target_observed':False,'order_authorized':False}
     except (ValueError,TypeError,KeyError,OverflowError):
