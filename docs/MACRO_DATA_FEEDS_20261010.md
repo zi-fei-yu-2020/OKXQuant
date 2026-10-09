@@ -104,9 +104,11 @@ Credential/configuration binding changes invalidate old provider snapshots.
   (latest returned observation 2026-10-08); BEA calendar readable with zero events
   in the configured seven-day forward window; BLS returned 403/access_denied.
   FMP was disabled/unconfigured and no paid/provider requests were made.
-- Full isolated backend and frontend gates are recorded at release completion.
+- Full isolated backend gate: **2,112 tests passed locally**; the production candidate image also passed **2,112 tests in 359.305 seconds**, network-disabled and without production volumes. Frontend: **296 tests passed, zero skips**; typecheck and production build passed. The real subprocess/loopback transport gate also passed inside the image.
 - In-app Browser is unavailable (`iab`); component/SSR tests, typechecking and
   production build are used. No fresh visual browser acceptance is claimed.
-- Server rollout status is pending at this document revision. A source push is
-  not proof of deployment. No profitability or full four-feed connectivity claim
-  is made before provider authorization and live verification.
+- Controlled server rollout completed at **2026-10-10 02:40:13 +08:00**, commit `c7fe3ce`, image `okxquant:build-c7fe3ce`. Post-release container state was healthy with zero restarts. Both protection gates observed zero positions and zero pending orders; no forced trade, close or model probe was used.
+- Automatic AI trading was restored to `1`; entry cadence remains 900 seconds. The independent minute engine remains retired. Quantity quotas remain off, the daily threshold remains 3%, and model/high reasoning/streaming and existing protection remain unchanged.
+- The deployed collector was tested against the real public sources. Treasury and BEA were available; BLS returned `access_denied`. Treasury's latest returned observation date was 2026-10-08. The selected calendar window contained zero events; this is not a claim that the complete US macro calendar is empty.
+- The deployed snapshot produced **6 validated macro fact fields**. FMP enablement is false and no key is configured: US-index/DXY quotes and FMP economic values are **not connected yet**. No paid provider requests were made. The follow-up verifies collection and prompt-fact integration, not a new completed natural AI inference or profitability.
+- Operational evidence is retained privately in `okxquant_frontend/.ui-artifacts/macro-release-20261010/` and server release directory `/tmp/okxquant-macro-release-c7fe3ce/`. Prior image `okxquant:build-fc3ecef` is retained for rollback. Documentation-only follow-up does not require a container restart.
