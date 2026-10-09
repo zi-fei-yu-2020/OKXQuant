@@ -5,6 +5,7 @@ const { action, actionBusy, canManage } = useApiAction(() => loading.value || lo
 import AppSwitch from '../../components/ui/AppSwitch.vue'
 import AppField from '../../components/ui/AppField.vue'
 import AppDialog from '../../components/ui/AppDialog.vue'
+import LlmTransportPanel from '../../components/LlmTransportPanel.vue'
 
 import { useToast } from '../../composables/useFeedback'
 
@@ -34,6 +35,7 @@ const { api } = useApi()
 
 // State
 const cfg = ref<any>(null)
+const transportRevision = ref(0)
 const loading = ref(true)
 const loadFailed = ref(false)
 const searchQuery = ref('')
@@ -96,6 +98,7 @@ async function loadConfig() {
   loading.value = true
   try {
     cfg.value = await api('/api/v1/admin/llm/models')
+    transportRevision.value += 1
     if (selectedProvider.value) {
       const updated = cfg.value.providers?.find((p: any) => p.id === selectedProvider.value.id)
       if (updated) {
@@ -350,6 +353,7 @@ function currentProviderPayload(modelId: string, model: any = {}) {
 }
 
 const executeRemoteFetch = action(async () => {
+  if (!canManage.value) return
   if (!selectedProvider.value) return
   fetchingRemote.value = true
   remoteFetchResult.value = null
@@ -379,6 +383,7 @@ const executeRemoteFetch = action(async () => {
 }, false)
 
 const runRemoteModelTest = action(async (m: any) => {
+  if (!canManage.value) return
   remoteTestingModelId.value = m.id
   remoteTestResults.value = { ...remoteTestResults.value, [m.id]: null }
   try {
@@ -566,6 +571,7 @@ const deleteSingleModel = action(async (modelId: string) => {
 
 // ----------------- Test Connection -----------------
 async function executeModelTest(modelId: string, model: any = {}) {
+  if (!canManage.value) return
   const cleanModelId = String(modelId || '').trim()
   if (!cleanModelId) {
     testResult.value = { ok: false, error: '请先填写要测试的模型 ID' }
@@ -588,8 +594,8 @@ async function executeModelTest(modelId: string, model: any = {}) {
   }
 }
 
-const runTestModel = action(async (m: any) => executeModelTest(m.id, m), false)
-const runProviderTest = action(async () => executeModelTest(providerTestModel.value), false)
+const runTestModel = action(async (m: any) => executeModelTest(m.id, m))
+const runProviderTest = action(async () => executeModelTest(providerTestModel.value))
 
 function toggleCapability(cap: string) {
   const caps = modelForm.value.capabilities
@@ -799,6 +805,7 @@ const toast = useToast()
         <div class="w-16"></div>
       </div>
 
+        <LlmTransportPanel :key="transportRevision" v-if="!selectedProvider.is_new" :provider-id="selectedProvider.id" :models="selectedProvider.models || []" :active-model-id="cfg?.active_provider_id === selectedProvider.id ? cfg?.active_model_id : undefined" />
       <!-- SUB-VIEW A: 「配置」Tab (对齐截图 2) -->
       <div
         v-if="detailTab === 'config'"
@@ -1044,7 +1051,7 @@ const toast = useToast()
               class="flex-1 min-w-0 rounded-xl px-3.5 py-2 text-sm outline-none border font-sans"
               style="background-color: var(--bg-card); border-color: var(--border-subtle); color: var(--text-main)" />
             <datalist id="provider-known-models"><option v-for="model in selectedProvider.models || []" :key="model.id" :value="model.id" /></datalist>
-            <button type="button" @click="runProviderTest" :disabled="actionBusy || testLoading || !providerTestModel.trim()"
+            <button type="button" @click="runProviderTest" :disabled="!canManage || actionBusy || testLoading || !providerTestModel.trim()"
               class="ui-action border"
               style="background-color: var(--bg-card); border-color: var(--border-medium); color: var(--text-main)">
               {{ testLoading ? '测试中...' : '测试可用性' }}
@@ -1185,7 +1192,7 @@ const toast = useToast()
 
               <button
                 @click="runTestModel(m)"
-                :disabled="(testLoading && testingModelId === m.id) || actionBusy"
+                :disabled="!canManage || (testLoading && testingModelId === m.id) || actionBusy"
                 class="ui-icon-button border text-sm hover:bg-[var(--bg-card)]"
                 style="
                   background-color: var(--bg-card-subtle);
@@ -1421,7 +1428,7 @@ const toast = useToast()
           <div class="flex flex-wrap items-center justify-between gap-2">
             <span v-if="selectedProvider?.has_key && !customFetchKey" class="text-xs text-emerald-400 font-bold">✓ 将使用已保存凭证</span>
             <span v-else class="text-xs" style="color: var(--text-faint)">不会在结果、审计记录或页面中回显 API Key</span>
-            <button @click="executeRemoteFetch" :disabled="fetchingRemote || actionBusy || !customFetchUrl.trim()"
+            <button @click="executeRemoteFetch" :disabled="!canManage || fetchingRemote || actionBusy || !customFetchUrl.trim()"
               class="ui-action btn-primary-text"
               style="background-color: #2563eb; color: #ffffff">
               <RefreshCw class="w-3.5 h-3.5" :class="fetchingRemote ? 'animate-spin' : ''" />
@@ -1496,7 +1503,7 @@ const toast = useToast()
             </div>
 
             <div class="flex flex-wrap items-center justify-end gap-2 shrink-0">
-              <button @click="runRemoteModelTest(rm)" :disabled="actionBusy || remoteTestingModelId === rm.id"
+              <button @click="runRemoteModelTest(rm)" :disabled="!canManage || actionBusy || remoteTestingModelId === rm.id"
                 class="ui-action ui-action--sm border"
                 style="background-color: var(--bg-card); border-color: var(--border-subtle); color: var(--text-main)">
                 {{ remoteTestingModelId === rm.id ? '测试中...' : '测试' }}

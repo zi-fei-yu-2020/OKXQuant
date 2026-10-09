@@ -47,6 +47,19 @@ const councilConfig = ref<any>({
 
 const availableSuites = ref<any[]>([])
 const availableModels = ref<any[]>([])
+function roleModelValue(role: any) {
+  if (!role.model_id) return ''
+  if (role.provider_id) return JSON.stringify([role.provider_id, role.model_id])
+  const matches = availableModels.value.filter(m => m.id === role.model_id)
+  return matches.length === 1 ? JSON.stringify([matches[0].provider_id || '', role.model_id]) : JSON.stringify(['', role.model_id])
+}
+function bindRoleModel(role: any, event: Event) {
+  const value = (event.target as HTMLSelectElement).value
+  if (!value) { role.model_id = ''; role.provider_id = ''; return }
+  const [provider, model] = JSON.parse(value)
+  role.provider_id = provider; role.model_id = model
+}
+
 const expandedRole = ref<string>('trader_trend')
 const testResult = ref<any>(null)
 const expandedReasoning = ref<Record<string, boolean>>({})
@@ -559,7 +572,7 @@ const toast = useToast()
             <div class="flex items-center space-x-1">
               <span class="text-xs font-sans text-[var(--text-muted)]">模型:</span>
               <select :aria-label="String(roleId) + ' 席位模型'"
-                v-model="role.model_id"
+                :value="roleModelValue(role)" @change="bindRoleModel(role, $event)"
                 class="rounded-xl px-2 py-1 text-sm font-sans outline-none border cursor-pointer max-w-[150px]"
                 style="
                   background-color: var(--bg-input);
@@ -569,8 +582,9 @@ const toast = useToast()
                 :disabled="(!auth.isSuperadmin) || actionBusy"
               >
                 <option value="">(继承全局主脑)</option>
-                <option v-for="m in availableModels" :key="m.id" :value="m.id">
-                  {{ m.name || m.id }}
+                <option v-if="role.model_id && !role.provider_id && availableModels.filter(m => m.id === role.model_id).length !== 1" :value="roleModelValue(role)">旧绑定需指定供应商：{{ role.model_id }}</option>
+                <option v-for="m in availableModels" :key="JSON.stringify([m.provider_id, m.id])" :value="JSON.stringify([m.provider_id || '', m.id])">
+                  {{ m.provider_name || m.provider_id || '默认供应商' }} · {{ m.name || m.id }}
                 </option>
               </select>
             </div>

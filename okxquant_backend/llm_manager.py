@@ -1123,17 +1123,45 @@ def execute_llm_request(
     require_complete: bool = False,
     attempt_timeout: Optional[float] = None,
     max_tokens: int = 4096,
+    provider_id: Optional[str] = None,
+    reasoning_type: Optional[str] = None,
+    transport_policy: Optional[dict] = None,
+    transport_diagnostics: Optional[dict] = None,
 ) -> Tuple[str, str, Dict[str, Any], int]:
     """Unified executor for LLM calls across all 3 protocols.
     Returns: (content, reasoning_content, usage_dict, latency_ms)
     """
+    if base_url is not None and not str(base_url).strip():
+        raise LLMRequestError(0,0,'configuration_error')
     runtime = get_active_llm_runtime()
-    target_model = model or runtime.get("model") or "gemini-3.8-flash-high"
-    target_url = base_url or runtime.get("base_url") or "https://api.openai.com/v1"
-    target_key = api_key if api_key is not None else runtime.get("api_key", "")
-    target_format = api_format or runtime.get("api_format") or _detect_api_format(target_url, target_model)
-    target_effort = reasoning_effort or runtime.get("reasoning_effort") or "high"
-    target_rtype = runtime.get("reasoning_type", "auto")
+    from .llm_transport_policy import resolve_context, resolved_policy, validate_policy, selected_context
+    if provider_id:
+        try:bound=selected_context(provider_id,model or runtime.get('model',''))
+        except ValueError:raise LLMRequestError(0,0,'configuration_error') from None
+        target_model=model or bound['model'];target_url=base_url if base_url is not None else bound['base_url']
+        target_key=api_key if api_key is not None else bound['api_key'];target_format=api_format or bound['api_format']
+        target_effort=reasoning_effort or bound['reasoning_effort']
+        for key,value in [('model',target_model),('base_url',target_url),('api_key',target_key),('api_format',target_format)]:
+            actual_value=str(value or '');expected_value=str(bound.get(key) or '')
+            if key=='base_url':actual_value=actual_value.rstrip('/');expected_value=expected_value.rstrip('/')
+            if actual_value!=expected_value:
+                raise LLMRequestError(0,0,'configuration_error')
+        context={**bound,'reasoning_effort':target_effort}
+    else:
+        target_model = model or runtime.get("model") or "gemini-3.8-flash-high"
+        target_url = base_url or runtime.get("base_url") or "https://api.openai.com/v1"
+        if api_key is None and base_url and str(base_url).rstrip('/') != str(runtime.get('base_url') or '').rstrip('/'):
+            raise LLMRequestError(0, 0, 'configuration_error')
+        target_key = api_key if api_key is not None else runtime.get("api_key", "")
+        target_format = api_format or runtime.get("api_format") or _detect_api_format(target_url, target_model)
+        target_effort = reasoning_effort or runtime.get("reasoning_effort") or "high"
+        context = resolve_context(target_model, target_url, target_key, target_format, target_effort, runtime)
+    target_rtype = reasoning_type if reasoning_type is not None else context.get("reasoning_type", "auto")
+    context["reasoning_type"] = target_rtype
+    selected_policy = validate_policy(transport_policy) if transport_policy is not None else resolved_policy(context)
+    if selected_policy['mode'] == 'auto':
+        raise ValueError('An explicit transport override must select stream or json')
+    diagnostics = transport_diagnostics if transport_diagnostics is not None else {}
 
     endpoint, headers, payload = build_request_spec(
         model=target_model,
@@ -1151,15 +1179,25 @@ def execute_llm_request(
     retry_options = {"max_attempts": max_attempts} if max_attempts is not None else {}
     if attempt_timeout is not None:
         retry_options["attempt_timeout"] = attempt_timeout
-    res_json, _, latency_ms, attempts = request_json(endpoint, headers, payload, timeout, **retry_options)
+    res_json, _, latency_ms, attempts = request_json(endpoint, headers, payload, timeout,
+        protocol=target_format, transport_policy=selected_policy, diagnostics=diagnostics, **retry_options)
 
     # Structured trading output must never consume a provider-declared partial answer.
     if require_complete:
         from scripts.model_json import verify_completion
-        verify_completion(res_json, target_format)
+        try:
+            verify_completion(res_json, target_format, strict=True)
+        except Exception:
+            from .llm_transport import safe_transport_diagnostics
+            diagnostics.update(completion_seen=False,failure_phase='protocol')
+            error=LLMRequestError(200,attempts,'completion_invalid')
+            error.transport_diagnostics=safe_transport_diagnostics(diagnostics)
+            raise error from None
+        diagnostics["completion_seen"] = True
     content = ""
     reasoning_content = ""
-    usage = res_json.get("usage") or {}
+    usage = dict(res_json.get("usage") or {})
+    from .llm_transport import safe_transport_diagnostics
 
     # Protocol 1: Claude Messages Response
     if target_format == "claude_messages":
@@ -1197,7 +1235,12 @@ def execute_llm_request(
         # HTTP 200 with no final answer is a transport-level empty completion,
         # not a malformed trading contract. This classification permits one
         # delayed, fail-closed recovery generation for the same time slot.
-        raise LLMRequestError(200, attempts, "empty_model_output")
+        error=LLMRequestError(200, attempts, "empty_model_output")
+        error.transport_diagnostics=safe_transport_diagnostics(diagnostics)
+        raise error
+    if diagnostics and selected_policy['mode']=='json' and diagnostics.get('first_content_ms') is None:
+        diagnostics['first_content_ms']=latency_ms
+    if diagnostics:usage['_transport']=safe_transport_diagnostics(diagnostics)
     return content, reasoning_content, usage, latency_ms
 
 
@@ -1240,7 +1283,10 @@ def test_llm_connection(
 
     t0 = time.perf_counter()
     try:
-        res_json, status_code, latency_ms, attempts = request_json(endpoint, headers, payload, timeout)
+        from .llm_transport_policy import DEFAULT_POLICY
+        probe_diagnostics={}
+        res_json, status_code, latency_ms, attempts = request_json(endpoint, headers, payload, timeout,
+            max_attempts=1,protocol=api_format,transport_policy={**DEFAULT_POLICY,'mode':'json'},diagnostics=probe_diagnostics)
 
         content = ""
         reasoning_content = ""
@@ -1262,12 +1308,15 @@ def test_llm_connection(
         content = content.strip()
         if not content:
             raise LLMRequestError(status_code, attempts, "empty_model_output")
-        reasoning_tokens = (
-            usage.get("completion_tokens_details", {}).get("reasoning_tokens")
-            or usage.get("output_tokens_details", {}).get("reasoning_tokens")
-            or usage.get("reasoning_tokens")
-            or (len(reasoning_content.split()) if reasoning_content else None)
-        )
+        from scripts.model_json import verify_completion
+        try:verify_completion(res_json,api_format,strict=True)
+        except Exception:raise LLMRequestError(status_code,attempts,'completion_invalid') from None
+        reasoning_tokens = None
+        for source in [usage.get('completion_tokens_details'), usage.get('output_tokens_details'), usage]:
+            value=source.get('reasoning_tokens') if isinstance(source,dict) else None
+            if type(value) is int and value>=0:
+                reasoning_tokens=value;break
+
 
         format_label = next((f["name"] for f in SUPPORTED_API_FORMATS if f["id"] == api_format), api_format)
 
@@ -1283,7 +1332,7 @@ def test_llm_connection(
             "response_preview": content[:120] if content else "(响应成功，返回空正文)",
             "reasoning_detected": bool(reasoning_content),
             "reasoning_tokens": reasoning_tokens,
-            "total_tokens": usage.get("total_tokens") or (usage.get("input_tokens", 0) + usage.get("output_tokens", 0)),
+            "total_tokens": usage.get("total_tokens") if type(usage.get("total_tokens")) is int and usage["total_tokens"]>=0 else None,
             "payload_sent": {k: v for k, v in payload.items() if k not in ("messages", "input", "system")},
             "compatibility_note": f"协议 {api_format} 连接与解析成功" + (" · 已捕获链式推演输出" if reasoning_content else ""),
         }

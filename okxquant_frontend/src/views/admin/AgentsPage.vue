@@ -13,6 +13,8 @@ const data = ref<any>(null)
 const loading = ref(true)
 const loadFailed = ref(false)
 const errText = ref('')
+const phaseLabel = (phase: string) => ({connect:'连接',headers:'等待响应头',first_byte:'等待首包',idle:'流空闲',body:'读取响应',total:'总时限',protocol:'协议完整性',http:'HTTP 错误',configuration:'配置',network:'网络',worker:'传输进程',complete:'完成'}[phase] || phase || '无')
+const transportMetric = (value: any, suffix = '') => typeof value === 'number' && Number.isFinite(value) ? `${value}${suffix}` : '未记录'
 
 async function load() {
   loadFailed.value = false
@@ -233,6 +235,7 @@ useErrorFeedback(errText)
                   <th class="py-2 px-2">状态</th>
                   <th class="py-2 px-2">Tokens</th>
                   <th class="py-2 px-3 text-right">耗时</th>
+                  <th class="py-2 px-3">传输</th>
                 </tr>
               </thead>
               <tbody>
@@ -255,7 +258,23 @@ useErrorFeedback(errText)
                     {{ c.total_tokens ?? '--' }}
                   </td>
                   <td class="py-1.5 px-3 text-right num-tabular" style="color: var(--text-muted)">
-                    {{ c.duration_ms ? Math.round(c.duration_ms) + 'ms' : '--' }}
+                    {{ c.duration_ms === null || c.duration_ms === undefined ? '--' : Math.round(c.duration_ms) + 'ms' }}
+                  </td>
+                  <td class="py-2 px-3 whitespace-normal">
+                    <details v-if="c.transport" class="action-disclosure text-xs min-w-[180px]" data-model-transport>
+                      <summary>{{ c.transport.transport_mode === 'stream' ? '流式' : '非流式' }} · 传输详情</summary>
+                      <dl class="space-y-1 pt-2 max-w-[300px] break-words">
+                        <div>HTTP {{ c.transport.http_status ?? '--' }} · 阶段 {{ phaseLabel(c.transport.failure_phase) }}</div>
+                        <div>首包 {{ transportMetric(c.transport.first_byte_ms, ' ms') }}</div>
+                        <div>首个模型内容 {{ transportMetric(c.transport.first_content_ms, ' ms') }}</div>
+                        <div>最长间隔 {{ transportMetric(c.transport.max_gap_ms, ' ms') }}</div>
+                        <div>心跳 {{ transportMetric(c.transport.heartbeat_count) }} · 尝试 {{ transportMetric(c.transport.attempts) }}</div>
+                        <div>完整结束 {{ c.transport.completion_seen === true ? '是' : c.transport.completion_seen === false ? '否' : '未记录' }}</div>
+                        <div v-if="c.transport.request_id" class="break-all">请求 ID {{ c.transport.request_id }}</div>
+                        <div v-if="c.transport.cf_ray" class="break-all">CF-Ray {{ c.transport.cf_ray }}</div>
+                      </dl>
+                    </details>
+                    <span v-else class="text-xs" style="color:var(--text-faint)">历史记录未采集</span>
                   </td>
                 </tr>
               </tbody>

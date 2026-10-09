@@ -215,12 +215,16 @@ class LLMBudgetTests(unittest.TestCase):
         with patch.object(llm_manager,'get_active_llm_runtime',return_value={}),patch.object(llm_manager,'request_json',return_value=(payload,200,1,1)) as request:
             args={'messages':[{'role':'user','content':'fixture'}],'model':'test','base_url':'https://example.invalid/v1','api_key':'','api_format':'openai_chat','timeout':20}
             llm_manager.execute_llm_request(**args,max_attempts=1)
-            self.assertEqual(request.call_args.kwargs,{'max_attempts':1})
+            self.assertEqual(request.call_args.kwargs['max_attempts'],1)
+            self.assertEqual(request.call_args.kwargs['protocol'],'openai_chat')
+            self.assertEqual(request.call_args.kwargs['transport_policy']['mode'],'json')
             self.assertEqual(request.call_args.args[3],20)
             llm_manager.execute_llm_request(**args)
-            self.assertEqual(request.call_args.kwargs,{})
+            self.assertNotIn('max_attempts',request.call_args.kwargs)
+            self.assertIn('transport_policy',request.call_args.kwargs)
             llm_manager.execute_llm_request(**{**args,'timeout':160},max_attempts=2,attempt_timeout=75)
-            self.assertEqual(request.call_args.kwargs,{'max_attempts':2,'attempt_timeout':75})
+            self.assertEqual(request.call_args.kwargs['max_attempts'],2)
+            self.assertEqual(request.call_args.kwargs['attempt_timeout'],75)
             self.assertEqual(request.call_args.args[3],160)
 
 

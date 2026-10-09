@@ -110,7 +110,7 @@ class CompleteModelTests(unittest.TestCase):
     def test_manager_rejects_responses_refusal_before_extracting_output_text(self):
         body = {'status':'completed', 'output_text':'{}', 'output':[{'type':'message','content':[{'type':'refusal'}]}]}
         with patch.object(llm_manager, 'get_active_llm_runtime', return_value={}), patch.object(llm_manager, 'request_json', return_value=(body, 200, 1, 1)):
-            with self.assertRaises(trading_prompt.ContractError):
+            with self.assertRaises(LLMRequestError) as caught:
                 llm_manager.execute_llm_request(messages=[], model='fixture', base_url='https://example.invalid', api_key='FAKE', api_format='openai_responses', require_complete=True)
 
 

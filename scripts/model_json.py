@@ -24,14 +24,14 @@ def text_content(value):
     raise ContractError('模型文本类型不受支持')
 
 
-def verify_completion(response, protocol):
+def verify_completion(response, protocol, *, strict=False):
     """Check envelope structure as well as finish flags; never accept refusal text."""
     def require(condition):
         if not condition:
             raise ContractError('Model response is incomplete, refused, or malformed')
     require(isinstance(response, dict))
     if protocol == 'claude_messages':
-        require(response.get('stop_reason') in (None, 'end_turn', 'stop_sequence'))
+        require(response.get('stop_reason') in (('end_turn','stop_sequence') if strict else (None,'end_turn','stop_sequence')))
         blocks = response.get('content', [])
         require(isinstance(blocks, list))
         for block in blocks:
@@ -40,7 +40,7 @@ def verify_completion(response, protocol):
             if block.get('type') == 'text':
                 require(isinstance(block.get('text'), str))
     elif protocol == 'openai_responses':
-        require(response.get('status') in (None, 'completed') and not response.get('incomplete_details'))
+        require(response.get('status') in (('completed',) if strict else (None,'completed')) and not response.get('incomplete_details'))
         require(not response.get('error'))
         if response.get('output_text') is not None:
             require(isinstance(response['output_text'], str))
@@ -56,12 +56,15 @@ def verify_completion(response, protocol):
                 for block in blocks:
                     require(isinstance(block, dict))
                     require(block.get('type') == 'output_text' and isinstance(block.get('text'), str))
+        if strict and response.get('output_text') is not None:
+            canonical=''.join(part.get('text','') for item in output if isinstance(item,dict) and item.get('type')=='message' for part in item.get('content',[]) if isinstance(part,dict) and part.get('type')=='output_text')
+            require(response['output_text']==canonical)
     else:
         choices = response.get('choices')
         require(isinstance(choices, list) and len(choices) == 1)
         choice = choices[0]
         require(isinstance(choice, dict))
-        require(choice.get('finish_reason') in (None, 'stop'))
+        require(choice.get('finish_reason') in (('stop',) if strict else (None,'stop')))
         message = choice.get('message', {})
         require(isinstance(message, dict))
         require(not message.get('refusal') and not message.get('tool_calls') and not message.get('function_call'))

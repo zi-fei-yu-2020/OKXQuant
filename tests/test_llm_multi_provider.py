@@ -231,7 +231,7 @@ class LLMMultiProviderTests(unittest.TestCase):
         deleted = llm_manager.delete_model("custom", "claude-3-7-custom")
         self.assertTrue(deleted)
 
-    @patch("urllib.request.urlopen")
+    @patch("okxquant_backend.llm_manager.request_json")
     def test_connection_test_claude_messages(self, mock_urlopen):
         mock_response = MagicMock()
         mock_response.getcode.return_value = 200
@@ -243,7 +243,9 @@ class LLMMultiProviderTests(unittest.TestCase):
             ],
             "usage": {"input_tokens": 15, "output_tokens": 40}
         }).encode("utf-8")
-        mock_urlopen.return_value.__enter__.return_value = mock_response
+        response=json.loads(mock_response.read.return_value)
+        response["stop_reason" if "content" in response else "status"]="end_turn" if "content" in response else "completed"
+        mock_urlopen.return_value=(response,200,1,1)
 
         res = llm_manager.test_llm_connection(
             base_url="https://api.anthropic.com/v1",
@@ -258,7 +260,7 @@ class LLMMultiProviderTests(unittest.TestCase):
         self.assertTrue(res["reasoning_detected"])
         self.assertEqual(res["api_format"], "claude_messages")
 
-    @patch("urllib.request.urlopen")
+    @patch("okxquant_backend.llm_manager.request_json")
     def test_connection_test_openai_responses(self, mock_urlopen):
         mock_response = MagicMock()
         mock_response.getcode.return_value = 200
@@ -271,7 +273,9 @@ class LLMMultiProviderTests(unittest.TestCase):
             ],
             "usage": {"total_tokens": 55, "output_tokens_details": {"reasoning_tokens": 30}}
         }).encode("utf-8")
-        mock_urlopen.return_value.__enter__.return_value = mock_response
+        response=json.loads(mock_response.read.return_value)
+        response["stop_reason" if "content" in response else "status"]="end_turn" if "content" in response else "completed"
+        mock_urlopen.return_value=(response,200,1,1)
 
         res = llm_manager.test_llm_connection(
             base_url="https://api.openai.com/v1",

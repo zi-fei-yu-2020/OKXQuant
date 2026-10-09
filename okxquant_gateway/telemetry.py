@@ -27,6 +27,11 @@ class ModelCallTelemetry:
 
     def finish(self, status: str, response: dict[str, Any] | None = None, output_chars: int = 0, error: Exception | None = None) -> int | None:
         usage = (response or {}).get("usage", {}) if isinstance(response, dict) else {}
+        def count(*names):
+            for name in names:
+                value=usage.get(name)
+                if type(value) is int and 0 <= value <= 10**12:return value
+            return None
         record = {
             "caller": self.caller,
             "model": self.model,
@@ -38,11 +43,14 @@ class ModelCallTelemetry:
             "output_chars": output_chars,
             "prompt_fingerprint": self.prompt_fingerprint,
             "prompt_transport": "python-direct",
-            "input_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),
-            "output_tokens": usage.get("completion_tokens") or usage.get("output_tokens"),
-            "total_tokens": usage.get("total_tokens"),
+            "input_tokens": count("prompt_tokens", "input_tokens"),
+            "output_tokens": count("completion_tokens", "output_tokens"),
+            "total_tokens": count("total_tokens"),
             "error_type": type(error).__name__ if error else "",
         }
+        from okxquant_backend.llm_transport import safe_transport_diagnostics
+        record['transport'] = safe_transport_diagnostics(
+            getattr(error, 'transport_diagnostics', {}) if error else usage.get('_transport', {}))
         call_id = None
         try:
             store = GatewayStore(DB_PATH)

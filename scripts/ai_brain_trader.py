@@ -804,16 +804,19 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
     model_name = os.environ.get("LLM_MODEL") or "gemini-3.8-flash-high"
     effort = os.environ.get("LLM_REASONING_EFFORT") or "high"
     api_format = "openai_chat"
+    runtime_resolution_error = None
     try:
         from okxquant_backend.llm_manager import get_active_llm_runtime, execute_llm_request
         active_llm = get_active_llm_runtime()
         model_name = os.environ.get("LLM_MODEL") or active_llm.get("model") or model_name
         effort = os.environ.get("LLM_REASONING_EFFORT") or active_llm.get("reasoning_effort") or effort
         api_format = active_llm.get("api_format", "openai_chat")
-        base_url = active_llm.get("base_url") or base_url
-        api_key = active_llm.get("api_key") or api_key
-    except Exception:
+        # Connection is an atomic tuple; a keyless provider never borrows the old key.
+        base_url = active_llm.get("base_url") or ""
+        api_key = active_llm.get("api_key") or ""
+    except Exception as exc:
         execute_llm_request = None
+        runtime_resolution_error = exc
 
     json_report = {}
     telemetry_caller = "trading_brain_recovery" if os.environ.get("OKXQUANT_AI_RECOVERY") == "1" else "trading_brain"
@@ -826,6 +829,9 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
         recovery_context={"account_scope": market._selected().identity, "slot_start": recovery_slot},
     )
     try:
+        if runtime_resolution_error is not None:
+            from okxquant_backend.llm_transport import LLMRequestError
+            raise LLMRequestError(0, 0, 'configuration_error') from None
         t0 = time.time()
         raw_res = None
         content = None  # Council returns structured output, not single-model text.
@@ -849,9 +855,10 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                     timeout=float(c_cfg.get("timeout_seconds", 60.0)),
                 )
                 print(f"[AI Brain Council] ✅ 委员会辩论与终审完成，耗时: {council_transcript.get('total_duration_ms', 0)}ms")
-            except Exception as e:
-                print(f"[AI Brain Council] ⚠️ 委员会决策超时或异常: {e}，自动降级为单模型极速决策！")
-                brain_output = None
+            except Exception:
+                raise RuntimeError("委员会本轮未形成完整裁决；未额外切换或补发单模型请求，独立持仓保护继续。") from None
+            if brain_output is None:
+                raise RuntimeError("委员会返回空裁决；未额外调用其他模型。")
 
         if brain_output is None:
             print(f"[AI Brain Batch] 🚀 正在发起单次全市场大模型宏观决策推演 ({model_name} / {api_format})...")
@@ -880,29 +887,8 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
                     )
                     raw_res = {"usage": usage_dict} if isinstance(usage_dict, dict) else {}
                 else:
-                    payload = {
-                        "model": model_name,
-                        "messages": [
-                            {"role": "system", "content": effective_system_prompt},
-                            {"role": "user", "content": prompt}
-                        ],
-                        "temperature": 0.2,
-                        "response_format": {"type": "json_object"},
-                        "max_tokens": 16384
-                    }
-                    if effort not in ("none", "auto"):
-                        payload["reasoning_effort"] = effort
-                    req = urllib.request.Request(
-                        f"{base_url}/chat/completions",
-                        data=json.dumps(payload).encode("utf-8"),
-                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
-                    )
-                    with urllib.request.urlopen(req, timeout=50) as resp:
-                        res = json.loads(resp.read().decode("utf-8"))
-                        from scripts.model_json import verify_completion, text_content
-                        verify_completion(res, "openai_chat")
-                        content = text_content(res["choices"][0]["message"]["content"])
-                        raw_res = res
+                    from okxquant_backend.llm_transport import LLMRequestError
+                    raise LLMRequestError(0, 0, 'configuration_error')
                 return content
             # The trading scheduler has a hard one-request budget per cycle. Invalid
             # JSON is rejected fail-closed instead of launching a second billable

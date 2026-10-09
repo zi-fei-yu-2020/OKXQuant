@@ -79,6 +79,10 @@ CREATE TABLE IF NOT EXISTS model_calls (
   error_type TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_model_calls_caller ON model_calls(caller, id DESC);
+CREATE TABLE IF NOT EXISTS model_call_transport (
+  model_call_id INTEGER PRIMARY KEY REFERENCES model_calls(id),
+  diagnostics_json TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ai_recovery_jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   account_scope TEXT NOT NULL,
@@ -416,12 +420,26 @@ class GatewayStore:
                 f"INSERT INTO model_calls({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
                 tuple(record.get(column) for column in columns),
             )
-            return int(cursor.lastrowid)
+            call_id = int(cursor.lastrowid)
+            from okxquant_backend.llm_transport import safe_transport_diagnostics
+            diagnostics = safe_transport_diagnostics(record.get('transport'))
+            if diagnostics:
+                connection.execute('INSERT INTO model_call_transport(model_call_id,diagnostics_json) VALUES (?,?)',
+                    (call_id,json.dumps(diagnostics,ensure_ascii=False,allow_nan=False)))
+            return call_id
 
     def model_calls(self, limit: int = 50) -> list[dict[str, Any]]:
         with self.connect() as connection:
-            rows = connection.execute("SELECT * FROM model_calls ORDER BY id DESC LIMIT ?", (max(1, min(limit, 200)),)).fetchall()
-        return [dict(row) for row in rows]
+            rows = connection.execute("SELECT m.*,t.diagnostics_json FROM model_calls m LEFT JOIN model_call_transport t ON t.model_call_id=m.id ORDER BY m.id DESC LIMIT ?", (max(1, min(limit, 200)),)).fetchall()
+        result=[]
+        from okxquant_backend.llm_transport import safe_transport_diagnostics
+        for row in rows:
+            value=dict(row);raw=value.pop('diagnostics_json',None)
+            if raw:
+                try:value['transport']=safe_transport_diagnostics(json.loads(raw))
+                except (ValueError,TypeError):value['transport']={}
+            result.append(value)
+        return result
 
     def model_stats(self) -> dict[str, Any]:
         with self.connect() as connection:

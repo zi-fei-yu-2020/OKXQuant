@@ -76,7 +76,7 @@ class LLMTransportTests(unittest.TestCase):
 
     def test_connection_probe_does_not_report_empty_content_as_success(self):
         for content in ('', None):
-            with patch('urllib.request.urlopen', return_value=self.response({'choices': [{'message': {'content': content}}]})):
+            with patch('okxquant_backend.llm_manager.request_json', return_value=({'choices':[{'message':{'content':content}}]},200,1,1)):
                 result = connection_probe('https://model.example', 'test-key', 'test-model')
             self.assertFalse(result['ok'])
             self.assertEqual(result['error_category'], 'empty_model_output')
@@ -136,7 +136,7 @@ class LLMTransportTests(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 503)
 
     def test_probe_exposes_safe_provider_reason(self):
-        with patch('urllib.request.urlopen', side_effect=self.provider_error('system_disk_overloaded')):
+        with patch('okxquant_backend.llm_manager.request_json', side_effect=LLMRequestError(503,1,'http_error','system_disk_overloaded')):
             result = connection_probe('https://model.example', 'test-key', 'test-model', timeout=5)
         self.assertFalse(result['ok'])
         self.assertEqual(result['provider_error_code'], 'system_disk_overloaded')

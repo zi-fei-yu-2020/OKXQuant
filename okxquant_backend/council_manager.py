@@ -173,6 +173,7 @@ def apply_preset_suite(suite_id: str) -> Dict[str, Any]:
             preset = dict(ALL_AVAILABLE_PRESETS[r_id])
             old_model = config.get("roles", {}).get(r_id, {}).get("model_id", "")
             preset["model_id"] = old_model
+            preset["provider_id"] = config.get("roles", {}).get(r_id, {}).get("provider_id", "")
             new_roles[r_id] = preset
 
     config["consensus_mode"] = suite.get("consensus_mode", "weighted")
@@ -196,6 +197,7 @@ def reset_role_template(role_id: str) -> Dict[str, Any]:
     old_model = roles[role_id].get("model_id", "")
     new_role = dict(preset)
     new_role["model_id"] = old_model
+    new_role["provider_id"] = roles[role_id].get("provider_id", "")
     roles[role_id] = new_role
     config["roles"] = roles
     return save_council_config(config)
@@ -231,17 +233,19 @@ def _call_single_trader(
     temperature = float(role_spec.get("temperature", 0.2))
 
     cfg = load_llm_config(mask_keys=False)
+    override_rtype = None
+    override_provider = None
     if model_id:
-        for item in cfg.get("models", []):
-            if item.get("id") == model_id:
-                override_model = item.get("id")
-                override_url = item.get("base_url")
-                override_key = item.get("api_key")
-                override_format = item.get("api_format")
-                override_effort = item.get("reasoning_effort") or override_effort
-                break
+        from .llm_manager import select_model
+        item=select_model(cfg,model_id,str(role_spec.get('provider_id') or ''))
+        if item is None:raise ValueError('Configured council model not found; no active-model fallback')
+        override_model=item['id'];override_url=item.get('base_url') or '';override_key=item.get('api_key') or ''
+        override_format=item.get('api_format') or 'openai_chat';override_effort=item.get('reasoning_effort') or override_effort
+        override_rtype=item.get('reasoning_type') or 'auto'
+        override_provider=item.get('provider_id') or None
     else:
-        override_effort = cfg.get("active_reasoning_effort", "medium")
+        if role_spec.get('provider_id'):raise ValueError('Council provider binding requires a model')
+        override_effort=cfg.get('active_reasoning_effort','medium')
 
     prompt_content = _role_preference(role_id, role_spec)
     role_name = role_spec.get("name", role_id)
@@ -263,6 +267,8 @@ def _call_single_trader(
             api_key=override_key,
             api_format=override_format,
             reasoning_effort=override_effort,
+            reasoning_type=override_rtype,
+            provider_id=override_provider,
             temperature=temperature,
             timeout=timeout,
         )
@@ -274,6 +280,7 @@ def _call_single_trader(
             "content": content.strip(),
             "reasoning": reasoning.strip() if reasoning else "",
             "latency_ms": latency,
+            "transport": usage.get("_transport", {}),
             "weight": role_spec.get("weight", 1.0),
             "system_hash": trading_prompt.fingerprint(trader_system_prompt),
             "user_hash": trading_prompt.fingerprint(trader_user_prompt),
@@ -377,17 +384,19 @@ def execute_council_debate(
     cio_temperature = float(cio_spec.get("temperature", 0.2))
 
     cfg = load_llm_config(mask_keys=False)
+    override_rtype = None
+    override_provider = None
     if cio_model_id:
-        for item in cfg.get("models", []):
-            if item.get("id") == cio_model_id:
-                override_model = item.get("id")
-                override_url = item.get("base_url")
-                override_key = item.get("api_key")
-                override_format = item.get("api_format")
-                override_effort = item.get("reasoning_effort") or "high"
-                break
+        from .llm_manager import select_model
+        item=select_model(cfg,cio_model_id,str(cio_spec.get('provider_id') or ''))
+        if item is None:raise ValueError('Configured arbitrator model not found; no active-model fallback')
+        override_model=item['id'];override_url=item.get('base_url') or '';override_key=item.get('api_key') or ''
+        override_format=item.get('api_format') or 'openai_chat';override_effort=item.get('reasoning_effort') or 'high'
+        override_rtype=item.get('reasoning_type') or 'auto'
+        override_provider=item.get('provider_id') or None
     else:
-        override_effort = cfg.get("active_reasoning_effort", "high")
+        if cio_spec.get('provider_id'):raise ValueError('Arbitrator provider binding requires a model')
+        override_effort=cfg.get('active_reasoning_effort','high')
 
     cio_preference = _role_preference('cio', cio_spec)
     cio_system_prompt = original_system_prompt + "\n你是汇总评审者，不增加额外交易授权。遵守同一个输出契约，不得将其他模型意见当作事实或胜率证据。"
@@ -408,6 +417,8 @@ def execute_council_debate(
         api_key=override_key,
         api_format=override_format,
         reasoning_effort=override_effort,
+            reasoning_type=override_rtype,
+            provider_id=override_provider,
         temperature=cio_temperature,
         response_format={"type": "json_object"},
         timeout=rem_time,
@@ -429,6 +440,7 @@ def execute_council_debate(
             "role_name": cio_spec.get("name", "首席投资官 (CIO)"),
             "model_used": override_model or get_active_llm_runtime().get("model", "default"),
             "latency_ms": latency,
+            "transport": usage.get("_transport", {}),
             "reasoning": reasoning,
             "system_hash": trading_prompt.fingerprint(cio_system_prompt),
             "user_hash": trading_prompt.fingerprint(cio_user_prompt),

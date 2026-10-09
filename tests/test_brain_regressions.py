@@ -20,6 +20,7 @@ import urllib.request
 import scripts
 from okxquant_backend.llm_transport import LLMRequestError
 from scripts import trading_prompt, wait_audit, risk_policy
+from test_wait_repair import macro_wait
 
 
 INST = "BTC-USDT-SWAP"
@@ -163,16 +164,19 @@ class BrainRegressions(unittest.TestCase):
             output_chars=len(trading_prompt.canonical(output)))
         self.assertEqual(self.council.return_value[0], output)
 
-    def test_single_model_and_council_fallback_keep_raw_text_length(self):
-        for enabled in (False, True):
-            with self.subTest(council_enabled=enabled):
-                self.council_config.return_value = {"enabled": enabled}
-                self.council.side_effect = RuntimeError("offline council failure")
-                self.cli.reset_mock(); self.llm.reset_mock(); self.telemetry.reset_mock()
-                self.run_cycle()
-                self.llm.assert_called_once()
-                self.telemetry.finish.assert_called_once_with("success", {"usage": {}},
-                    output_chars=len(self.llm.return_value[0]))
+    def test_single_model_keeps_raw_text_length(self):
+        self.council_config.return_value = {"enabled": False}
+        self.run_cycle()
+        self.llm.assert_called_once()
+        self.telemetry.finish.assert_called_once_with("success", {"usage": {}}, output_chars=len(self.llm.return_value[0]))
+
+    def test_council_failure_never_launches_an_extra_single_model(self):
+        self.council_config.return_value = {"enabled": True}
+        self.council.side_effect = RuntimeError("offline council failure")
+        result=self.brain.execute_batch_ai_brain_cycle(active_positions_detail=[],usdt_available=1000)
+        self.assertIsNone(result);self.llm.assert_not_called()
+        self.writer.assert_not_called();self.barrier.assert_not_called()
+        self.assertEqual(self.telemetry.finish.call_args.args[0],'failed')
 
     def test_missing_smart_money_never_becomes_neutral_facts_in_actual_cycle(self):
         self.assertFalse(self.p["smart_money"]["valid"])
@@ -235,7 +239,6 @@ class BrainRegressions(unittest.TestCase):
         self.writer.assert_not_called();self.barrier.assert_not_called()
 
     def test_invalid_wait_never_spends_a_second_model_request(self):
-        from test_wait_repair import macro_wait
         bad=macro_wait();bad['wait_audit']['short']['code']='position_constraint'
         initial=proposal();initial['decisions'][INST]=bad
         self.council_config.return_value={'enabled':False}
@@ -250,7 +253,6 @@ class BrainRegressions(unittest.TestCase):
         self.assertFalse(events[0].args[2]['report']['attempted'])
 
     def test_missing_previous_review_is_repaired_locally_without_model_call(self):
-        from test_wait_repair import macro_wait
         fixed=macro_wait();initial=proposal();initial['decisions'][INST]=fixed
         prior={INST:{'required':True,'review_id':'prior-review','changed_refs':['/price'],
             'trigger_checks':{'long':'met','short':'not_met'},

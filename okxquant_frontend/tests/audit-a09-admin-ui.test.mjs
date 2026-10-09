@@ -354,3 +354,16 @@ test('admin configuration pages do not present permanently disabled form control
   assert.match(llm,/v-model="providerForm\.group"/);assert.match(llm,/v-model="providerForm\.type"/)
   assert.match(llm,/@click="executeRemoteFetch"/);assert.match(llm,/@click="runRemoteModelTest\(rm\)"/)
 })
+
+
+test('council seat selection qualifies duplicate model IDs by provider', () => {
+  const s=page('CouncilPage')
+  s.availableModels.value=[{id:'shared',provider_id:'a'},{id:'shared',provider_id:'b'}]
+  const role={model_id:'shared'}
+  assert.deepEqual(JSON.parse(s.roleModelValue(role)),['','shared'])
+  s.bindRoleModel(role,{target:{value:JSON.stringify(['b','shared'])}})
+  assert.equal(role.model_id,'shared');assert.equal(role.provider_id,'b')
+  assert.deepEqual(JSON.parse(s.roleModelValue(role)),['b','shared'])
+  s.bindRoleModel(role,{target:{value:''}})
+  assert.equal(role.model_id,'');assert.equal(role.provider_id,'')
+})

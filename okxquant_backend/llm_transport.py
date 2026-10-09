@@ -55,8 +55,22 @@ ERROR_LABELS = {
     'connection_error': '模型连接失败', 'dns_error': '模型地址解析失败',
     'certificate_error': '模型连接证书校验失败', 'deadline_exceeded': '模型调用总时限已耗尽',
     'invalid_response': '模型网关响应格式无效', 'invalid_json_response': '模型网关返回的内容不是有效JSON',
-    'empty_model_output': '模型返回空正文', 'truncated_model_output': '?????JSON???????',
-    'http_error': '模型接口请求失败',
+    'empty_model_output': '模型返回空正文', 'truncated_model_output': '\u6a21\u578bJSON\u8f93\u51fa\u88ab\u622a\u65ad',
+    'http_error': '\u6a21\u578b\u63a5\u53e3\u8bf7\u6c42\u5931\u8d25',
+    'connect_timeout': '\u6a21\u578b\u8fde\u63a5\u8d85\u65f6',
+    'first_byte_timeout': '\u6a21\u578b\u9996\u5305\u7b49\u5f85\u8d85\u65f6',
+    'idle_timeout': '\u6a21\u578b\u54cd\u5e94\u6d41\u957f\u65f6\u95f4\u65e0\u6570\u636e',
+    'total_timeout': '\u6a21\u578b\u8bf7\u6c42\u603b\u65f6\u9650\u5df2\u8017\u5c3d',
+    'stream_error': '\u6a21\u578b\u6d41\u5f0f\u54cd\u5e94\u8fd4\u56de\u9519\u8bef',
+    'stream_incomplete': '\u6a21\u578b\u54cd\u5e94\u6d41\u672a\u5b8c\u6574\u7ed3\u675f',
+    'stream_truncated': '\u6a21\u578b\u54cd\u5e94\u6d41\u88ab\u622a\u65ad',
+    'completion_invalid': '\u6a21\u578b\u672a\u660e\u786e\u6b63\u5e38\u5b8c\u6210\uff0c\u4e0d\u63a5\u53d7\u90e8\u5206\u7ed3\u679c',
+    'invalid_stream': '\u6a21\u578b\u6d41\u5f0f\u534f\u8bae\u54cd\u5e94\u65e0\u6548',
+    'response_too_large': '\u6a21\u578b\u54cd\u5e94\u8d85\u8fc7\u5b89\u5168\u5927\u5c0f\u4e0a\u9650',
+    'stream_unsupported': '\u4f9b\u5e94\u5546\u660e\u786e\u4e0d\u652f\u6301\u6d41\u5f0f\u53c2\u6570',
+    'unsupported_protocol': '\u6a21\u578b\u54cd\u5e94\u534f\u8bae\u6682\u4e0d\u652f\u6301',
+    'configuration_error': '\u6a21\u578b\u4f20\u8f93\u914d\u7f6e\u65e0\u6548',
+    'async_context_error': '\u6a21\u578b\u8bf7\u6c42\u8c03\u7528\u4e0a\u4e0b\u6587\u65e0\u6548',
 }
 
 
@@ -92,7 +106,8 @@ def public_failure(error):
     return {'error_type': 'LLMRequestError', 'category': error.category,
             'http_status': error.status_code or None, 'attempts': error.attempts,
             'provider_error_code': error.provider_code, 'request_id': error.request_id,
-            'message': str(error)}
+            'message': str(error),
+            'transport': safe_transport_diagnostics(getattr(error, 'transport_diagnostics', {}))}
 
 
 def retry_delay(header: str | None, attempt: int) -> float:
@@ -123,7 +138,9 @@ def _transient_network_error(error: BaseException) -> bool:
 
 
 def request_json(endpoint: str, headers: dict[str, str], payload: dict[str, Any], timeout: float,
-                 max_attempts: int = 3, attempt_timeout: float | None = None) -> tuple[dict[str, Any], int, int, int]:
+                 max_attempts: int = 3, attempt_timeout: float | None = None,
+                 protocol: str | None = None, transport_policy: dict | None = None,
+                 diagnostics: dict | None = None) -> tuple[dict[str, Any], int, int, int]:
     """Return JSON, HTTP status, end-to-end latency and attempts used.
 
     All attempts share one timeout budget. Retry-After is respected: when it
@@ -131,6 +148,11 @@ def request_json(endpoint: str, headers: dict[str, str], payload: dict[str, Any]
     attempt_timeout caps socket connect/read waits, not a hard wall-clock kill.
     Responses received after the shared deadline are never accepted.
     """
+    if transport_policy is not None:
+        from .llm_inference_transport import request_inference
+        budget = min(timeout, attempt_timeout) if attempt_timeout is not None else timeout
+        return request_inference(endpoint, headers, payload, protocol=protocol or 'openai_chat',
+                                 policy=transport_policy, timeout=budget, diagnostics=diagnostics)
     if not math.isfinite(timeout) or timeout <= 0 or not 1 <= max_attempts <= 3:
         raise ValueError("Invalid inference timeout or retry limit")
     if attempt_timeout is not None and (isinstance(attempt_timeout, bool) or not math.isfinite(attempt_timeout) or attempt_timeout <= 0):
@@ -189,3 +211,20 @@ def request_json(endpoint: str, headers: dict[str, str], payload: dict[str, Any]
                     status or category, attempt + 1, max_attempts, delay)
         time.sleep(delay)
     raise AssertionError("Unreachable")
+
+
+def safe_transport_diagnostics(value):
+    """No provider bodies, endpoints, arbitrary headers or credentials may escape."""
+    if not isinstance(value, dict): return {}
+    out = {}
+    for key in ('attempts','http_status','total_ms','first_byte_ms','first_content_ms','max_gap_ms','bytes_received','heartbeat_count'):
+        v=value.get(key)
+        if isinstance(v,(int,float)) and not isinstance(v,bool) and math.isfinite(v) and 0 <= v <= 1e12: out[key]=v
+    for key,allowed in {'transport_mode':{'stream','json'},'failure_phase':{'connect','headers','first_byte','body','idle','total','protocol','http','configuration','complete','network','cancelled','async_context','worker'}}.items():
+        if value.get(key) in allowed:out[key]=value[key]
+    if type(value.get('completion_seen')) is bool:out['completion_seen']=value['completion_seen']
+    patterns={'request_id':r'(?:[0-9]{20}[A-Za-z0-9]{8,64}|req_[A-Za-z0-9_-]{8,100}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})',
+              'cf_ray':r'[0-9a-fA-F]{16,32}-[A-Z0-9]{2,6}'}
+    for key,pattern in patterns.items():
+        if isinstance(value.get(key),str) and re.fullmatch(pattern,value[key]):out[key]=value[key]
+    return out

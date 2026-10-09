@@ -1183,6 +1183,62 @@ def admin_get_llm_models(x_okxquant_session: str | None = Header(default=None, a
     return load_llm_config(mask_keys=True)
 
 
+class LLMTransportPolicyRequest(BaseModel):
+    provider_id: str = Field(min_length=1, max_length=160)
+    model_id: str = Field(min_length=1, max_length=256)
+    policy: dict[str, Any]
+
+
+class LLMTransportVerifyRequest(BaseModel):
+    provider_id: str = Field(min_length=1, max_length=160)
+    model_id: str = Field(min_length=1, max_length=256)
+    mode: str = Field(pattern=r"^(stream|json)$")
+
+
+@app.get("/api/v1/admin/llm/transport")
+def admin_llm_transport(provider_id: str, model_id: str, x_okxquant_session: str | None = Header(default=None, alias="X-OKXQuant-Session")):
+    require_admin_header(x_okxquant_session=x_okxquant_session)
+    from . import llm_transport_policy as transport
+    try:return transport.status(transport.selected_context(provider_id,model_id))
+    except ValueError as exc:raise HTTPException(422,str(exc)) from None
+    except transport.LLMRequestError:raise HTTPException(503,'Transport configuration unavailable') from None
+
+
+@app.put("/api/v1/admin/llm/transport")
+def admin_update_llm_transport(payload: LLMTransportPolicyRequest, x_okxquant_session: str | None = Header(default=None, alias="X-OKXQuant-Session")):
+    require_superadmin(x_okxquant_session)
+    from . import llm_transport_policy as transport
+    try:
+        context=transport.selected_context(payload.provider_id,payload.model_id)
+        saved=transport.save_policy(payload.provider_id,payload.policy)
+        result=transport.status(context)
+    except ValueError as exc:raise HTTPException(422,str(exc)) from None
+    except transport.LLMRequestError:raise HTTPException(503,'Transport configuration unavailable') from None
+    audit_record('llm.transport.configure','success',{'provider_id':payload.provider_id,'model_id':payload.model_id,'mode':saved['mode']})
+    return result
+
+
+@app.post("/api/v1/admin/llm/transport/verify",status_code=202)
+def admin_verify_llm_transport(payload: LLMTransportVerifyRequest, x_okxquant_session: str | None = Header(default=None, alias="X-OKXQuant-Session")):
+    require_superadmin(x_okxquant_session)
+    from . import llm_transport_verification as verification
+    try:result=verification.start(payload.provider_id,payload.model_id,payload.mode)
+    except verification.LLMRequestError:raise HTTPException(503,'Transport configuration unavailable') from None
+    except ValueError as exc:raise HTTPException(422,str(exc)) from None
+    except RuntimeError as exc:raise HTTPException(409,'A verification is already in progress; wait and query its result') from None
+    audit_record('llm.transport.verify','accepted',{'provider_id':payload.provider_id,'model_id':payload.model_id,'mode':payload.mode,'job_id':result['job_id']})
+    return result
+
+
+@app.get("/api/v1/admin/llm/transport/verification/{job_id}")
+def admin_llm_transport_verification(job_id: str, x_okxquant_session: str | None = Header(default=None, alias="X-OKXQuant-Session")):
+    require_admin_header(x_okxquant_session=x_okxquant_session)
+    from .llm_transport_verification import get_job
+    result=get_job(job_id)
+    if result is None:raise HTTPException(404,'Verification job expired or server restarted; outcome unknown, no automatic replay')
+    return result
+
+
 @app.post("/api/v1/admin/llm/activate")
 def admin_activate_llm_model(payload: LLMActivateRequest, x_okxquant_session: str | None = Header(default=None, alias="X-OKXQuant-Session")) -> dict[str, Any]:
     actor = require_superadmin(x_okxquant_session)
@@ -1200,7 +1256,7 @@ def admin_activate_llm_model(payload: LLMActivateRequest, x_okxquant_session: st
 
 @app.post("/api/v1/admin/llm/test")
 def admin_test_llm(payload: LLMTestRequest, x_okxquant_session: str | None = Header(default=None, alias="X-OKXQuant-Session")) -> dict[str, Any]:
-    require_admin_header(x_okxquant_session=x_okxquant_session)
+    require_superadmin(x_okxquant_session)
     base_url = payload.base_url
     api_key = payload.api_key
     api_format = payload.api_format or "openai_chat"
@@ -1300,7 +1356,7 @@ def admin_upsert_llm_provider(payload: LLMProviderUpsertRequest, x_okxquant_sess
 
 @app.post("/api/v1/admin/llm/fetch-models")
 def admin_fetch_remote_models(payload: LLMFetchModelsRequest, x_okxquant_session: str | None = Header(default=None, alias="X-OKXQuant-Session")) -> dict[str, Any]:
-    require_admin_header(x_okxquant_session=x_okxquant_session)
+    require_superadmin(x_okxquant_session)
     res = fetch_remote_models(
         base_url=payload.base_url or "",
         api_key=payload.api_key or "",
