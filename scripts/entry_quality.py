@@ -88,7 +88,10 @@ def attach(package, plan, policy):
     """Keep rejected drafts observable; selection can never authorize their orders."""
     result = evaluate(package, plan, policy)
     active=enforced_reasons(result)
-    result.update(enforcement_mode=enforcement_mode(),veto=bool(active),enforced_reasons=active)
+    assessment=result['status']
+    result.update(assessment_status=assessment,
+                  status='shadow_only' if active else 'observed_warning' if result['reasons'] else 'admitted',
+                  enforcement_mode=enforcement_mode(),veto=bool(active),enforced_reasons=active)
     plan['entry_quality'] = result
     if active:
         plan['shadow_only'] = True

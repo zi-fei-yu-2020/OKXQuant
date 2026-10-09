@@ -20,6 +20,7 @@ BASE = '/api/v1/admin'
 class CrossReviewContracts(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack(); self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch.object(engine,"RETIRED",False))
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix='cross-contract-')))
         self.env = SimpleNamespace(mode='live', identity='okx:live:cross-a', connection_id='cross-a',
                                    binding_version=1, configured=True, simulated=False)

@@ -189,6 +189,8 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
         raise risk.RiskRejected('Fallback decision cannot be used outside its bounded route')
     if getattr(env,'connection_id','') and (record.get('connection_id')!=env.connection_id or record.get('binding_version')!=env.binding_version):
         raise risk.RiskRejected('Account binding changed after decision; fresh inference required')
+    from scripts.strategy_engine_runtime import assert_entry_supported
+    assert_entry_supported(record)
     decision=record.get('decision',{})
     from scripts.decision_authorization import assert_strategy
     assert_strategy(decision)
@@ -301,6 +303,8 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     algos=read_algo_orders(env,priority='risk',force=True) if any(abs(risk.number(p.get('pos') or 0))>0 for p in positions) else []
     portfolio=risk.exposure(positions,pending,algos,metadata,policy)
     existing=[p for p in positions if p.get('instId')==inst_id and abs(risk.number(p.get('pos') or 0))>0]
+    from scripts.strategy_engine_runtime import assert_existing_position_can_increase
+    assert_existing_position_can_increase(existing,env.identity)
     basis=record.get('position_basis',{})
     if abs(sum(abs(risk.number(p.get('pos') or 0)) for p in existing)-abs(risk.number(basis.get('size') or 0)))>1e-9:
         raise risk.RiskRejected('Position basis changed since inference; no stale scale/entry reinterpretation')

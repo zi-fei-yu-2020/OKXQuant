@@ -1,5 +1,7 @@
 ﻿# OKXQuant v0.1.0
 
+> 当前自动新开仓仅保留 15 分钟 AI 主脑链。独立分钟引擎已退役，旧配置/授权不能重新启用；历史数据与旧仓退出保护保留。见 `docs/AI_ONLY_RELEASE_20261010.md`。
+
 OKXQuant is an AI-assisted quantitative trading system for OKX USDT perpetual swaps. It combines closed-candle market data, deterministic candidates, LLM evidence review, account risk controls, exchange-native OCO protection, lifecycle accounting, and strategy telemetry.
 
 Repository: https://github.com/zi-fei-yu-2020/OKXQuant.git

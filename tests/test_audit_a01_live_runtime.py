@@ -20,6 +20,8 @@ INST = 'BTC-USDT-SWAP'
 class LiveRuntimeTests(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack(); self.addCleanup(self.stack.close)
+        # Legacy consent behavior retained for history/rollback tests, not production entry.
+        self.stack.enter_context(patch.object(engine,"RETIRED",False))
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         for module, key, name in (
             (engine, 'STATE_FILE', 'live.json'), (demo_scalp, 'CONFIG', 'demo.json'),

@@ -105,6 +105,7 @@ def _public_history_row(item):
         "failure_reason": item.get("failure_reason") or "",
         "model_failure": item.get("model_failure"),
         "output_validation": item.get("output_validation"),
+        "market_context_receipt": item.get("market_context_receipt"),
         "position_management": item.get("position_management") or [],
         "details_available": True,
     }

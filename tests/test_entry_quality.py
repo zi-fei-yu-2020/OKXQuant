@@ -93,3 +93,10 @@ class EntryQualityRankingTests(unittest.TestCase):
             self.assertAlmostEqual(metric['terms']['cost_efficiency'],.8)
             pairs,report=scalp_ranking.rank([(package,plan)],vars(Policy()))
         self.assertEqual(len(pairs),1);self.assertEqual(report['candidates_removed'],0)
+
+class ObservationalQualityLabelTests(unittest.TestCase):
+    def test_non_veto_warning_does_not_claim_shadow_only_authority(self):
+        p={'bidPx':99.99,'askPx':100.,'rsi_15m':50}
+        plan={'action':'BUY_LONG','entry_price':100.,'stop_loss_price':98.,'take_profit_price':120.,'setup':'range_reversion','target_layers':{'near':{'price':101.,'extrapolated':False}}}
+        with patch.dict('os.environ',{'OKXQUANT_ENTRY_QUALITY_MODE':'tail_only'}):r=quality.attach(p,plan,vars(Policy()))
+        self.assertEqual(r['status'],'observed_warning');self.assertFalse(r['veto']);self.assertFalse(plan.get('shadow_only',False))

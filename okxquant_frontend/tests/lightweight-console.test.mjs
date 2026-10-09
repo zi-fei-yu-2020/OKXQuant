@@ -92,7 +92,7 @@ test('TradesLedger pagination queries full canonical backend with state and keyw
   assert.match(ledgerSrc, /\/api\/trades\?\${params\.toString\(\)}/)
   assert.match(ledgerSrc, /params\.set\('state', filter\.value\)/)
   assert.match(ledgerSrc, /params\.set\('limit', String\(pageSize\)\)/)
-  assert.match(ledgerSrc, /params\.set\('offset', String\(offset\.value\)\)/)
+  assert.match(ledgerSrc, /params\.set\('offset', String\(targetOffset\)\)/)
 
   // Disclaimers and footer must avoid unsupported '真实撮合' / '完整' claims
   assert.doesNotMatch(ledgerSrc, /真实撮合成交记录/)

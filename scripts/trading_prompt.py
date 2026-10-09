@@ -230,6 +230,11 @@ def facts_for(package,position=None):
         add('/entry_candles/15M/range_high',max(r['high'] for r in rows),'structure')
     except (ValueError,TypeError,KeyError,OverflowError):
         pass
+    try:
+        rows=verified_bars(package,'1H')[-13:-1]
+        add('/entry_candles/1H/prior_12/low',min(r['low'] for r in rows),'structure')
+        add('/entry_candles/1H/prior_12/high',max(r['high'] for r in rows),'structure')
+    except (ValueError,TypeError,KeyError,OverflowError):pass
     for tf in ('1M','5M'):
         try:
             from scripts.entry_candidates import verified_bars
@@ -372,6 +377,7 @@ def compose(profile,runtime,packages,*,override='',positions=None,pending=None,r
         if refs:
             prior['shared_evidence_refs']=refs
     system+='\nprevious_wait_reviews.shared_evidence_refs 是本次输入 JSON 内的引用；请读取对应 wait_constraints 字段作为完整证据，并非证据缺失。'
+    system+='\n【市场情报审查】\n区分4H币价结构、资讯情绪和真实跨资产行情。runtime_data.market_context 标明未接入的美股、美元、利率报价或经济数据，不得从标题编造数值。新闻采集新鲜不等于事件刚发生；区分事实报道与预测观点。相关报道分组不算多条独立确认。先说明可用情报支持、冲突还是与本轮无关；有影响的报道用 news 字段引用到支持或反证中。未明确引用不能宣称已量化新闻贡献。观察警告 veto=false 不等于候选被禁止，也不能仅因存在警告自动 WAIT。成本、价格触发、失效点与账户安全仍须独立成立。'
     user=json.dumps({'user_preferences':layers,'runtime_data':rendered_runtime,'facts':facts,'entry_candidates':entry_plans,'wait_constraints':wait_constraints,
                     'position_ids':list(position_map),'pending_order_ids':[{'instId':p.get('instId'),'ordId':p.get('ordId')} for p in pending]},
                     ensure_ascii=False,allow_nan=False,separators=(',',':'))+'\n\n【推演与决策任务】\n'+TASK+'\n【输出字段定义】\n'+canonical(output_schema())
@@ -564,6 +570,9 @@ def validate_response(raw,packages,*,positions=None,pending=None,allow_open=True
         except ContractError as exc:entry.update(action='KEEP',reason=str(exc))
         orders.append(entry)
     orders.extend({'instId':k[0],'ordId':k[1],'action':'KEEP','reason':'模型遗漏，未申请撤单'} for k in sorted(known-seen_orders))
+    from scripts.market_context import usage_receipt
+    news_receipt=usage_receipt(packages[0].get('news_snapshot') or {} if packages else {},decisions,catalogs)
     return {**raw,'decisions':decisions,'position_management':management,'pending_orders_management':orders,
+            'market_context_receipt':news_receipt,
             'validation':{'status':'incomplete' if any(v.get('decision_status')=='incomplete' for v in decisions.values()) else 'validated','wait_audit_version':'wait-evidence-v1','contract_version':VERSION,'allow_open':allow_open,'unknown_decision_ids':sorted(set(raw['decisions'])-set(package_map)),
                           'rejected_candidates':{k:v.get('validation_reason') for k,v in decisions.items() if not v.get('contract_valid')}}}

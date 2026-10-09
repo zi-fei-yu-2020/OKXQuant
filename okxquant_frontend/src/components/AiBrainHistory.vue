@@ -258,6 +258,17 @@ onUnmounted(() => {
             </p>
           </AppCard>
 
+          <AppCard v-if="item.market_context_receipt" class="p-3 space-y-1" data-market-context-receipt>
+            <p class="text-xs font-semibold" style="color:var(--text-main)">市场情报输入与引用</p>
+            <p class="text-xs" style="color:var(--text-muted)">
+              已提供 {{ item.market_context_receipt.provided_article_count ?? '—' }} 条新闻 ·
+              明确引用 {{ item.market_context_receipt.cited_article_count ?? '—' }} 条 ·
+              情绪引用 {{ item.market_context_receipt.sentiment_cited_by?.length ?? '—' }} 个标的
+            </p>
+            <p class="text-xs" style="color:var(--text-muted)">美股／美元／利率独立行情及经济数据日历尚未接入，不能把新闻标题当实时行情。</p>
+            <p class="text-xs" style="color:var(--text-faint)">只统计通过字段核验的引用；未明确引用不等于没有阅读，也不代表内部权重或真实胜率。</p>
+          </AppCard>
+
           <!-- Macro Summary -->
           <div v-if="item.status !== 'failed'">
             <div

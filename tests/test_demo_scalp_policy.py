@@ -20,6 +20,9 @@ def sampling_package():
 
 
 class DemoPolicyTests(unittest.TestCase):
+    def setUp(self):
+        legacy=patch("scripts.strategy_engine_runtime.RETIRED",False);legacy.start();self.addCleanup(legacy.stop)
+
     def test_setup_target_is_fee_aware_and_allowed_by_demo_rr(self):
         p=sampling_package();base=risk_policy.Policy()
         self.assertTrue(scalp_candidates.catalog(p,vars(base))['plans'])

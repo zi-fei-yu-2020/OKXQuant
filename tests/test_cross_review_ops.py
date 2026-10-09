@@ -159,7 +159,7 @@ class ManualCompletionCrossReview(unittest.TestCase):
         specs={job.name:job for job in scheduler_module.JOBS}
         self.assertEqual(specs["trader"].interval_seconds,900)
         self.assertEqual(specs["position_guard"].interval_seconds,60)
-        self.assertEqual(specs["demo_scalp"].interval_seconds,60)
+        self.assertNotIn("demo_scalp",specs)
         with patch("scripts.okx_runtime._load_dotenv",return_value={"OKXQUANT_AUTOTRADE_ENABLED":"1"}),patch.object(scheduler_module,"backup_job_specs",return_value=()):
             self.assertIn("trader",{job.name for job in scheduler_module.current_jobs()})
         with patch("scripts.okx_runtime._load_dotenv",return_value={"OKXQUANT_AUTOTRADE_ENABLED":"0"}),patch.object(scheduler_module,"backup_job_specs",return_value=()):

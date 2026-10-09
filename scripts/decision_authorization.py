@@ -65,6 +65,7 @@ def entry_dispatch_guard(env, plan):
     from scripts.execution_profiles import runtime
     from okxquant_backend.account_connections import assert_current
     import json
+    engine.assert_entry_supported(plan)
     live_minute=env.mode=='live' and plan.get('entry_engine')=='demo_scalp_v2'
     with ExitStack() as stack:
         if live_minute:stack.enter_context(configuration_write(engine.STATE_FILE))

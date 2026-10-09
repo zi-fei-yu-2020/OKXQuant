@@ -608,6 +608,7 @@ def construct_full_market_prompt(packages: List[Dict[str, Any]], pos_summary: st
         "account_positions": f"【账户持仓概况】: {pos_summary}\n【当前活动在途持仓明细】:\n{active_pos_text}",
         "pending_orders": f"【当前在途挂单列表】:\n{pending_orders_text}",
         "news_intelligence": news_text,
+        "market_context": __import__('scripts.market_context',fromlist=['context']).context(news_snapshot),
         "trading_memory": memory_lessons.strip(),
         "market_matrix": all_market_str,
     }
@@ -1138,6 +1139,7 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
             "prompt_composition": prompt_bundle.manifest,
             "output_validation": brain_output["validation"],
             "news_snapshot": news_snapshot,
+            "market_context_receipt": brain_output.get('market_context_receipt'),
             "ai_last_prompt": full_prompt_text,
             "position_management": pos_mgmt_list,
             "council_transcript": brain_output.get("council_transcript") if isinstance(brain_output, dict) else None,

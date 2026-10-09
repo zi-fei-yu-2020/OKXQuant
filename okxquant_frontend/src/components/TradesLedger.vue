@@ -9,7 +9,7 @@ import { observedNumber } from '../utils/observationDisplay'
 import { getSessionToken, buildAuthHeaders, handleSessionResponse } from '../utils/sessionResponse'
 import { feeAccounting, feeText, ledgerValue, ledgerNumberText, ledgerNumberColor } from '../utils/feeAccounting'
 
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useDashboardStore } from '../stores/dashboard'
 import { Receipt, Search } from 'lucide-vue-next'
 
@@ -31,29 +31,37 @@ function showFees(trade: any) {
 const serverTrades = ref<any[] | null>(null)
 const serverTotal = ref<number | null>(null)
 const serverCounts = ref<{ all?: number; active?: number; closed?: number; pending?: number } | null>(null)
-const offset = ref(0)
+const offset = ref(0) // Page currently displayed; commit only after a valid response.
+const requestedOffset = ref(0)
+const pageRevision = ref(0)
+const ledgerFrame = ref<HTMLElement | null>(null)
+const frameMinHeight = ref(0)
 const pageSize = 30
 const loadingTrades = ref(false)
 const tradesError = ref<string | null>(null)
 
 let activeController: AbortController | null = null
 let fetchGeneration = 0
+let disposed = false
 let searchDebounceTimer: ReturnType<typeof setTimeout> | undefined
 
 
 
 async function fetchTradeDetail(trade: any) {
+  const scope = store.data?.account_source_id
   try {
     const session = getSessionToken()
     const resp = await fetch(`/api/trades/${encodeURIComponent(trade.id)}`, {
       headers: buildAuthHeaders(session),
     })
+    if (disposed || scope !== store.data?.account_source_id) return
     if (resp.status === 401 || resp.status === 403) {
       handleSessionResponse(resp.status, session)
       return
     }
     if (resp.ok) {
       const data = await resp.json()
+      if (disposed || scope !== store.data?.account_source_id) return
       Object.assign(trade, data, { fee_details_loaded: true })
       if (feeTrade.value && feeTrade.value.id === trade.id) {
         Object.assign(feeTrade.value, data)
@@ -63,7 +71,10 @@ async function fetchTradeDetail(trade: any) {
 }
 
 async function fetchPage(newOffset = 0) {
-  offset.value = Math.max(0, newOffset)
+  if (disposed) return
+  const targetOffset = Math.max(0, newOffset)
+  requestedOffset.value = targetOffset
+  frameMinHeight.value = Math.max(frameMinHeight.value, Math.ceil(ledgerFrame.value?.getBoundingClientRect().height ?? 0))
   const gen = ++fetchGeneration
 
   if (activeController) {
@@ -78,7 +89,7 @@ async function fetchPage(newOffset = 0) {
   try {
     const params = new URLSearchParams()
     params.set('limit', String(pageSize))
-    params.set('offset', String(offset.value))
+    params.set('offset', String(targetOffset))
     params.set('state', filter.value)
     if (keyword.value.trim()) {
       params.set('q', keyword.value.trim())
@@ -89,6 +100,7 @@ async function fetchPage(newOffset = 0) {
       signal: controller.signal,
       headers: buildAuthHeaders(session),
     })
+    if (disposed || gen !== fetchGeneration) return
 
     if (resp.status === 401 || resp.status === 403) {
       handleSessionResponse(resp.status, session)
@@ -99,15 +111,25 @@ async function fetchPage(newOffset = 0) {
     }
 
     const json = await resp.json()
-    if (gen !== fetchGeneration) return
-
-    if (Array.isArray(json?.items)) {
-      serverTrades.value = json.items
-      if (typeof json?.total === 'number') serverTotal.value = json.total
-      if (json?.counts && typeof json.counts === 'object') {
-        serverCounts.value = json.counts
-      }
+    if (disposed || gen !== fetchGeneration) return
+    if (!Array.isArray(json?.items) || !Number.isSafeInteger(json?.total) || json.total < json.items.length
+      || json.items.some((item: unknown) => !item || typeof item !== 'object' || Array.isArray(item))) {
+      throw new Error('交易记录返回格式无效，请重试')
     }
+    const lastOffset = json.total > 0 ? Math.floor((json.total - 1) / pageSize) * pageSize : 0
+    if (json.total > 0 && targetOffset > lastOffset) {
+      await fetchPage(lastOffset)
+      return
+    }
+    serverTrades.value = json.items
+    serverTotal.value = json.total
+    offset.value = json.total === 0 ? 0 : targetOffset
+    if (json?.counts && typeof json.counts === 'object') serverCounts.value = json.counts
+    pageRevision.value++
+    await nextTick()
+    if (disposed || gen !== fetchGeneration) return
+    const scroller = ledgerFrame.value?.querySelector<HTMLElement>('.table-scroll-container')
+    if (scroller) scroller.scrollTop = 0
   } catch (e: any) {
     if (controller.signal.aborted || gen !== fetchGeneration) return
     tradesError.value = e.message || '加载成交记录失败'
@@ -120,14 +142,18 @@ async function fetchPage(newOffset = 0) {
 }
 
 watch(filter, () => {
-  offset.value = 0
+  clearTimeout(searchDebounceTimer)
   void fetchPage(0)
 })
 
 watch(keyword, () => {
   clearTimeout(searchDebounceTimer)
+  ++fetchGeneration
+  activeController?.abort()
+  requestedOffset.value = 0
+  loadingTrades.value = true
+  tradesError.value = null
   searchDebounceTimer = setTimeout(() => {
-    offset.value = 0
     void fetchPage(0)
   }, 250)
 })
@@ -137,7 +163,13 @@ watch(
   (newScope, oldScope) => {
     if (newScope !== oldScope) {
       offset.value = 0
-      serverTrades.value = null
+      clearTimeout(searchDebounceTimer)
+      serverTrades.value = []
+      serverTotal.value = null
+      serverCounts.value = null
+      frameMinHeight.value = 0
+      feeDialogOpen.value = false
+      feeTrade.value = null
       void fetchPage(0)
     }
   },
@@ -150,6 +182,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  disposed = true
+  ++fetchGeneration
   clearTimeout(searchDebounceTimer)
   if (activeController) {
     activeController.abort()
@@ -176,15 +210,12 @@ const trades = computed(() => {
   })
 })
 
-const holdingCount = computed(() => {
-  if (serverCounts.value?.active !== undefined) return serverCounts.value.active
-  return (store.data?.trades || []).filter((t: any) => t.status === 'holding').length
-})
-
-const closedCount = computed(() => {
-  if (serverCounts.value?.closed !== undefined) return serverCounts.value.closed
-  return (store.data?.trades || []).filter((t: any) => t.status !== 'holding').length
-})
+function pageCount(key: 'active' | 'closed'): number | null {
+  const value = serverCounts.value?.[key]
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
+}
+const holdingCount = computed(() => pageCount('active'))
+const closedCount = computed(() => pageCount('closed'))
 
 
 function marginText(value: unknown): string {
@@ -256,7 +287,7 @@ function horizonLabel(v: unknown, t?: any): string {
         </div>
       </div>
       <div class="text-xs font-mono" style="color: var(--text-muted)">
-        持仓 <strong style="color: var(--color-brand)">{{ holdingCount }}</strong> · 已平仓（含待结算） <strong style="color: var(--text-main)">{{ closedCount }}</strong>
+        持仓 <strong style="color: var(--color-brand)">{{ holdingCount ?? '—' }}</strong> · 已平仓（含待结算） <strong style="color: var(--text-main)">{{ closedCount ?? '—' }}</strong>
       </div>
     </AppCard>
 
@@ -341,12 +372,26 @@ function horizonLabel(v: unknown, t?: any): string {
       class="rounded-xl border shadow-xs transition-colors overflow-hidden flex flex-col"
       style="background-color: var(--bg-card); border-color: var(--border-subtle)"
     >
+      <div ref="ledgerFrame" class="trade-ledger__frame" :class="{ 'is-loading': loadingTrades }"
+        :style="frameMinHeight ? { minHeight: frameMinHeight + 'px' } : undefined">
+        <Transition name="ledger-loading">
+          <div v-if="loadingTrades" class="trade-ledger__loading" role="status" aria-live="polite">
+            <div class="trade-ledger__progress" aria-hidden="true"><span /></div>
+            <span class="trade-ledger__loading-label"><span class="trade-ledger__spinner" aria-hidden="true" />
+              正在载入第 {{ Math.floor(requestedOffset / pageSize) + 1 }} 页
+            </span>
+          </div>
+        </Transition>
+        <div class="trade-ledger__contents" :inert="loadingTrades" :aria-busy="loadingTrades">
+      <div v-if="loadingTrades && trades.length === 0" class="trade-ledger__skeleton" aria-hidden="true">
+        <div v-for="row in 5" :key="row"><i /><i /><i /></div>
+      </div>
       <div
-        v-if="trades.length === 0"
+        v-else-if="trades.length === 0"
         class="py-12 text-center text-xs font-mono"
         style="color: var(--text-muted)"
       >
-        无匹配交易台账记录
+        {{ tradesError ? '交易记录暂不可用' : '无匹配交易台账记录' }}
       </div>
       <template v-else>
         <p id="trade-ledger-scroll-hint" class="px-4 py-2 text-xs sm:hidden" style="color: var(--text-muted)">左右滑动表格查看完整交易字段</p>
@@ -369,7 +414,7 @@ function horizonLabel(v: unknown, t?: any): string {
               <th scope="col" class="trade-ledger__fee-column py-3 px-3 text-center font-bold">费用明细</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody :key="pageRevision" class="trade-ledger__rows">
             <tr
               v-for="(t, idx) in trades"
               :key="t.id || idx"
@@ -478,10 +523,13 @@ function horizonLabel(v: unknown, t?: any): string {
         </AppTable>
       </template>
 
+        </div>
+      </div>
+
       <!-- Table Footer Summary -->
       <div v-if="tradesError" class="px-4 py-2 text-xs border-t flex items-center justify-between" style="border-color: var(--border-subtle); color: var(--color-down)">
-        <span>{{ tradesError }}</span>
-        <button type="button" class="ui-button ui-button--secondary ui-button--sm py-0.5 px-2 text-xs" @click="fetchPage(offset)">重试加载</button>
+        <span role="alert">{{ tradesError }}；{{ trades.length ? '页面未切换，仍显示上次成功载入的记录。' : '暂未取得可用记录，请重试。' }}</span>
+        <button type="button" class="ui-button ui-button--secondary ui-button--sm py-0.5 px-2 text-xs" @click="fetchPage(requestedOffset)" :disabled="loadingTrades">重试加载</button>
       </div>
       <div
         class="px-4 py-2.5 border-t flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono shrink-0"
@@ -491,7 +539,8 @@ function horizonLabel(v: unknown, t?: any): string {
           color: var(--text-faint);
         "
       >
-        <span v-if="serverTotal !== null && serverTotal > pageSize">
+        <span v-if="serverTotal === null">{{ loadingTrades ? '正在读取交易记录…' : '尚未取得交易记录' }}</span>
+        <span v-else-if="serverTotal > pageSize">
           已载入第 {{ offset + 1 }} - {{ Math.min(offset + trades.length, serverTotal) }} 笔，全账户共 {{ serverTotal }} 笔已保留的交易生命周期记录（含待结算，分页查阅）
         </span>
         <span v-else>已载入 {{ trades.length }} 笔已保留的交易生命周期记录（含待结算）</span>
@@ -507,6 +556,9 @@ function horizonLabel(v: unknown, t?: any): string {
             上一页
           </button>
           <span class="num-tabular">{{ Math.floor(offset / pageSize) + 1 }} / {{ Math.ceil(serverTotal / pageSize) }}</span>
+          <span class="trade-ledger__pager-loading" :class="{ 'is-visible': loadingTrades }" aria-hidden="true">
+            <span v-if="loadingTrades" class="trade-ledger__spinner" />载入中…
+          </span>
           <button
             type="button"
             class="ui-action ui-action--sm border"
@@ -533,6 +585,31 @@ function horizonLabel(v: unknown, t?: any): string {
 </template>
 
 <style scoped>
+.trade-ledger__frame { position: relative; min-width: 0; max-width: 100%; min-height: 16rem; }
+.trade-ledger__contents { min-width: 0; max-width: 100%; transition: opacity 140ms ease; }
+.trade-ledger__frame.is-loading .trade-ledger__contents { opacity: .4; pointer-events: none; }
+.trade-ledger__loading { position: absolute; inset: 0; z-index: 20; pointer-events: none; }
+.trade-ledger__loading-label { position: absolute; top: 3.5rem; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: .5rem; white-space: nowrap; padding: .65rem .9rem; border: 1px solid var(--border-medium); border-radius: .65rem; background: var(--bg-card); color: var(--text-main); box-shadow: var(--shadow-card); font-size: .75rem; }
+.trade-ledger__spinner { width: .875rem; height: .875rem; border: 2px solid var(--border-medium); border-top-color: var(--color-brand); border-radius: 50%; animation: ledger-spin .75s linear infinite; }
+.trade-ledger__progress { position: absolute; inset: 0 0 auto; height: 2px; overflow: hidden; background: var(--border-subtle); }
+.trade-ledger__progress span { display: block; width: 35%; height: 100%; background: var(--color-brand); animation: ledger-progress 1.1s ease-in-out infinite; }
+.trade-ledger__pager-loading { display: inline-flex; align-items: center; gap: .3rem; min-width: 4.5rem; visibility: hidden; font-size: .65rem; color: var(--text-muted); }
+.trade-ledger__pager-loading.is-visible { visibility: visible; }
+.trade-ledger__rows { animation: ledger-page-in 180ms ease-out; }
+.trade-ledger__skeleton { padding: 4.5rem 1rem 1rem; }
+.trade-ledger__skeleton > div { display: grid; grid-template-columns: 1fr 1.6fr 1fr; gap: 1rem; padding: 1rem 0; border-bottom: 1px solid var(--border-subtle); }
+.trade-ledger__skeleton i { height: .6rem; border-radius: .25rem; background: var(--border-medium); animation: ledger-pulse 1.2s ease-in-out infinite alternate; }
+.ledger-loading-enter-active, .ledger-loading-leave-active { transition: opacity 120ms ease; }
+.ledger-loading-enter-from, .ledger-loading-leave-to { opacity: 0; }
+@keyframes ledger-spin { to { transform: rotate(360deg); } }
+@keyframes ledger-progress { from { transform: translateX(-110%); } to { transform: translateX(390%); } }
+@keyframes ledger-page-in { from { opacity: .35; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes ledger-pulse { to { opacity: .4; } }
+@media (prefers-reduced-motion: reduce) {
+  .trade-ledger__contents, .ledger-loading-enter-active, .ledger-loading-leave-active { transition: none; }
+  .trade-ledger__rows, .trade-ledger__spinner, .trade-ledger__progress span, .trade-ledger__skeleton i { animation: none; }
+}
+
 .trade-ledger__fee-column { width: 7.5rem; white-space: nowrap; }
 .trade-ledger__fee-button { min-height: 2.75rem; margin-inline: auto; gap: 0.375rem; color: var(--text-muted); border-color: var(--border-subtle); background: var(--bg-card-subtle); font-family: inherit; font-weight: 500; }
 .trade-ledger__fee-button:hover { color: var(--text-main); border-color: var(--border-medium); background: var(--bg-card-hover); }

@@ -17,6 +17,7 @@ from test_strategy_risk import META
 class Small300BudgetTests(unittest.TestCase):
     def setUp(self):
         self.stack=ExitStack()
+        self.stack.enter_context(patch("scripts.strategy_engine_runtime.RETIRED",False))
         self.addCleanup(self.stack.close)
         self.root=Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         self.stack.enter_context(patch.object(evidence,'DB_PATH',self.root/'e.db'))

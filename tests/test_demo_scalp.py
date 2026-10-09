@@ -173,11 +173,11 @@ class MinuteScalpTests(unittest.TestCase):
         p=minute_package();del p['strategy_engine']
         self.assertTrue(all(not r['setup'].startswith('scalp_') for r in entry_candidates.catalog(p)['plans']))
 
-    def test_enabled_requires_demo_explicit_switch_and_operator_permission(self):
+    def test_retired_minute_cannot_be_enabled_by_legacy_demo_config(self):
         with TemporaryDirectory() as temp,patch.object(demo_scalp,'CONFIG',Path(temp)/'flag.json'),patch('scripts.okx_runtime._load_dotenv',return_value={}) as config:
             self.assertFalse(demo_scalp.enabled(SimpleNamespace(mode='demo')))
             demo_scalp.CONFIG.write_text(json.dumps({'enabled':True,'version':'demo-scalp-v2'}))
-            self.assertTrue(demo_scalp.enabled(SimpleNamespace(mode='demo')))
+            self.assertFalse(demo_scalp.enabled(SimpleNamespace(mode='demo')))
             self.assertFalse(demo_scalp.enabled(SimpleNamespace(mode='live')))
             config.return_value={'OKXQUANT_AUTOTRADE_ENABLED':'0'}
             self.assertFalse(demo_scalp.enabled(SimpleNamespace(mode='demo')))
@@ -192,7 +192,8 @@ class MinuteScalpTests(unittest.TestCase):
 
     def test_scheduler_keeps_pause_and_minute_frequency(self):
         from okxquant_gateway.scheduler import JOBS,current_jobs
-        self.assertEqual(next(j.interval_seconds for j in JOBS if j.name=='demo_scalp'),60)
+        self.assertNotIn('demo_scalp',[j.name for j in JOBS])
+        self.assertEqual(next(j.interval_seconds for j in JOBS if j.name=='trader'),900)
         with patch('scripts.okx_runtime._load_dotenv',return_value={'OKXQUANT_AUTOTRADE_ENABLED':'0'}):
             self.assertNotIn('demo_scalp',[j.name for j in current_jobs()])
 

@@ -60,6 +60,7 @@ def frozen_binding(env):
 class IsolatedTradingCase(unittest.TestCase):
     def setUp(self):
         self.stack=ExitStack();self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch.object(engine,"RETIRED",False))
         self.directory=Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         self.stack.enter_context(patch.object(evidence,'DB_PATH',self.directory/'evidence.db'))
         self.stack.enter_context(patch.object(pool,'CONFIG_FILE',self.directory/'pool.json'))

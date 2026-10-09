@@ -9,6 +9,7 @@ from okxquant_gateway.store import GatewayStore
 
 class ControlBridgeAudit(unittest.TestCase):
     def setUp(self):
+        legacy=patch("scripts.strategy_engine_runtime.RETIRED",False);legacy.start();self.addCleanup(legacy.stop)
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name);self.auth=AdminAuthStore(self.root/'admin.db')
         self.auth.initialize_from_legacy('AuditLocalPassword123')

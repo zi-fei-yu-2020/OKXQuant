@@ -176,25 +176,8 @@ def strategy_snapshot(payload, coins, *, now=None, limit=6):
     filtered = for_strategy(payload, now=now) or {}
     targets = {str(c).upper() for c in coins}
     sections = filtered.get('sections') or {}
-    def relevance(item):
-        tagged = {str(c).upper() for c in item.get('coins', [])}
-        title = item.get('title', '').upper()
-        return bool(targets & tagged or any(re.search(r'(?<![A-Z0-9])' + re.escape(c) + r'(?![A-Z0-9])', title) for c in targets)
-                    or re.search(r'比特币|以太坊|美联储|CPI|利率|非农|通胀|ETF|联储|FED|FOMC', title))
-    def rank(item):
-        # Keep relevance/importance, without letting yesterday's important item crowd out today's event.
-        recent = int((now - item['source_at']) <= 7200)
-        return (recent, int(relevance(item)) + int(item.get('importance') == 'high'), item['source_at'])
-    selected = []; titles = set()
-    for item in sorted(filtered.get('latest_news') or [], key=rank, reverse=True):
-        normalized = re.sub(r'[\W_]+', '', item['title']).casefold()
-        # Exact normalized-title dedup only: do not merge conflicting interpretations heuristically.
-        if not normalized or normalized in titles:
-            continue
-        titles.add(normalized)
-        selected.append({**item, 'summary': item['summary'][:400]})
-        if len(selected) >= max(1, min(limit, 12)):
-            break
+    from scripts.market_context import select_reports
+    selected,coverage=select_reports(filtered.get('latest_news') or [],targets,now,limit)
     score_rows = {}
     for coin, row in (filtered.get('coins_sentiment') or {}).items():
         score = row.get('sentiment_factor_score')
@@ -209,7 +192,7 @@ def strategy_snapshot(payload, coins, *, now=None, limit=6):
                 'section_freshness': {k: {'usable': _recent(sections.get(k) or {}, now),
                     'last_success_at': (sections.get(k) or {}).get('last_success_at')} for k in ('latest', 'important', 'sentiment')},
                 'items': selected, 'coins_sentiment': score_rows,
-                'selection': 'recent_relevant_important_then_time_exact_title_dedup_v1'}
+                'selection':coverage['method'],'selection_coverage':coverage}
     snapshot['digest'] = hashlib.sha256(json.dumps(snapshot, ensure_ascii=False, sort_keys=True, allow_nan=False).encode()).hexdigest()
     return snapshot
 

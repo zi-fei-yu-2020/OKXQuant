@@ -17,7 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE_FILE = ROOT / 'data' / 'strategy_engine_runtime.json'
 VERSION = 'strategy-engine-runtime-v1'
 ENGINE_VERSION = 'demo-scalp-v2'
-ENGINE_ID = 'demo_scalp_v2'  # Stable strategy identity, not an environment selector.
+ENGINE_ID = 'demo_scalp_v2'  # Historical identity retained for existing-position exits.
+RETIRED = True  # No configuration or saved consent can re-enable new minute exposure.
 BINDING_FIELDS = ('environment', 'engine_version', 'account_scope', 'connection_id',
                   'binding_version', 'profile_signature', 'execution_signature', 'policy_signature')
 
@@ -101,6 +102,9 @@ def status(env):
     """Read-only, fail-closed state; never changes DEMO's legacy opt-in contract."""
     result = {**_identity(env), 'enabled': False, 'authorized': False,
               'status': 'confirmation_required', 'version': VERSION}
+    if RETIRED:
+        return {**result,'status':'retired','entry_mode':'ai_15m_only',
+                'existing_position_management':'continues'}
     try:
         if env.mode == 'demo':
             # Retain the existing public CONFIG override used by operators/tests.
@@ -139,6 +143,7 @@ def authorize_live(env, actor, *, expected_binding=None):
     """Admin-confirmed current LIVE only; actor is the authenticated server principal."""
     from scripts.config_lock import configuration_write
     from scripts.risk_policy import RiskRejected
+    if RETIRED:raise RiskRejected('Minute strategy retired; new authorization is not supported')
     _assert_live(env)
     if not isinstance(actor, str) or not actor.strip() or len(actor) > 200:
         raise RiskRejected('A server-authenticated administrator identity is required')
@@ -185,3 +190,47 @@ def disable_live(env, *, expected_binding=None):
                                       'disabled_at': time.time()}
         _save(state)
     return status(env)
+
+
+def is_minute_entry(payload):
+    if not isinstance(payload,dict):return False
+    decision=payload.get('decision') or {}
+    features=payload.get('features') or {}
+    for value in (payload,decision,features):
+        if not isinstance(value,dict):continue
+        if value.get('entry_engine')==ENGINE_ID or value.get('strategy_engine')==ENGINE_ID:return True
+        context=value.get('entry_context') or {}
+        if isinstance(context,dict) and (context.get('engine')==ENGINE_ID or str(context.get('version') or '').startswith('scalp-management-')):return True
+        for key in ('mode','strategy_mode'):
+            mode=value.get(key) or {}
+            if isinstance(mode,dict) and mode.get('engine')==ENGINE_ID:return True
+        setup=str(value.get('setup') or value.get('strategy_type') or '')
+        if setup.startswith('scalp_') and setup.endswith('_1m'):return True
+    return False
+
+
+def assert_entry_supported(payload):
+    from scripts.risk_policy import RiskRejected
+    if RETIRED and is_minute_entry(payload):
+        raise RiskRejected('Minute strategy retired; only AI decision-chain entries are enabled')
+
+
+def assert_existing_position_can_increase(positions,scope,trackers=None):
+    """Retired positions are exit-only. Never confuse an AI scalp horizon with this engine."""
+    if not RETIRED or not positions:return
+    from scripts.risk_policy import RiskRejected
+    from scripts.position_lifecycle import identity
+    if trackers is None:
+        try:trackers=json.loads((ROOT/'data'/'position_trackers.json').read_text(encoding='utf8'))
+        except FileNotFoundError:return
+        except (OSError,ValueError):raise RiskRejected('Position origin unavailable; cannot increase exposure') from None
+    if not isinstance(trackers,dict):raise RiskRejected('Position origin unavailable; cannot increase exposure')
+    for position in positions:
+        key=str(position.get('instId') or '')+'_'+str(position.get('posSide') or position.get('side') or '')
+        tracker=trackers.get(key) or {}
+        if not is_minute_entry(tracker):continue
+        previous=tracker.get('positionIdentity')
+        current=identity(position,scope)
+        if isinstance(previous,dict) and previous.get('scope')!=scope:continue
+        if previous and current and previous!=current:continue
+        raise RiskRejected('Existing minute position is exit-only; scale-in is not permitted')

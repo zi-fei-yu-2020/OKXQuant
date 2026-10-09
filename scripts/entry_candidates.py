@@ -9,7 +9,7 @@ import hashlib
 import json
 import math
 
-VERSION = 'closed-candle-plans-v6'
+VERSION = 'closed-candle-plans-v7'
 # Entry-quality guardrails: do not sell the exhausted tail of a move or buy the
 # panic low. These are deterministic filters, not probability claims.
 MIN_PULLBACK_ATR = 0.35
@@ -140,8 +140,10 @@ def _swing_catalog(package, policy=None):
         range_low=min(b['low'] for b in range_rows)
         hourly_state=hourly_trend(package)
         atr_1h=number(package.get('atr_1h', atr))
-        range_reclaim_long=(hourly_state=='range' and bar['close']>bar['open'] and bar['close']>prev['close'] and bar['low']<=range_low+atr_1h*.45)
-        range_reclaim_short=(hourly_state=='range' and bar['close']<bar['open'] and bar['close']<prev['close'] and bar['high']>=range_high-atr_1h*.45)
+        range_reclaim_long=(hourly_state=='range' and bar['close']>bar['open'] and bar['close']>prev['close']
+                            and bar['low']<=range_low<bar['close'])
+        range_reclaim_short=(hourly_state=='range' and bar['close']<bar['open'] and bar['close']<prev['close']
+                             and bar['high']>=range_high>bar['close'])
         for side in ('long','short'):
             action='BUY_LONG' if side=='long' else 'SELL_SHORT'
             if (side=='long' and '4H_MACRO_BEAR' in macro) or (side=='short' and '4H_MACRO_BULL' in macro):
@@ -165,7 +167,10 @@ def _swing_catalog(package, policy=None):
             for setup,triggered in [('pullback_reclaim',reclaim),('closed_range_breakout',breakout),('range_reversion',range_reclaim_long if side=='long' else range_reclaim_short)]:
                 if setup=='pullback_reclaim' and hourly_trend(package)!=side:
                     rejected(setup,side,'pullback_requires_established_trend');continue
-                if not triggered: rejected(setup,side,'closed_candle_trigger_not_met');continue
+                if not triggered: rejected(setup,side,'range_boundary_not_tested_and_reentered' if setup=='range_reversion' else 'closed_candle_trigger_not_met');continue
+                boundary=range_low if side=='long' else range_high
+                if setup=='range_reversion' and (entry-boundary)*(1 if side=='long' else -1)<=0:
+                    rejected(setup,side,'range_reentry_lost_at_quote');continue
                 hold_level=prev['close'] if setup in {'pullback_reclaim','range_reversion'} else level
                 if (entry-hold_level)*(1 if side=='long' else -1)<=0:
                     rejected(setup,side,'closed_trigger_invalidated_by_quote');continue
@@ -179,8 +184,8 @@ def _swing_catalog(package, policy=None):
                     stop_basis='retest_structure_plus_volatility_buffer'
                 elif setup=='range_reversion':
                     buffer=max(atr*0.55, atr_1h*0.18)
-                    stop=(prev['low']-buffer) if side=='long' else (prev['high']+buffer)
-                    stop_basis='range_boundary_reclaim_plus_volatility_buffer'
+                    stop=(min(prev['low'],bar['low'],range_low)-buffer) if side=='long' else (max(prev['high'],bar['high'],range_high)+buffer)
+                    stop_basis='tested_range_extreme_plus_existing_buffer'
                 else:
                     structural_stop=(min(b['low'] for b in f[-3:])-atr*.1) if side=='long' else (max(b['high'] for b in f[-3:])+atr*.1)
                     volatility_stop=(entry-atr*1.5) if side=='long' else (entry+atr*1.5)
@@ -209,6 +214,10 @@ def _swing_catalog(package, policy=None):
                          {'ref':'/entry_candles/15M/last/close','value':bar['close'],'interpretation':'已收盘的回收/突破触发，不等待所有慢周期指标同时同向'}],
                       'invalidation':{'price':stop,'timeframe':'15M','condition':'价格突破结构失效点（回踩防守）或1.5倍ATR波动率防线（突破追势），候选失效'},
                       'order_authorized':False}
+                if setup=='range_reversion':
+                    plan['range_reentry_level']=boundary
+                    plan['supporting_evidence'].append({'ref':'/entry_candles/1H/prior_12/'+('low' if side=='long' else 'high'),
+                        'value':boundary,'interpretation':'Closed trigger tested this frozen boundary and reentered the range'})
                 plan.update(entry_atr=atr,entry_atr_1h=atr_1h,
                             trigger_level=prev['close'] if setup in {'pullback_reclaim','range_reversion'} else level)
                 from scripts.structure_targets import calibrate_stop,layers
@@ -270,6 +279,8 @@ def validate_live_quote(package, candidate_id, current, policy=None):
     else:level=max(b['high'] for b in bars[-9:-1]) if sign==1 else min(b['low'] for b in bars[-9:-1])
     atr=sum(max(b['high']-b['low'],abs(b['high']-a['close']),abs(b['low']-a['close'])) for a,b in zip(bars[-15:-1],bars[-14:]))/14
     if (current-level)*sign<=0:raise ValueError('program_trigger_lost_during_inference')
+    if plan.get('setup')=='range_reversion' and sign*(current-number(plan['range_reentry_level']))<=0:
+        raise ValueError('program_range_reentry_lost_during_inference')
     if (current-bar['close'])*sign>atr*.25:raise ValueError('program_trigger_chase_limit_exceeded')
     if not (plan['stop_loss_price']<current<plan['take_profit_price'] if sign==1 else plan['take_profit_price']<current<plan['stop_loss_price']):
         raise ValueError('program_quote_outside_stop_target')

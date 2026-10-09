@@ -1623,6 +1623,9 @@ def strategy_engine_status_api(x_okxquant_session: str | None = Header(default=N
 @app.post('/api/v1/admin/strategy/engine/live-authorization')
 def strategy_engine_authorize_api(payload: LiveEngineAuthorizationRequest, x_okxquant_session: str | None = Header(default=None, alias='X-OKXQuant-Session')):
     actor=require_superadmin(x_okxquant_session)
+    from scripts.strategy_engine_runtime import RETIRED
+    if RETIRED and payload.enabled:
+        raise HTTPException(status_code=410,detail='分钟策略已移除；不能重新授权新开仓，旧仓保护仍保留')
     expected='ENABLE LIVE SCALP' if payload.enabled else 'DISABLE LIVE SCALP'
     if payload.confirmation.strip()!=expected:
         raise HTTPException(status_code=400,detail=f'确认短语必须精确为：{expected}')

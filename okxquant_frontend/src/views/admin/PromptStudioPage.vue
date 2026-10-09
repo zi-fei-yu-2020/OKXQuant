@@ -65,7 +65,7 @@ const engineStatus = ref<{ engine_version: string; environment: string; enabled:
 const engineLoading = ref(false)
 const engineError = ref('')
 let engineGeneration = 0
-const engineStatusText = computed(() => ({ ready: '已就绪（不代表已成交）', disabled: '未启用', confirmation_required: '需要单独确认', binding_changed: '绑定已变化，请重新确认' }[engineStatus.value?.status || ''] || '状态待核验'))
+const engineStatusText = computed(() => ({ retired: '已移除新开仓，保留旧仓管理', ready: '已就绪（不代表已成交）', disabled: '未启用', confirmation_required: '需要单独确认', binding_changed: '绑定已变化，请重新确认' }[engineStatus.value?.status || ''] || '状态待核验'))
 
 // Import Modal State
 const importVisible = ref(false)
@@ -312,7 +312,7 @@ async function loadEngineStatus() {
 }
 
 const authorizeLiveEngine = action(async (enabled: boolean) => {
-  if (engineLoading.value || engineStatus.value?.environment !== 'live') return
+  if (engineLoading.value || engineStatus.value?.status === 'retired' || engineStatus.value?.environment !== 'live') return
   const expectedBinding = { ...engineStatus.value }
   const expected = enabled ? 'ENABLE LIVE SCALP' : 'DISABLE LIVE SCALP'
   const phrase = await prompt(`${enabled ? '授权' : '撤销授权'}当前实盘账户的分钟策略。授权绑定当前账户、策略与风控，变更后需重新确认；不切换账户，不立即提交订单，不改变模拟盘或旧仓保护。实盘可能产生真实损益。请输入：${expected}`)
@@ -626,12 +626,17 @@ const { confirm, prompt } = useDialogs()
     <!-- Alert / Banner Message -->
 
     <AppCard class="rounded-xl border p-4 space-y-2" style="border-color:var(--border-subtle);background:var(--bg-card)">
-      <h2 class="text-sm font-bold">分钟策略运行范围</h2>
+      <h2 class="text-sm font-bold">自动开仓来源</h2>
       <p v-if="!auth.isSuperadmin" class="text-sm" style="color:var(--text-muted)">仅超级管理员可查看和调整运行授权。</p>
       <template v-else>
         <p v-if="engineLoading" class="text-sm">正在读取运行范围…</p>
         <div v-else-if="engineError" class="flex items-center gap-3 text-sm" role="alert"><span>运行范围加载失败：{{ engineError }}</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="actionBusy" @click="loadEngineStatus">重试</button></div>
         <template v-else-if="engineStatus">
+          <div v-if="engineStatus.status === 'retired'" class="space-y-2" data-minute-entry-retired>
+            <p class="text-sm">当前仅保留 15 分钟 AI 主脑决策链。独立分钟策略已移除，旧配置与历史授权不能重新启用。</p>
+            <p class="text-xs" style="color:var(--text-muted)">已有仓位继续止损、止盈与对账；退役分钟仓位不再加仓。AI 方案的短线／波段标签不等于独立分钟引擎。</p>
+          </div>
+          <template v-else>
           <p v-if="engineStatus.environment === 'demo'" class="text-sm">模拟盘{{ engineStatus.enabled ? '已启用' : '未启用' }}；实盘需切换账户后单独确认。{{ engineStatusText }}</p>
           <p v-else-if="engineStatus.environment === 'live'" class="text-sm">当前实盘 · {{ engineStatusText }} · {{ engineStatus.authorized ? '已有授权记录' : '尚未授权' }}</p>
           <p v-else class="text-sm">环境尚未核验，不能操作实盘授权。</p>
@@ -640,6 +645,7 @@ const { confirm, prompt } = useDialogs()
             <button class="ui-button ui-button--secondary ui-button--sm" :disabled="actionBusy || engineLoading" @click="authorizeLiveEngine(true)">确认实盘授权</button>
             <button v-if="engineStatus.authorized" class="ui-button ui-button--secondary ui-button--sm" :disabled="actionBusy || engineLoading" @click="authorizeLiveEngine(false)">撤销实盘授权</button>
           </div>
+          </template>
         </template>
       </template>
     </AppCard>

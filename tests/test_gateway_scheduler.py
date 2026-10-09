@@ -39,9 +39,9 @@ class GatewaySchedulerTests(unittest.TestCase):
     def test_minute_jobs_are_staggered_away_from_the_trader_boundary(self):
         factors = next(spec for spec in JOBS if spec.name == "factor_library")
         market = next(spec for spec in JOBS if spec.name == "market_observations")
-        scalp = next(spec for spec in JOBS if spec.name == "demo_scalp")
+        self.assertNotIn("demo_scalp",[spec.name for spec in JOBS])
         boundary = self.now.replace(minute=15, second=0)
-        for spec in (factors, market, scalp):
+        for spec in (factors, market):
             self.store.set_state(f"job.last.{spec.name}", boundary.replace(minute=14).isoformat())
             self.assertFalse(self.scheduler.due(spec, boundary, {}))
             phased = boundary + timedelta(seconds=spec.phase_seconds)

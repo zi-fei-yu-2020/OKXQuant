@@ -42,9 +42,8 @@ JOBS = (
     JobSpec("execution_quality", "execution_quality.py", 5, 20),
     JobSpec("ledger_sync", "ledger_monitor.py", 60, 50),
     JobSpec("trader", "ai_factor_trader.py", 15 * 60, 840),
-    # Keep the one-minute strategy cadence, but separate its heavier market
-    # package/candidate pass from the :25 factor and :45 observation collectors.
-    JobSpec("demo_scalp", "demo_scalp.py", 60, 120, phase_seconds=5),
+    # The independent minute entry engine is retired. Protection and reconciliation
+    # retain their own cadence; only the AI trader may schedule new entries.
     # Stagger non-critical research jobs so Python imports and indicator work
     # do not all hit the CPU at the trader/guard boundary.
     JobSpec("factor_library", "factor_library.py", 60, 55, phase_seconds=25),
