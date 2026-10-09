@@ -48,6 +48,7 @@ class Fixtures(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     received = []
     disconnected = threading.Event()
+    stall_started = threading.Event()
     long_seconds = 0
 
     def log_message(self, *args): pass
@@ -63,7 +64,8 @@ class Fixtures(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.flush()
-            self.connection.settimeout(5)
+            self.stall_started.set()
+            self.connection.settimeout(10)
             try:
                 if self.connection.recv(1) == b"": self.disconnected.set()
             except (ConnectionResetError, BrokenPipeError):
@@ -211,6 +213,7 @@ def main():
                 assert result[1]==200 and result[3]==1 and diag['completion_seen']
                 assert ('offline-ok' in str(result[0]))
                 elapsed_values[protocol]=result[2]
+            startup_children_before=len(children)
             # Budget shorter than Python startup: parent must kill/reap, never
             # wait for worker import/DNS/default-executor shutdown.
             diag = {}
@@ -221,7 +224,10 @@ def main():
                 raise AssertionError("Expected startup timeout")
             except module.LLMRequestError as error:
                 assert error.category == "total_timeout"
-                assert children[-1].kill_called and children[-1].poll() is not None
+                if len(children)>startup_children_before:
+                    assert children[-1].kill_called and children[-1].poll() is not None
+                else:
+                    assert error.attempts==0, "Pre-start deadline must not claim an HTTP attempt"
                 elapsed = time.monotonic()-started
                 assert elapsed < .5, "Startup deadline did not kill/reap the worker"
                 assert abs(diag["total_ms"] - round(elapsed*1000)) < 50
@@ -232,15 +238,16 @@ def main():
             started = time.monotonic()
             try:
                 module.request_inference(f"http://127.0.0.1:{server.server_port}/stall", {}, payload,
-                    protocol="openai_chat", policy={"mode":"json"}, timeout=1, diagnostics=diag)
+                    protocol="openai_chat", policy={"mode":"json"}, timeout=5, diagnostics=diag)
                 raise AssertionError("Expected body timeout")
             except module.LLMRequestError as error:
                 assert error.category == "total_timeout"
-                assert time.monotonic()-started < 1.5
+                assert time.monotonic()-started < 6
                 assert children[-1].poll() is not None
-                assert Fixtures.disconnected.wait(1), "Worker left a live loopback connection"
+                assert Fixtures.stall_started.is_set(), "Startup consumed the entire body-test budget; no connection was established"
+                assert Fixtures.disconnected.wait(2), "An established worker connection was not closed"
                 elapsed_values["body_timeout"] = diag["total_ms"]
-        assert len(children) == 6, "Unexpected retry/process count"
+        assert len(children) in (5,6), "Unexpected retry/process count"
         assert all(child.poll() is not None and child.stdin.closed and child.stdout.closed for child in children)
         for path, sent in Fixtures.received:
             assert sent["model"] == payload["model"] and sent["reasoning_effort"] == "high"

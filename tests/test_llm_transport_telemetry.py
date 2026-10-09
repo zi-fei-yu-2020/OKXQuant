@@ -31,3 +31,9 @@ class TransportTelemetryTests(unittest.TestCase):
         telemetry.ModelCallTelemetry('diagnostic','fixture','high','','').finish('success',{'usage':{'prompt_tokens':True,'completion_tokens':-1,'total_tokens':'invented'}})
         row=GatewayStore(self.path).model_calls()[0]
         self.assertIsNone(row['input_tokens']);self.assertIsNone(row['output_tokens']);self.assertIsNone(row['total_tokens'])
+
+    def test_no_http_response_does_not_become_fictitious_status_zero(self):
+        from okxquant_backend.llm_transport import safe_transport_diagnostics
+        value=safe_transport_diagnostics({'http_status':0,'failure_phase':'total','attempts':1,'completion_seen':False})
+        self.assertNotIn('http_status',value);self.assertNotIn('bytes_received',value)
+        self.assertEqual(value['failure_phase'],'total')

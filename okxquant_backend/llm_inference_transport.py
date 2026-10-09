@@ -398,7 +398,7 @@ def request_inference(endpoint: str, headers: dict[str, str], payload: dict[str,
     expired = threading.Event()
     secrets = _credentials(headers) if isinstance(headers, dict) else ()
     mode = policy.get("mode") if isinstance(policy, dict) else None
-    diag = {"attempts": 0, "completion_seen": False, "bytes_received": 0}
+    diag = {"attempts": 0, "completion_seen": False}
     if isinstance(mode, str) and mode in {"stream", "json"}: diag["transport_mode"] = mode
 
     def fail(category, status=0, provider_code="", request_id="", phase="worker"):

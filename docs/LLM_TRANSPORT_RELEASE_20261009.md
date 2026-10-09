@@ -30,3 +30,10 @@ Local release gate: **2,017 backend tests passed**; **274 Linux frontend tests p
 ## Production status
 
 Not yet deployed in this record. Existing model/effort, account, risk limits and runtime optional-feature settings must remain unchanged. The previous code image is `86fc3d0`. During authorized maintenance, pause future entries, drain the existing cycle, verify exchange protection, recreate only the application, run one explicit transport-capability probe without trading, then restore the original automatic-entry setting. If the gate fails, roll back instead of silently forcing a different model or mode.
+
+
+## Server gate correction before rollout
+
+The first server image passed all 2,017 offline tests, but its separate process checker failed a socket-close assertion. A diagnostic rerun showed the one-second test budget expired before `/stall` ever reached the loopback fixture (only the four earlier success paths were recorded). This was not evidence of a surviving socket. The checker now allows startup within a five-second total budget, explicitly requires the stall request to have arrived before asserting EOF, and retains separate ultra-short-startup and blocked-stdin deadline cases. Pre-start cancellation is accepted only as zero attempts, never as a leaked connection or successful inference.
+
+Hard-kill diagnostics also no longer invent a zero byte count or HTTP status 0 when the worker did not return an observation; those values remain unknown. No model, reasoning, order, strategy or runtime feature setting is changed by this correction.

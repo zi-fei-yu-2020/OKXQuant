@@ -219,6 +219,7 @@ def safe_transport_diagnostics(value):
     out = {}
     for key in ('attempts','http_status','total_ms','first_byte_ms','first_content_ms','max_gap_ms','bytes_received','heartbeat_count'):
         v=value.get(key)
+        if key=='http_status' and not (isinstance(v,int) and not isinstance(v,bool) and 100<=v<=599):continue
         if isinstance(v,(int,float)) and not isinstance(v,bool) and math.isfinite(v) and 0 <= v <= 1e12: out[key]=v
     for key,allowed in {'transport_mode':{'stream','json'},'failure_phase':{'connect','headers','first_byte','body','idle','total','protocol','http','configuration','complete','network','cancelled','async_context','worker'}}.items():
         if value.get(key) in allowed:out[key]=value[key]
