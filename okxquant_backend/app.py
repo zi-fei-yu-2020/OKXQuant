@@ -2866,6 +2866,9 @@ install_account_routes(app, require_superadmin, audit_record)
 from okxquant_backend.memory_routes import install as install_memory_routes
 install_memory_routes(app, require_superadmin, audit_record, lambda: DATA_DIR)
 
+from okxquant_backend.macro_routes import install as install_macro_routes
+install_macro_routes(app, require_superadmin, audit_record)
+
 # Preserve the existing public dashboard and its relative-path API contract at /.
 # Admin and /api/v1 routes above are evaluated before this catch-all mount.
 from dashboard.app import app as dashboard_app

@@ -590,8 +590,17 @@ def construct_full_market_prompt(packages: List[Dict[str, Any]], pos_summary: st
         news_snapshot = {'schema': 1, 'connection_status': 'unavailable', 'macro_sentiment': 'UNKNOWN',
                          'sentiment_fresh': False, 'items': [], 'coins_sentiment': {}, 'section_freshness': {}}
         news_text = '市场情报当前不可用；不得据此推断市场平稳或不存在事件风险'
+    # Cross-asset context is read from the independent collector, never fetched
+    # on the inference hot path. Freeze the exact same snapshot for all coins.
+    try:
+        from scripts.macro_market import load_snapshot
+        macro_snapshot = load_snapshot()
+    except Exception:
+        macro_snapshot = {'version': 'macro-feeds-v1', 'sources': {}, 'quotes': {}, 'rates': {},
+                          'events': [], 'status': 'unavailable', 'missing_data_policy': 'unknown_not_zero'}
     for package in packages:
         package['news_snapshot'] = news_snapshot
+        package['macro_snapshot'] = macro_snapshot
 
     avail_balance_str = f"{usdt_available:.2f} USDT" if usdt_available > 0 else "0 USDT；不得假设存在可用资金"
 
@@ -608,7 +617,7 @@ def construct_full_market_prompt(packages: List[Dict[str, Any]], pos_summary: st
         "account_positions": f"【账户持仓概况】: {pos_summary}\n【当前活动在途持仓明细】:\n{active_pos_text}",
         "pending_orders": f"【当前在途挂单列表】:\n{pending_orders_text}",
         "news_intelligence": news_text,
-        "market_context": __import__('scripts.market_context',fromlist=['context']).context(news_snapshot),
+        "market_context": __import__('scripts.market_context',fromlist=['context']).context(news_snapshot, macro_snapshot),
         "trading_memory": memory_lessons.strip(),
         "market_matrix": all_market_str,
     }
@@ -1139,6 +1148,7 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
             "prompt_composition": prompt_bundle.manifest,
             "output_validation": brain_output["validation"],
             "news_snapshot": news_snapshot,
+            "macro_snapshot": prompt_bundle.manifest.get("macro_snapshot"),
             "market_context_receipt": brain_output.get('market_context_receipt'),
             "ai_last_prompt": full_prompt_text,
             "position_management": pos_mgmt_list,

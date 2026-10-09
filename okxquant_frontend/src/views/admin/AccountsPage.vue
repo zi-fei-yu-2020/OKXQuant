@@ -5,6 +5,7 @@ import { useApi } from '../../composables/useApi'
 import { useAuthStore } from '../../stores/auth'
 const auth = useAuthStore()
 import AppCard from '../../components/ui/AppCard.vue'
+import MacroDataSources from '../../components/MacroDataSources.vue'
 import AppButton from '../../components/ui/AppButton.vue'
 import AppDialog from '../../components/ui/AppDialog.vue'
 import AppField from '../../components/ui/AppField.vue'
@@ -135,6 +136,7 @@ onMounted(()=>{if(auth.isSuperadmin)void perform(load)})
     <AppButton type="submit" variant="primary" :loading="busy">保存候选连接</AppButton>
    </form>
   </AppDialog>
+  <MacroDataSources />
   <AppDialog v-model:open="authorizeOpen" title="在 OKX 官方页面完成授权"><div v-if="authorization" class="space-y-3"><p class="text-sm">授权码：<strong class="font-mono">{{ authorization.user_code }}</strong></p><a :href="authorization.verification_uri" target="_blank" rel="noopener noreferrer" class="ui-button ui-button--primary">打开官方授权页面</a><p class="text-xs">授权有效期 {{ authorization.expires_in }} 秒。完成后返回此页，点击对应环境的“检查”按钮核验身份与接口能力。</p></div></AppDialog>
   <AppDialog v-model:open="confirmOpen" :title="confirm?.title || '确认操作'" :description="confirm?.description" :busy="busy"><AppField :label="'输入确认短语：'+confirm?.phrase" v-slot="field"><input :id="field.id" v-model="phrase" class="ui-input w-full font-mono" autocomplete="off"></AppField><template #footer><AppButton :disabled="busy" @click="confirmOpen=false">取消</AppButton><AppButton variant="danger" :disabled="phrase!==confirm?.phrase" :loading="busy" @click="submitConfirm">确认执行</AppButton></template></AppDialog>
  </div>

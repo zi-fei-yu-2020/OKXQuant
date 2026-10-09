@@ -265,7 +265,11 @@ onUnmounted(() => {
               明确引用 {{ item.market_context_receipt.cited_article_count ?? '—' }} 条 ·
               情绪引用 {{ item.market_context_receipt.sentiment_cited_by?.length ?? '—' }} 个标的
             </p>
-            <p class="text-xs" style="color:var(--text-muted)">美股／美元／利率独立行情及经济数据日历尚未接入，不能把新闻标题当实时行情。</p>
+            <template v-if="item.market_context_receipt.macro_source_statuses">
+              <p class="text-xs" style="color:var(--text-muted)">跨资产与日历：提供 {{ item.market_context_receipt.provided_macro_fact_count ?? '—' }} 条可核验字段 · 引用 {{ item.market_context_receipt.cited_macro_fact_count ?? '—' }} 条。</p>
+              <p class="text-xs" style="color:var(--text-muted)">财政部 {{ item.market_context_receipt.macro_source_statuses.treasury?.usable ? '日频参考可用' : '不可用' }} · 美股/DXY {{ item.market_context_receipt.macro_source_statuses.fmp_indices?.usable ? '至少部分报价可用' : '无有效报价' }} · 日历 {{ item.market_context_receipt.macro_source_statuses.bea?.usable || item.market_context_receipt.macro_source_statuses.bls?.usable || item.market_context_receipt.macro_source_statuses.fmp_calendar?.usable ? '至少部分来源可用' : '无有效来源' }}。不承诺实时或完整覆盖。</p>
+              </template>
+              <p v-else class="text-xs" style="color:var(--text-muted)">该历史记录未提供独立跨资产数据接入回执，不能把新闻标题当实时行情。</p>
             <p class="text-xs" style="color:var(--text-faint)">只统计通过字段核验的引用；未明确引用不等于没有阅读，也不代表内部权重或真实胜率。</p>
           </AppCard>
 

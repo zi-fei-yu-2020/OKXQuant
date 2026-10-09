@@ -78,9 +78,9 @@ def select_reports(items,coins,now,limit=6):
                    'method':'recent_macro_asset_coverage_with_conservative_related_reports_v1'}
 
 
-def context(snapshot):
+def context(snapshot, macro_snapshot=None):
     items=(snapshot or {}).get('items') or []
-    return {'version':VERSION,'news_digest':(snapshot or {}).get('digest'),
+    result = {'version':VERSION,'news_digest':(snapshot or {}).get('digest'),
             'news_status':(snapshot or {}).get('connection_status','unavailable'),
             'provided_articles':len(items),'sentiment_available':bool((snapshot or {}).get('sentiment_fresh')),
             'categories':dict(Counter(i.get('context_category','unclassified_report') for i in items)),
@@ -88,11 +88,22 @@ def context(snapshot):
             'economic_release_values':{'status':'not_connected','values':{}},
             'price_macro_semantics':'macro_4h is crypto price structure, not equity/dollar/rates market data',
             'missing_data_policy':'unknown, never zero, bullish or evidence of no event risk'}
+    if macro_snapshot:
+        quotes = macro_snapshot.get('quotes') or {}
+        usable = {k: v for k, v in quotes.items() if v.get('usable') is True}
+        result['cross_asset_quotes'] = {'status': 'available' if len(usable) == 3 else 'partial' if usable else 'unavailable', 'values': usable}
+        result['interest_rates'] = macro_snapshot.get('rates') or {'status': 'unavailable'}
+        events = macro_snapshot.get('events') or []
+        releases = [e for e in events if e.get('actual') is not None]
+        result['economic_release_values'] = {'status': 'available' if releases else 'no_verified_values', 'values': releases}
+        result['macro_feeds'] = macro_snapshot
+    return result
 
 
-def usage_receipt(snapshot,decisions,catalogs):
+
+def usage_receipt(snapshot,decisions,catalogs,macro_snapshot=None):
     """Validated citations only; neither attention weights nor causal impact are inferred."""
-    items=(snapshot or {}).get('items') or [];cited={};sentiment=set()
+    items=(snapshot or {}).get('items') or [];cited={};sentiment=set();macro_refs={}
     def refs(value,depth=0):
         if depth>12:return
         if isinstance(value,dict):
@@ -113,10 +124,25 @@ def usage_receipt(snapshot,decisions,catalogs):
                 identifier=items[int(match[1])].get('id')
                 if isinstance(identifier,str) and identifier:cited.setdefault(identifier,set()).add(inst)
             elif ref.startswith('/news/sentiment/'):sentiment.add(inst)
+            elif ref.startswith('/macro/'):macro_refs.setdefault(ref,set()).add(inst)
     status='cited' if cited or sentiment else 'provided_without_structured_citation' if items or (snapshot or {}).get('sentiment_fresh') else 'unavailable'
-    return {'version':VERSION,'status':status,'provided_article_count':len(items),
+    result = {'version':VERSION,'status':status,'provided_article_count':len(items),
             'cited_article_count':len(cited),'cited_articles':[{'id':k,'instruments':sorted(v)} for k,v in sorted(cited.items())],
             'sentiment_cited_by':sorted(sentiment),'snapshot_digest':(snapshot or {}).get('digest'),
             'semantics':'validated_reference_usage_not_internal_weights_or_causal_contribution',
             'decision_stage':'model_contract_validation_before_execution',
             'cross_asset_quotes_status':'not_connected','economic_release_values_status':'not_connected'}
+
+    if macro_snapshot:
+        from scripts.macro_market import facts
+        supplied = facts(macro_snapshot)
+        verified_refs = {k: v for k, v in macro_refs.items() if k in supplied}
+        result.update({'macro_snapshot_digest': macro_snapshot.get('digest'),
+            'provided_macro_fact_count': len(supplied), 'cited_macro_fact_count': len(verified_refs),
+            'cited_macro_refs': [{'ref': k, 'instruments': sorted(v)} for k, v in sorted(verified_refs.items())],
+            'macro_status': 'cited' if verified_refs else 'provided_without_structured_citation' if supplied else 'unavailable',
+            'macro_source_statuses': {k: {'status': v.get('status'), 'usable': v.get('usable')} for k, v in (macro_snapshot.get('sources') or {}).items()},
+            'cross_asset_quotes_status': context(snapshot, macro_snapshot)['cross_asset_quotes']['status'],
+            'interest_rates_status': (macro_snapshot.get('rates') or {}).get('status', 'unavailable'),
+            'economic_release_values_status': context(snapshot, macro_snapshot)['economic_release_values']['status']})
+    return result

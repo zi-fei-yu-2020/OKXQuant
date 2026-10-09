@@ -30,7 +30,15 @@ test('history receipt describes validated references without inventing weights o
  const source=fragment('components/AiBrainHistory.vue','data-market-context-receipt')
  const html=await render(source,{item:{market_context_receipt:{provided_article_count:6,cited_article_count:0,sentiment_cited_by:[]}}})
  assert.match(html,/已提供 6 条新闻/);assert.match(html,/明确引用 0 条/)
- assert.match(html,/未明确引用不等于没有阅读/);assert.match(html,/尚未接入/)
+ assert.match(html,/未明确引用不等于没有阅读/);assert.match(html,/该历史记录未提供独立跨资产数据接入回执/)
  const legacy=await render(source,{item:{}})
  assert.doesNotMatch(legacy,/已提供|明确引用/)
+})
+
+test('new receipt renders observed source availability rather than claiming every feed is disconnected',async()=>{
+ const source=fragment('components/AiBrainHistory.vue','data-market-context-receipt')
+ const html=await render(source,{item:{market_context_receipt:{provided_article_count:6,cited_article_count:1,sentiment_cited_by:[],provided_macro_fact_count:6,cited_macro_fact_count:2,macro_source_statuses:{treasury:{usable:true},fmp_indices:{usable:false},bea:{usable:true}}}}})
+ assert.match(html,/提供 6 条可核验字段/);assert.match(html,/引用 2 条/)
+ assert.match(html,/日频参考可用/);assert.match(html,/无有效报价/);assert.match(html,/至少部分来源可用/)
+ assert.doesNotMatch(html,/尚未接入|未提供独立跨资产数据接入回执/)
 })

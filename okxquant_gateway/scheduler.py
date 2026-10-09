@@ -48,6 +48,8 @@ JOBS = (
     # do not all hit the CPU at the trader/guard boundary.
     JobSpec("factor_library", "factor_library.py", 60, 55, phase_seconds=25),
     JobSpec("market_observations", "market_observations.py", 60, 55, phase_seconds=45),
+    # Read-only macro collector; never an entry engine or model call.
+    JobSpec("macro_data", "macro_market.py", 300, 120, phase_seconds=120),
     JobSpec("news", "news_sentiment_harvester.py", 10 * 60, 300),
     JobSpec("daily_briefing", "daily_summary_and_backup.py", None, 600, "briefing_times", ("08:00", "20:00")),
     JobSpec("self_improvement", "self_improvement_engine.py", None, 480, "self_improvement_time", ("02:00", "08:00", "14:00", "20:00")),
