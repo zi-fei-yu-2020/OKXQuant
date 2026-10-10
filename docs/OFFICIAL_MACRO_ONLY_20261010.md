@@ -46,5 +46,10 @@ this local integration removal and is not performed.
   release-value evidence; official daily rates/calendar and technical-entry
   requirements remain covered.
 - In-app Browser is unavailable; no fresh visual acceptance is claimed.
-- Server rollout and credential-retirement confirmation are pending at this
-  source revision. A source push alone does not prove production removal.
+- Production image gate: **2,099 tests passed in 369.043 seconds**, without network or production-volume access. The subprocess/loopback transport gate also passed.
+- Controlled rollout completed at **2026-10-10 09:41:46 +08:00**, source `8041655`, image `okxquant:build-8041655`. Container health was healthy with zero restarts at post-release verification. Both protection gates observed zero positions and pending orders; no forced entry, close or model probe was used.
+- The FMP entry was physically removed from the active encrypted vault, not merely hidden by the new registry. All other decrypted vault entries were compared and preserved. Project/container environment entries were verified absent, provider configuration fields were removed, and the old runtime cache was invalidated. Historical data and backups were not deleted.
+- Post-release collection rebuilt `official-macro-feeds-v2` with exactly `treasury`, `bea`, `bls`. Treasury and BEA were available; BLS reported an error rather than an empty successful calendar. The Treasury observation date was 2026-10-09 and the current snapshot provided six macro fact fields.
+- The deployed account-page JavaScript contains the official-source panel and no provider activation/key/timezone controls. Browser visual acceptance is still not claimed.
+- AI auto remained/restored to `1`; entry cadence is 900 seconds, the minute engine is retired, quantity limits remain off and the daily threshold remains 3%. Model/high reasoning/streaming and existing protection were verified unchanged.
+- Private operational evidence: `okxquant_frontend/.ui-artifacts/remove-fmp-20261010/`; server release directory: `/tmp/okxquant-remove-fmp-8041655/`. Rollback image `okxquant:build-c7fe3ce` is retained but no removed credentials are restored by rollback. Documentation-only follow-up needs no container restart.
