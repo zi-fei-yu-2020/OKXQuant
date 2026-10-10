@@ -88,14 +88,9 @@ def context(snapshot, macro_snapshot=None):
             'economic_release_values':{'status':'not_connected','values':{}},
             'price_macro_semantics':'macro_4h is crypto price structure, not equity/dollar/rates market data',
             'missing_data_policy':'unknown, never zero, bullish or evidence of no event risk'}
-    if macro_snapshot:
-        quotes = macro_snapshot.get('quotes') or {}
-        usable = {k: v for k, v in quotes.items() if v.get('usable') is True}
-        result['cross_asset_quotes'] = {'status': 'available' if len(usable) == 3 else 'partial' if usable else 'unavailable', 'values': usable}
+    from scripts.macro_market import VERSION as MACRO_VERSION
+    if macro_snapshot and macro_snapshot.get('version') == MACRO_VERSION:
         result['interest_rates'] = macro_snapshot.get('rates') or {'status': 'unavailable'}
-        events = macro_snapshot.get('events') or []
-        releases = [e for e in events if e.get('actual') is not None]
-        result['economic_release_values'] = {'status': 'available' if releases else 'no_verified_values', 'values': releases}
         result['macro_feeds'] = macro_snapshot
     return result
 
@@ -133,7 +128,8 @@ def usage_receipt(snapshot,decisions,catalogs,macro_snapshot=None):
             'decision_stage':'model_contract_validation_before_execution',
             'cross_asset_quotes_status':'not_connected','economic_release_values_status':'not_connected'}
 
-    if macro_snapshot:
+    from scripts.macro_market import VERSION as MACRO_VERSION, SOURCES
+    if macro_snapshot and macro_snapshot.get('version') == MACRO_VERSION:
         from scripts.macro_market import facts
         supplied = facts(macro_snapshot)
         verified_refs = {k: v for k, v in macro_refs.items() if k in supplied}
@@ -141,7 +137,7 @@ def usage_receipt(snapshot,decisions,catalogs,macro_snapshot=None):
             'provided_macro_fact_count': len(supplied), 'cited_macro_fact_count': len(verified_refs),
             'cited_macro_refs': [{'ref': k, 'instruments': sorted(v)} for k, v in sorted(verified_refs.items())],
             'macro_status': 'cited' if verified_refs else 'provided_without_structured_citation' if supplied else 'unavailable',
-            'macro_source_statuses': {k: {'status': v.get('status'), 'usable': v.get('usable')} for k, v in (macro_snapshot.get('sources') or {}).items()},
+            'macro_source_statuses': {k: {'status': v.get('status'), 'usable': v.get('usable')} for k, v in (macro_snapshot.get('sources') or {}).items() if k in SOURCES},
             'cross_asset_quotes_status': context(snapshot, macro_snapshot)['cross_asset_quotes']['status'],
             'interest_rates_status': (macro_snapshot.get('rates') or {}).get('status', 'unavailable'),
             'economic_release_values_status': context(snapshot, macro_snapshot)['economic_release_values']['status']})

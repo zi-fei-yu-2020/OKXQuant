@@ -596,7 +596,7 @@ def construct_full_market_prompt(packages: List[Dict[str, Any]], pos_summary: st
         from scripts.macro_market import load_snapshot
         macro_snapshot = load_snapshot()
     except Exception:
-        macro_snapshot = {'version': 'macro-feeds-v1', 'sources': {}, 'quotes': {}, 'rates': {},
+        macro_snapshot = {'version': 'official-macro-feeds-v2', 'sources': {}, 'rates': {},
                           'events': [], 'status': 'unavailable', 'missing_data_policy': 'unknown_not_zero'}
     for package in packages:
         package['news_snapshot'] = news_snapshot

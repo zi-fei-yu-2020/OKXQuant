@@ -1,8 +1,7 @@
-"""Read-only macro feeds: bounded transport, explicit provenance and no trading side effects.
+"""Official public macro feeds only: Treasury yields and BEA/BLS schedules.
 
-Daily Treasury par yields are NOT intraday rates or the Fed policy rate. Official
-calendars contain schedules, not consensus/actual values. FMP requires an entitled
-key; index identity is verified against its index catalogue (no ETF/DXY proxy).
+No API keys, commercial providers, cross-asset quote adapter, or trading writes.
+Daily par yields are not intraday quotes or the Fed policy rate.
 """
 from __future__ import annotations
 import copy
@@ -20,19 +19,17 @@ import requests
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE_FILE = ROOT / 'data' / 'macro_market.json'
-VERSION = 'macro-feeds-v1'
+VERSION = 'official-macro-feeds-v2'
 UTC = timezone.utc
 TREASURY_URL = 'https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml'
 CALENDAR_URLS = {
     'bea': 'https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics',
     'bls': 'https://www.bls.gov/schedule/news_release/bls.ics',
 }
-FMP_BASE = 'https://financialmodelingprep.com/stable/'
-SOURCES = ('treasury', 'bea', 'bls', 'fmp_indices', 'fmp_calendar')
-REFRESH_SECONDS = {'treasury': 3600, 'bea': 3600, 'bls': 3600, 'fmp_indices': 900, 'fmp_calendar': 900}
-TTL_SECONDS = {'treasury': 86400, 'bea': 86400, 'bls': 86400, 'fmp_indices': 1800, 'fmp_calendar': 3600}
+SOURCES = ('treasury', 'bea', 'bls')
+REFRESH_SECONDS = dict.fromkeys(SOURCES, 3600)
+TTL_SECONDS = dict.fromkeys(SOURCES, 86400)
 IMPORTANT_EVENT = re.compile(r'consumer price|producer price|employment situation|non.?farm|payroll|unemployment|gross domestic|\bgdp\b|personal income|personal consumption|\bpce\b|\bcpi\b|\bppi\b|fomc|fed interest|interest rate decision|retail sales', re.I)
-DXY_NAMES = {'us dollar index', 'u s dollar index', 'us dollar index dxy', 'u s dollar index dxy', 'ice us dollar index', 'ice u s dollar index', 'dollar index'}
 
 
 class FeedError(Exception):
@@ -70,7 +67,7 @@ def fetch(url, *, params=None, deadline=None, session=None):
     Exception text, request URLs (which can contain credentials), bodies and headers
     must never enter logs, receipts, cache errors or API responses.
     """
-    if url not in {TREASURY_URL, *CALENDAR_URLS.values(), *(FMP_BASE + p for p in ('index-list', 'quote', 'economic-calendar'))}:
+    if url not in {TREASURY_URL, *CALENDAR_URLS.values()}:
         raise FeedError('disallowed_endpoint')
     deadline = deadline or (time.monotonic() + 15)
     remaining = deadline - time.monotonic()
@@ -98,18 +95,6 @@ def fetch(url, *, params=None, deadline=None, session=None):
         raise FeedError('timeout') from None
     except (requests.RequestException, UnicodeError):
         raise FeedError('transport_error') from None
-
-
-def fmp_json(endpoint, key, *, params=None, deadline=None, getter=fetch):
-    text = getter(FMP_BASE + endpoint, params={**(params or {}), 'apikey': key}, deadline=deadline)
-    try:
-        payload = json.loads(text)
-    except (ValueError, TypeError):
-        raise FeedError('invalid_json') from None
-    # FMP may return an error document with HTTP 200. Never call it empty data.
-    if not isinstance(payload, list) or any(not isinstance(row, dict) for row in payload):
-        raise FeedError('provider_error_payload')
-    return payload
 
 
 def parse_treasury(text, now):
@@ -198,7 +183,6 @@ def parse_ics(text, source, now):
                     entries.append({'id': digest([source, row.get('UID', ('', title))[1], at])[:24],
                         'source': source.upper(), 'event': title, 'scheduled_at': at, 'country': 'US',
                         'importance': 'high' if IMPORTANT_EVENT.search(title) else 'other',
-                        'actual': None, 'estimate': None, 'previous': None, 'unit': None,
                         'values_status': 'schedule_only', 'time_basis': 'explicit_ics_timezone'})
             except (ValueError, KeyError, OverflowError):
                 skipped += 1
@@ -213,91 +197,17 @@ def parse_ics(text, source, now):
             'coverage': 'agency_only_not_complete_macro_calendar', 'values_status': 'schedule_only'}
 
 
-def resolve_symbols(rows):
-    known = {row.get('symbol'): row for row in rows if isinstance(row.get('symbol'), str)}
-    symbols = {}
-    for name, symbol in (('sp500', '^GSPC'), ('nasdaq_composite', '^IXIC')):
-        if symbol in known:
-            symbols[name] = symbol
-    candidates = []
-    for row in rows:
-        name = re.sub(r'[^a-z0-9]+', ' ', str(row.get('name') or '').lower()).strip()
-        symbol = row.get('symbol')
-        if name in DXY_NAMES and isinstance(symbol, str) and re.fullmatch(r'[A-Za-z0-9^._-]{1,30}', symbol):
-            candidates.append(symbol)
-    if len(set(candidates)) == 1:
-        symbols['dxy'] = candidates[0]
-    return symbols
-
-
-def parse_quote(rows, symbol, now):
-    row = next((r for r in rows if r.get('symbol') == symbol), None)
-    if row is None:
-        raise FeedError('symbol_not_returned')
-    price, at = number(row.get('price')), number(row.get('timestamp'))
-    if price is None or price <= 0 or at is None or at <= 0 or at > now+60:
-        raise FeedError('invalid_quote')
-    previous = number(row.get('previousClose'))
-    # Calculate only when the actual previous-close field exists, never fake zero.
-    change = (price / previous - 1)*100 if previous is not None and previous > 0 else None
-    return {'symbol': symbol, 'name': str(row.get('name') or '')[:100], 'price': price,
-            'previous_close': previous, 'change_pct': change, 'as_of': at, 'source': 'FMP',
-            'unit': 'index_points', 'delivery': 'provider_delay_unverified', 'market_session': 'unknown',
-            'semantics': 'index_level_not_tradable_price; change_vs_provider_previous_close'}
-
-
-def parse_fmp_calendar(rows, now, naive_timezone=''):
-    events = []; skipped = 0
-    for row in rows:
-        if str(row.get('country') or '').upper() not in {'US', 'USA', 'UNITED STATES'}:
-            continue
-        title = str(row.get('event') or '')[:200]
-        if not title:
-            continue
-        try:
-            stamp = str(row.get('date') or '')
-            if not re.match(r'^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}', stamp):
-                raise ValueError('missing_event_time')
-            dt = datetime.fromisoformat(stamp.replace('Z', '+00:00'))
-            basis = 'provider_explicit_offset'
-            if dt.tzinfo is None:
-                if naive_timezone not in {'UTC', 'America/New_York'}:
-                    raise ValueError('provider time zone not confirmed')
-                dt = localize(dt, naive_timezone)
-                basis = 'operator_confirmed_' + naive_timezone
-            at = dt.timestamp()
-        except (ValueError, OverflowError):
-            skipped += 1
-            continue
-        if not (now-86400 <= at <= now+7*86400):
-            continue
-        events.append({'id': digest(['fmp', title, at])[:24], 'source': 'FMP', 'event': title,
-            'scheduled_at': at, 'country': 'US', 'time_basis': basis,
-            'importance': 'high' if str(row.get('impact') or '').lower() == 'high' or IMPORTANT_EVENT.search(title) else 'other',
-            'actual': number(row.get('actual')) if at <= now else None,
-            'estimate': number(row.get('estimate')), 'previous': number(row.get('previous')),
-            'unit': str(row.get('unit') or '')[:24] or None, 'values_status': 'provider_reported_not_officially_reconciled'})
-    if skipped and not events:
-        raise FeedError('unverified_calendar_timezone_or_dates')
-    events.sort(key=lambda e: (e['importance'] != 'high', e['scheduled_at']))
-    return {'events': events[:32], 'skipped_events': skipped, 'coverage': 'provider_us_calendar_not_exhaustive',
-            'values_status': 'provider_reported_not_officially_reconciled'}
-
-
 def collect(config, previous=None, *, now=None, getter=fetch):
-    """Separate scheduled collector: inference never performs provider network I/O."""
+    """Separate official-only collector; inference never performs source network I/O."""
     now = time.time() if now is None else now
     previous = previous or {}
     state = {'version': VERSION, 'captured_at': now, 'binding': config['binding'], 'sources': {}}
-    old_sources = (previous.get('sources') or {}) if previous.get('binding') == config['binding'] else {}
-    deadline = time.monotonic() + 90
-    key = config.get('api_key') or ''
+    compatible = previous.get('version') == VERSION and previous.get('binding') == config['binding']
+    old_sources = (previous.get('sources') or {}) if compatible else {}
+    deadline = time.monotonic() + 60
     for source in SOURCES:
         old = old_sources.get(source) or {}
-        if source.startswith('fmp_') and (not config.get('fmp_enabled') or not key):
-            state['sources'][source] = {'status': 'not_configured', 'error': 'api_key_or_permission_missing'}
-            continue
-        if not source.startswith('fmp_') and not config.get('official_enabled'):
+        if not config.get('official_enabled'):
             state['sources'][source] = {'status': 'disabled'}
             continue
         if now < (number(old.get('next_attempt_at')) or 0):
@@ -313,38 +223,10 @@ def collect(config, previous=None, *, now=None, getter=fetch):
                 except FeedError as exc:
                     if str(exc) != 'no_valid_observations' or local.day > 7:
                         raise
-                    # Early-month/weekend cache may have no current-month observation.
                     prior = local.replace(day=1)-timedelta(days=1)
                     data = parse_treasury(getter(TREASURY_URL, params={'data': 'daily_treasury_yield_curve', 'field_tdr_date_value_month': prior.strftime('%Y%m')}, deadline=deadline), now)
-            elif source in CALENDAR_URLS:
-                data = parse_ics(getter(CALENDAR_URLS[source], deadline=deadline), source, now)
-            elif source == 'fmp_indices':
-                catalog = (previous.get('index_catalog') or {}) if previous.get('binding') == config['binding'] else {}
-                catalog_at = number(catalog.get('captured_at')) or 0
-                if not 0 <= now-catalog_at < 86400:
-                    rows = fmp_json('index-list', key, deadline=deadline, getter=getter)
-                    catalog = {'captured_at': now, 'symbols': resolve_symbols(rows)}
-                state['index_catalog'] = catalog
-                symbols = catalog.get('symbols') or {}
-                quotes = {}; errors = {}
-                for name in ('sp500', 'nasdaq_composite', 'dxy'):
-                    symbol = symbols.get(name)
-                    if not symbol:
-                        errors[name] = 'index_identity_not_verified'
-                        continue
-                    try:
-                        rows = fmp_json('quote', key, params={'symbol': symbol}, deadline=deadline, getter=getter)
-                        quotes[name] = parse_quote(rows, symbol, now)
-                    except FeedError as exc:
-                        errors[name] = str(exc)
-                if not quotes:
-                    priority = ('rate_limited', 'authentication_failed', 'subscription_required', 'access_denied', 'provider_error_payload')
-                    raise FeedError(next((code for code in priority if code in errors.values()), 'no_usable_index_quotes'))
-                data = {'quotes': quotes, 'errors': errors}
             else:
-                day = datetime.fromtimestamp(now, UTC).date()
-                rows = fmp_json('economic-calendar', key, params={'from': (day-timedelta(days=1)).isoformat(), 'to': (day+timedelta(days=8)).isoformat()}, deadline=deadline, getter=getter)
-                data = parse_fmp_calendar(rows, now, config.get('calendar_timezone', ''))
+                data = parse_ics(getter(CALENDAR_URLS[source], deadline=deadline), source, now)
             current.update({'status': 'ok', 'data': data, 'last_success_at': now, 'error': None,
                             'next_attempt_at': now+REFRESH_SECONDS[source], 'failures': 0})
         except FeedError as exc:
@@ -352,26 +234,25 @@ def collect(config, previous=None, *, now=None, getter=fetch):
             backoff = min(6*3600, REFRESH_SECONDS[source]*2**min(failures-1, 4))
             current.update({'status': 'error', 'error': str(exc), 'failures': failures, 'next_attempt_at': now+backoff})
         state['sources'][source] = current
-    if 'index_catalog' not in state and previous.get('binding') == config['binding']:
-        state['index_catalog'] = copy.deepcopy(previous.get('index_catalog') or {})
     return state
 
 
 def snapshot(cache, config, *, now=None):
-    """Recheck age at decision time, freeze once, exclude stale/unknown values from facts."""
+    """Recheck age at decision time; older provider caches cannot enter this schema."""
     now = time.time() if now is None else now
     if not isinstance(cache, dict) or cache.get('version') != VERSION or cache.get('binding') != config['binding']:
         cache = {}
     result = {'version': VERSION, 'captured_at': cache.get('captured_at'),
-              'evaluated_at': now if cache.get('sources') else None, 'sources': {}, 'quotes': {}, 'rates': {}, 'events': [],
+              'evaluated_at': now if cache.get('sources') else None, 'sources': {}, 'rates': {}, 'events': [],
               'missing_data_policy': 'unknown_not_zero; incomplete_calendar_does_not_mean_no_event_risk',
-              'coverage': 'US_only; BLS_BEA_agency_schedules_plus_optional_FMP; not_exhaustive',
-              'policy_rate': {'status': 'not_connected'}, 'quote_delivery': 'not_certified_realtime'}
+              'coverage': 'US_Treasury_BEA_BLS_official_only; agency_schedules_not_exhaustive',
+              'policy_rate': {'status': 'not_connected'},
+              'cross_asset_quotes': {'status': 'not_connected'},
+              'economic_release_values': {'status': 'not_connected'}}
     for source in SOURCES:
         raw = (cache.get('sources') or {}).get(source) or {}
-        enabled = config.get('fmp_enabled') and config.get('api_key') if source.startswith('fmp_') else config.get('official_enabled')
-        if not enabled:
-            result['sources'][source] = {'status': 'not_configured' if source.startswith('fmp_') else 'disabled', 'usable': False}
+        if not config.get('official_enabled'):
+            result['sources'][source] = {'status': 'disabled', 'usable': False}
             continue
         success = number(raw.get('last_success_at'))
         fresh = success is not None and 0 <= now-success <= TTL_SECONDS[source]
@@ -392,28 +273,17 @@ def snapshot(cache, config, *, now=None):
             result['sources'][source]['usable'] = valid
             if not valid:
                 result['sources'][source]['status'] = 'stale_observation'
-        elif source == 'fmp_indices':
-            for name, quote in (data.get('quotes') or {}).items():
-                at = number(quote.get('as_of')); age = now-at if at is not None else None
-                valid = age is not None and 0 <= age <= 1800
-                result['quotes'][name] = {**quote, 'age_seconds': age, 'usable': valid,
-                    'status': 'recent_provider_quote' if valid else 'stale_or_market_closed'}
-            result['sources'][source]['instrument_errors'] = data.get('errors') or {}
-            result['sources'][source]['usable'] = any(q['usable'] for q in result['quotes'].values())
-            if data.get('errors'):
-                result['sources'][source]['status'] = 'partial'
-            elif not result['sources'][source]['usable']:
-                result['sources'][source]['status'] = 'stale_or_market_closed'
         else:
-            if source in CALENDAR_URLS and (number(data.get('coverage_end')) or 0) < now:
+            if (number(data.get('coverage_end')) or 0) < now:
                 result['sources'][source].update({'status': 'outdated_schedule', 'usable': False})
                 continue
             result['sources'][source]['skipped_events'] = data.get('skipped_events', 0)
             for event in data.get('events') or []:
                 at = number(event.get('scheduled_at'))
                 if at is not None and now-86400 <= at <= now+7*86400:
+                    # An agency schedule never supplies consensus or actual release values.
+                    event = {key: event.get(key) for key in ('id', 'source', 'event', 'scheduled_at', 'country', 'importance', 'values_status', 'time_basis')}
                     result['events'].append({**event, 'minutes_to_event': round((at-now)/60, 1), 'usable': True})
-    # Do not silently merge provider claims with agency schedules: revisions can differ.
     result['events'].sort(key=lambda e: (e.get('importance') != 'high', abs(e['scheduled_at']-now), e['id']))
     result['events'] = result['events'][:24]
     result['digest'] = digest(result)
@@ -423,6 +293,8 @@ def snapshot(cache, config, *, now=None):
 def facts(snapshot_data):
     """Distinct macro group: context alone must not satisfy technical-entry evidence."""
     out = {}
+    if snapshot_data.get('version') != VERSION:
+        return out
     def add(ref, value):
         if value is None or isinstance(value, (dict, list, bool)):
             return
@@ -431,11 +303,6 @@ def facts(snapshot_data):
         if isinstance(value, (float, int)) and not math.isfinite(value):
             return
         out[ref] = {'value': value, 'group': 'macro'}
-    for name, row in (snapshot_data.get('quotes') or {}).items():
-        if row.get('usable') is not True:
-            continue
-        for field in ('price', 'previous_close', 'change_pct', 'as_of', 'symbol'):
-            add('/macro/quotes/'+name+'/'+field, row.get(field))
     rates = snapshot_data.get('rates') or {}
     if rates.get('usable') is True:
         for field in ('observation_date', 'us2y_pct', 'us10y_pct', 'spread_10y_2y_bp', 'us2y_change_bp', 'us10y_change_bp'):
@@ -443,7 +310,7 @@ def facts(snapshot_data):
     for i, row in enumerate(snapshot_data.get('events') or []):
         if row.get('usable') is not True:
             continue
-        for field in ('event', 'scheduled_at', 'minutes_to_event', 'actual', 'estimate', 'previous', 'unit'):
+        for field in ('event', 'scheduled_at', 'minutes_to_event'):
             add('/macro/events/'+str(i)+'/'+field, row.get(field))
     return out
 

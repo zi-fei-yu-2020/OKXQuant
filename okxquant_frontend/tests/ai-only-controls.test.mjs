@@ -37,8 +37,8 @@ test('history receipt describes validated references without inventing weights o
 
 test('new receipt renders observed source availability rather than claiming every feed is disconnected',async()=>{
  const source=fragment('components/AiBrainHistory.vue','data-market-context-receipt')
- const html=await render(source,{item:{market_context_receipt:{provided_article_count:6,cited_article_count:1,sentiment_cited_by:[],provided_macro_fact_count:6,cited_macro_fact_count:2,macro_source_statuses:{treasury:{usable:true},fmp_indices:{usable:false},bea:{usable:true}}}}})
+ const html=await render(source,{item:{market_context_receipt:{provided_article_count:6,cited_article_count:1,sentiment_cited_by:[],provided_macro_fact_count:6,cited_macro_fact_count:2,macro_source_statuses:{treasury:{usable:true},bea:{usable:true}}}}})
  assert.match(html,/提供 6 条可核验字段/);assert.match(html,/引用 2 条/)
- assert.match(html,/日频参考可用/);assert.match(html,/无有效报价/);assert.match(html,/至少部分来源可用/)
- assert.doesNotMatch(html,/尚未接入|未提供独立跨资产数据接入回执/)
+ assert.match(html,/日频参考可用/);assert.match(html,/至少部分来源可用/)
+ assert.doesNotMatch(html,/尚未接入|未提供独立跨资产数据接入回执|FMP/)
 })

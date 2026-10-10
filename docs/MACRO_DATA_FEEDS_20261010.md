@@ -1,3 +1,5 @@
+> Historical release record, superseded by `OFFICIAL_MACRO_ONLY_20261010.md`. The provider configuration and key instructions below are retired; do not use them as current setup guidance.
+
 # Macro data feeds — 2026-10-10
 
 ## Scope and limits

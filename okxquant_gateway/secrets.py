@@ -13,7 +13,6 @@ ROOT = Path(__file__).resolve().parents[1]
 KEY_FILE = ROOT / "data" / ".okxquant_secret_key"
 STORE_FILE = ROOT / "data" / "okxquant_secrets.enc"
 SECRET_KEYS = {
-    "FMP_API_KEY",
     "OKX_API_KEY", "OKX_SECRET_KEY", "OKX_PASSPHRASE",
     "OKX_LIVE_API_KEY", "OKX_LIVE_SECRET_KEY", "OKX_LIVE_PASSPHRASE",
     "OKX_DEMO_API_KEY", "OKX_DEMO_SECRET_KEY", "OKX_DEMO_PASSPHRASE", "LLM_API_KEY",

@@ -1,10 +1,11 @@
-"""Superadmin-only market-data credentials, status and rate-limited read-only probe."""
-from typing import Literal
+"""Superadmin-only official-source settings, status and bounded read-only refresh."""
 import os
 import subprocess
 import sys
 from fastapi import APIRouter, Header, HTTPException
-from pydantic import BaseModel, ConfigDict, SecretStr, Field
+from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute
+from pydantic import BaseModel, ConfigDict, Field
 from okxquant_backend import macro_store
 from scripts import macro_market
 
@@ -12,15 +13,23 @@ from scripts import macro_market
 class MacroUpdate(BaseModel):
     model_config = ConfigDict(extra='forbid')
     official_enabled: bool
-    fmp_enabled: bool
-    calendar_timezone: Literal['', 'UTC', 'America/New_York'] = ''
-    api_key: SecretStr | None = None
-    clear_api_key: bool = False
     expected_revision: int = Field(ge=0)
 
 
+class SafeSettingsRoute(APIRoute):
+    def get_route_handler(self):
+        original = super().get_route_handler()
+        async def handler(request):
+            try:
+                return await original(request)
+            except RequestValidationError:
+                # Retired clients may still submit a credential. Never echo input.
+                raise HTTPException(422, '仅接受官方数据开关和配置版本，请刷新控制台') from None
+        return handler
+
+
 def install(app, require_superadmin, audit_record):
-    router = APIRouter(prefix='/api/v1/admin/macro-data')
+    router = APIRouter(prefix='/api/v1/admin/macro-data', route_class=SafeSettingsRoute)
 
     def execute(action, actor, operation):
         try:
@@ -45,14 +54,13 @@ def install(app, require_superadmin, audit_record):
     @router.put('')
     def update(payload: MacroUpdate, x_okxquant_session: str | None = Header(default=None, alias='X-OKXQuant-Session')):
         actor = require_superadmin(x_okxquant_session)
-        values = payload.model_dump(exclude={'api_key'})
-        values['api_key'] = payload.api_key.get_secret_value() if payload.api_key is not None else None
+        values = payload.model_dump()
         return execute('update', actor, lambda: macro_store.update(**values))
 
     @router.post('/refresh')
     def refresh(x_okxquant_session: str | None = Header(default=None, alias='X-OKXQuant-Session')):
         actor = require_superadmin(x_okxquant_session)
-        # Existing next-attempt times apply even to manual probes: no quota bypass.
+        # Existing next-attempt times apply even to manual refreshes.
         def run():
             # A separate bounded process owns network sockets. Even a slow-drip
             # response cannot occupy an API worker beyond this hard deadline.
