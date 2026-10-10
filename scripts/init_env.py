@@ -14,7 +14,7 @@ def initialize(path, *, template=None):
     content=source.read_text(encoding="utf8")
     values={"OKXQUANT_SETUP_TOKEN":secrets.token_urlsafe(24)+"A7",
             "OKXQUANT_AUTOTRADE_ENABLED":"0","OKXQUANT_GATEWAY_AUTOSTART":"1",
-            "OKXQUANT_RUNTIME_PROFILE":"light","OKXQUANT_OKX_ENV":"demo","LLM_API_KEY":""}
+            "OKXQUANT_RUNTIME_PROFILE":"standard","OKXQUANT_OKX_ENV":"demo","LLM_API_KEY":""}
     lines=[line for line in content.splitlines() if line.split("=",1)[0].strip() not in values]
     content="\n".join(lines+[key+"="+value for key,value in values.items()])+"\n"
     path.parent.mkdir(parents=True,exist_ok=True)
@@ -32,6 +32,6 @@ def main():
     except FileExistsError:
         parser.error("Configuration already exists; refusing to change credentials or trading settings")
     print("Created "+str(path)+". Read its private OKXQUANT_SETUP_TOKEN locally for the first admin login; credentials are not printed.")
-    print("Light monitoring is enabled. Automatic entries remain paused until explicitly enabled in the console.")
+    print("Standard runtime profile is enabled (factor snapshots, observations and research on). Automatic entries remain paused until explicitly enabled in the console.")
 
 if __name__=="__main__":main()

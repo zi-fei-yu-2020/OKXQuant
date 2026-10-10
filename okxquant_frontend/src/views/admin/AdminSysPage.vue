@@ -19,6 +19,7 @@ import { useAuthStore } from '../../stores/auth'
 import { UserCog, KeyRound, Plus, Lock, Unlock, ShieldCheck } from 'lucide-vue-next'
 
 const { api } = useApi()
+const { prompt } = useDialogs()
 const auth = useAuthStore()
 
 const users = ref<any[]>([])
@@ -147,17 +148,13 @@ const unlockUser = action(async (u: any) => {
 })
 
 onMounted(load)
-
-const { prompt } = useDialogs()
 </script>
 
 <template>
   <div class="space-y-4">
     <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading || actionBusy" @click="load()">重试</button></div>
     <!-- Change Password -->
-    <AppCard
-      class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
-      style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+    <AppCard class="p-4 sm:p-5"
     >
       <div
         class="flex items-center space-x-2 mb-4 pb-3 border-b"
@@ -180,13 +177,7 @@ const { prompt } = useDialogs()
               ><input :disabled="actionBusy"
                 :id="fieldId"
                 v-model="currentPassword"
-                type="password"
-                class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
-                style="
-                  background-color: var(--bg-input);
-                  border-color: var(--border-subtle);
-                  color: var(--text-main);
-                " /></template
+                type="password" /></template
           ></AppField>
         </div>
         <div>
@@ -199,21 +190,14 @@ const { prompt } = useDialogs()
               ><input :disabled="actionBusy"
                 :id="fieldId"
                 v-model="newPassword"
-                type="password"
-                class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
-                style="
-                  background-color: var(--bg-input);
-                  border-color: var(--border-subtle);
-                  color: var(--text-main);
-                " /></template
+                type="password" /></template
           ></AppField>
         </div>
         <div class="flex items-end">
           <button
             @click="changePassword"
             :disabled="(changingPwd) || actionBusy"
-            class="ui-action w-full"
-            style="background-color: var(--text-main); color: var(--bg-card)"
+            class="ui-button ui-button--primary w-full"
           >
             <ShieldCheck class="w-3.5 h-3.5" /><span>{{
               changingPwd ? '修改中...' : '确认修改'
@@ -227,9 +211,7 @@ const { prompt } = useDialogs()
     </AppCard>
 
     <!-- Users List -->
-    <AppCard v-if="auth.isSuperadmin"
-      class="rounded-xl border overflow-hidden shadow-xs"
-      style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+    <AppCard v-if="auth.isSuperadmin" class="overflow-hidden"
     >
       <div
         class="px-4 py-3 border-b flex items-center justify-between"
@@ -247,8 +229,7 @@ const { prompt } = useDialogs()
         <button :disabled="actionBusy"
           v-if="auth.isSuperadmin"
           @click="createVisible = true"
-          class="ui-action ui-action--sm"
-          style="background-color: var(--text-main); color: var(--bg-card)"
+          class="ui-button ui-button--primary ui-button--sm"
         >
           <Plus class="w-3.5 h-3.5" />
           <span>新建管理员</span>
@@ -294,7 +275,7 @@ const { prompt } = useDialogs()
                 {{ u.username }}
                 <span
                   v-if="u.id === currentUserId"
-                  class="px-1 py-0.2 rounded text-xs font-bold border ml-1"
+                  class="px-1 py-0.5 rounded text-xs font-bold border ml-1"
                   style="
                     background-color: var(--color-brand-bg);
                     border-color: var(--color-brand-border);
@@ -344,18 +325,14 @@ const { prompt } = useDialogs()
               <td class="py-2.5 px-3 num-tabular" style="color: var(--text-faint)">
                 {{ u.last_login_at || '从未登录' }}
               </td>
-              <td class="py-2.5 px-4 text-right whitespace-nowrap space-x-1.5">
+              <td class="py-2.5 px-4 whitespace-nowrap">
+                <div class="flex items-center justify-end gap-1.5">
                 <button :disabled="actionBusy || !canManage"
                   v-if="u.id !== currentUserId"
                   @click="toggleEnabled(u)"
-                  class="ui-action ui-action--sm border"
-                  style="
-                    background-color: var(--bg-card-subtle);
-                    border-color: var(--border-medium);
-                    color: var(--text-main);
-                  "
+                  class="ui-button ui-button--secondary ui-button--sm"
                 >
-                  <component :is="u.enabled ? Lock : Unlock" class="w-3 h-3 inline" />
+                  <component :is="u.enabled ? Lock : Unlock" class="w-3 h-3" aria-hidden="true" />
                   {{ u.enabled ? '停用' : '启用' }}
                 </button>
                 <button :disabled="actionBusy || !canManage"
@@ -370,6 +347,7 @@ const { prompt } = useDialogs()
                 >
                   解锁
                 </button>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -391,7 +369,7 @@ const { prompt } = useDialogs()
         }
       "
       ><div
-        class="dialog-content p-5 sm:p-6 transition-colors"
+        class="transition-colors"
         style="background-color: var(--bg-card); border-color: var(--border-subtle)"
       >
         <h3 class="text-sm font-bold mb-4 font-sans" style="color: var(--text-main)">新建管理员</h3>
@@ -403,13 +381,7 @@ const { prompt } = useDialogs()
           ><template #default="{ id: fieldId }"
             ><input :disabled="actionBusy"
               :id="fieldId"
-              v-model="newUsername"
-              class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border mb-3"
-              style="
-                background-color: var(--bg-input);
-                border-color: var(--border-subtle);
-                color: var(--text-main);
-              " /></template
+              v-model="newUsername" class="mb-3" /></template
         ></AppField>
         <AppField class="w-full min-w-0"
           ><template #label
@@ -419,13 +391,7 @@ const { prompt } = useDialogs()
           ><template #default="{ id: fieldId }"
             ><select :disabled="actionBusy"
               :id="fieldId"
-              v-model="newRole"
-              class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border mb-3 cursor-pointer"
-              style="
-                background-color: var(--bg-input);
-                border-color: var(--border-subtle);
-                color: var(--text-main);
-              "
+              v-model="newRole" class="mb-3 cursor-pointer"
             >
               <option value="admin">管理员（日常运维）</option>
               <option value="superadmin">超级管理员（全部权限）</option>
@@ -441,15 +407,9 @@ const { prompt } = useDialogs()
             ><input :disabled="actionBusy"
               :id="fieldId"
               v-model="newPasswordForCreate"
-              type="password"
-              class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border mb-4"
-              style="
-                background-color: var(--bg-input);
-                border-color: var(--border-subtle);
-                color: var(--text-main);
-              " /></template
+              type="password" class="mb-4" /></template
         ></AppField>
-        <div class="flex justify-end space-x-2">
+        <div class="flex flex-wrap justify-end gap-2">
           <button :disabled="actionBusy"
             @click="createVisible = false"
             class="ui-action border"
@@ -463,8 +423,7 @@ const { prompt } = useDialogs()
           </button>
           <button :disabled="actionBusy || !canManage"
             @click="createUser"
-            class="ui-action"
-            style="background-color: var(--text-main); color: var(--bg-card)"
+            class="ui-button ui-button--primary"
           >
             创建
           </button>

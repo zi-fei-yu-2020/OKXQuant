@@ -9,9 +9,7 @@ const store = useDashboardStore()
 
 <template>
   <AppCard
-    data-inspection-logs
-    class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
-    style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+    data-inspection-logs class="p-4 sm:p-5"
   >
     <div class="flex flex-wrap gap-2 items-center justify-between mb-3">
       <div class="flex items-center space-x-2">

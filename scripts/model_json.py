@@ -88,6 +88,9 @@ def decode_with_regeneration(initial, regenerate=None, *, report=None, clock=tim
             diagnostic = {'reason': str(exc)[:300], 'chars': len(text) if isinstance(text, str) else 0}
             if isinstance(text, str):
                 diagnostic['sha256'] = hashlib.sha256(text.encode()).hexdigest()
+            details=getattr(exc,'diagnostics',{})
+            for key in ('category','json_path','json_line','json_column','json_offset','near_output_tail'):
+                if key in details:diagnostic[key]=details[key]
             if isinstance(exc, TruncatedResponseError):
                 diagnostic['category'] = 'truncated_model_output'
             report['failures'].append(diagnostic)

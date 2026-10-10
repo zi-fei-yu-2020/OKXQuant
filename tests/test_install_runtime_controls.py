@@ -15,7 +15,7 @@ class InstallTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             path=Path(temp)/'.env';initialize(path)
             text=path.read_text();self.assertIn('OKXQUANT_AUTOTRADE_ENABLED=0',text)
-            self.assertIn('OKXQUANT_RUNTIME_PROFILE=light',text);self.assertIn('OKXQUANT_GATEWAY_AUTOSTART=1',text)
+            self.assertIn('OKXQUANT_RUNTIME_PROFILE=standard',text);self.assertIn('OKXQUANT_GATEWAY_AUTOSTART=1',text)
             token=next(x.split('=',1)[1] for x in text.splitlines() if x.startswith('OKXQUANT_SETUP_TOKEN='))
             self.assertGreaterEqual(len(token),24);self.assertTrue(any(c.isdigit() for c in token))
             with self.assertRaises(FileExistsError):initialize(path)

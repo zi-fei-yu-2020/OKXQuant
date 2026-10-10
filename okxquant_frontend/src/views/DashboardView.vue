@@ -2,8 +2,9 @@
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useDashboardStore } from '../stores/dashboard'
-import { monitorConnectionLabel } from '../utils/dashboardHealth'
+import { monitorPresentation } from '../utils/dashboardHealth'
 import { frontTabs, findFrontTab } from '../config/navigation'
+import { APP_VERSION } from '../config/branding'
 import HeaderBar from '../components/HeaderBar.vue'
 import TopHudRibbon from '../components/TopHudRibbon.vue'
 import TacticalDesk from '../components/TacticalDesk.vue'
@@ -36,8 +37,9 @@ const currentTab = computed(() => {
 const activeTabMeta = computed(() => findFrontTab(currentTab.value) || frontTabs[0]!)
 const heading = computed(() => [activeTabMeta.value.label, activeTabMeta.value.description] as const)
 
-const monitorLabel = computed(() => monitorConnectionLabel(store.data, store.error, store.isStale))
-const monitorTone = computed(() => monitorLabel.value === '数据已更新' ? 'success' : 'warning')
+const monitor = computed(() => monitorPresentation(store.data, store.error, store.isStale, store.consecutiveRefreshFailures))
+const monitorLabel = computed(() => monitor.value.label)
+const monitorTone = computed(() => monitor.value.tone)
 
 function syncTabFromRoute() {
   const tab = currentTab.value
@@ -97,12 +99,14 @@ function setLayout(mode: 'dual' | 'stacked') {
           </AppBadge>
           <AppBadge
             data-monitor-connection
+            :title="monitor.detail"
+            :aria-label="monitor.detail"
             class="min-w-[7.5rem] justify-center"
             :tone="monitorTone"
             dot
           >{{ monitorLabel }}</AppBadge>
           <button
-            v-if="store.error || (store.data && store.isStale)"
+            v-if="monitor.critical"
             class="ui-icon-button"
             :disabled="store.isRefreshing"
             aria-label="重试获取监控数据"
@@ -173,7 +177,7 @@ function setLayout(mode: 'dual' | 'stacked') {
       </div>
     </main>
     <footer class="terminal-footer">
-      <button @click="store.showAboutModal = true">OKXQuant · v0.1.0</button>
+      <button type="button" aria-haspopup="dialog" aria-label="关于 OKXQuant" @click="store.showAboutModal = true">OKXQuant · {{ APP_VERSION }}</button>
       <span class="ml-4 hidden sm:inline">只读监控 · 交易有风险，决策需审慎</span>
     </footer>
     <AboutModal

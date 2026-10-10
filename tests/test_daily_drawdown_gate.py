@@ -60,5 +60,35 @@ class DailyDrawdownGateTests(unittest.TestCase):
                 self.assertTrue(active)
                 self.assertIn('3.00%',reason)
 
+    def test_unreadable_ledger_fails_closed_but_missing_anchor_does_not(self):
+        import ai_factor_trader as trader
+        from scripts import okx_runtime
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(evidence,'DB_PATH',Path(directory)/'evidence.db'), \
+             patch.object(trader,'check_black_swan_sentinel',return_value=(False,'')), \
+             patch.object(trader,'CIRCUIT_BREAKER_FILE',str(Path(directory)/'missing.json')), \
+             patch.object(risk,'load_policy',return_value=risk.Policy()), \
+             patch.object(okx_runtime,'selected_environment',return_value=SimpleNamespace(identity='test-account')):
+            with patch.object(risk,'ledger_daily_drawdown',return_value={'blocked':False,'reason':'ledger_unavailable'}):
+                active,reason=trader.is_circuit_breaker_active()
+                self.assertTrue(active)
+                self.assertIn('账本读取失败',reason)
+            with patch.object(risk,'ledger_daily_drawdown',return_value={'blocked':False,'reason':'equity_day_anchor_unavailable'}):
+                self.assertEqual(trader.is_circuit_breaker_active(),(False,''))
+
+    def test_missing_ledger_is_zero_loss_but_corrupt_ledger_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'trading_ledger.json'
+            def evaluate():
+                with patch.object(risk,'settled_ledger_path',return_value=path):
+                    return risk.ledger_daily_drawdown(risk.Policy(),initial_capital=1000,
+                        reset_time='1970-01-01 00:00:00',scope='a')
+            fresh=evaluate()
+            self.assertEqual(fresh['reason'],'lifecycle_ledger_daily_loss')
+            self.assertEqual(fresh['net_pnl'],0)
+            self.assertFalse(fresh['blocked'])
+            path.write_text('{not json',encoding='utf-8')
+            self.assertEqual(evaluate()['reason'],'ledger_unavailable')
+
 if __name__=='__main__':
     unittest.main()

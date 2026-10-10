@@ -5,7 +5,7 @@ import json
 import sqlite3
 
 
-def public_status(data_dir=None):
+def public_status(data_dir=None, *, scope=None):
     root = Path(data_dir) if data_dir is not None else Path(__file__).resolve().parents[1] / 'data'
     def read(name, default):
         try:
@@ -21,13 +21,19 @@ def public_status(data_dir=None):
     memory = read('ai_trading_memory.json', {})
     # Reports created before the active demo reset belong to the archived cycle.
     from scripts.memory_registry import scope_of
+    scope=scope_of(scope)
     from okxquant_backend.account_baseline import load_account_baseline
-    reset_time = str(load_account_baseline(scope=scope_of(), path=root/'account_initial_state.json').get('reset_time') or '')[:19]
+    reset_time = str(load_account_baseline(scope=scope, path=root/'account_initial_state.json').get('reset_time') or '')[:19]
     report_time = str(report.get('completed_at') or report.get('timestamp') or '')[:19]
     if reset_time and report_time and report_time < reset_time:
         report = {}
     from scripts.memory_registry import public_view, scope_of
-    scope=scope_of();published=public_view(root,scope)
+    published=public_view(root,scope)
+    from scripts.statistics_epoch import epoch, report_in_epoch
+    window=epoch(scope,root)
+    if window:
+        report=report_in_epoch(report,scope,root)
+        attempt=report_in_epoch(attempt,scope,root)
     scope_mismatch=bool(report.get('account_scope') and report['account_scope']!=scope)
     if scope_mismatch: report={}
     candidates = read('memory_candidates.json', {}).get('candidates', [])
@@ -68,7 +74,7 @@ def public_status(data_dir=None):
         'last_job': last_job,
         'review_change_status': report.get('proposed_change_status') or report.get('change_status'),
         'memory_preserved': report.get('memory_preserved', True),
-        'sample_size': report.get('total_trades'),
+        'sample_size': report.get('total_trades',0 if window else None),
         'evidence_feedback': report.get('evidence_feedback') if report.get('account_scope') == scope else None,
         'win_rate': report.get('win_rate'),
         'insights': report.get('insights') or [],
@@ -76,6 +82,6 @@ def public_status(data_dir=None):
         'recommendations': report.get('recommendations') or report.get('actions_taken') or [],
         'pending_candidates': published.get('pending_count',0) if published.get('managed') else sum(c.get('status') == 'pending' for c in candidates),
         'rejected_candidates': published.get('rejected_count',0) if published.get('managed') else sum(c.get('status') == 'rejected' or c.get('audit_passed') is False for c in candidates),
-        'review_markdown': '' if scope_mismatch else report['review_markdown'] if isinstance(report.get('review_markdown'), str) else text('self_improvement_review.md'),
+        'review_markdown': '' if scope_mismatch or window and not report else report['review_markdown'] if isinstance(report.get('review_markdown'), str) else text('self_improvement_review.md'),
         'message': '复盘结果与运行记忆分开保存；NO_CHANGE 或候选未审核通过时，运行记忆日期不推进。',
     }

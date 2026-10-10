@@ -5,6 +5,7 @@ import PageHeader from '../components/ui/PageHeader.vue'
 import AppBadge from '../components/ui/AppBadge.vue'
 import DocsContents from '../components/DocsContents.vue'
 import { useClipboard } from '../composables/useClipboard'
+import { APP_VERSION } from '../config/branding'
 const { copyText: copyToClipboard } = useClipboard()
 import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 import {
@@ -88,7 +89,7 @@ onUnmounted(() => {
     <main class="terminal-main docs-main">
       <PageHeader title="使用文档" description="按功能查阅账户连接、决策证据、持仓保护与运行记忆。" eyebrow="工作空间 / 文档中心">
         <template #actions>
-          <AppBadge tone="neutral">v0.1.0</AppBadge>
+          <AppBadge tone="neutral">{{ APP_VERSION }}</AppBadge>
           <button type="button" class="ui-button ui-button--secondary docs-menu-button" aria-haspopup="dialog" :aria-expanded="mobileMenuOpen" @click="mobileMenuOpen = true" data-docs-menu>
             <Menu class="size-4" aria-hidden="true" />章节目录
           </button>
@@ -310,7 +311,7 @@ onUnmounted(() => {
               <li>审计不完整、草案生成错误、执行拒绝直接显示原因，不会被精简布局隐藏。程序草案与模型选择都不等于已下单或成交。</li>
               <li>执行记录与审计解释按需展开，环境限制单独标注。前台和后台复用同一面板；静默刷新保留用户已展开的内容。</li>
             </ul>
-            <p>“实时提示词”入口位于顶部 Header，展示后端最近保存的原文；接口未提供独立时间和轮次关联时，不将它认定为本轮信号的提示词。常态自动刷新不再显示重复刷新按钮；数据异常保留重试，历史记录保留“加载更多”。</p>
+            <p>“实时提示词”入口位于顶部 Header，展示后端最近保存的原文；接口未提供独立时间和轮次关联时，不将它认定为本轮信号的提示词。常态自动刷新静默进行；持续异常与熔断保留明确提示及重试。AI 决策历史仅展示北京时间当天，不提供“加载更多历史记录”按钮。</p>
             <p><code>small300</code> 与标准模式的单笔风险、最大杠杆、持仓数量和保证金上限直接读取 <code>execution_profile.execution</code> 的实际设置，不从预设名称推断参数。接口缺失或配置读取失败时显示未知／不可用；历史成交杠杆也不填入默认倍数。</p>
             <p>桌面和手机使用同一组数据，支持明暗主题与键盘展开。监控仍以 3 秒周期请求完整快照；刷新延迟通过“数据更新延迟”状态提示，不用常驻错误弹窗打断阅读。</p>
           </div>
@@ -582,7 +583,7 @@ onUnmounted(() => {
                   >01_macro_trend_filter.py</span
                 >
                 <span
-                  class="px-2 py-0.2 rounded text-[9px] font-bold border"
+                  class="px-2 py-0.5 rounded text-[9px] font-bold border"
                   style="
                     background-color: var(--color-up-bg);
                     color: var(--color-up);
@@ -605,7 +606,7 @@ onUnmounted(() => {
                   >02_confidence_gatekeeper.py</span
                 >
                 <span
-                  class="px-2 py-0.2 rounded text-[9px] font-bold border"
+                  class="px-2 py-0.5 rounded text-[9px] font-bold border"
                   style="
                     background-color: var(--color-up-bg);
                     color: var(--color-up);
@@ -629,7 +630,7 @@ onUnmounted(() => {
                   >03_adx_volatility_filter.py</span
                 >
                 <span
-                  class="px-2 py-0.2 rounded text-[9px] font-bold border"
+                  class="px-2 py-0.5 rounded text-[9px] font-bold border"
                   style="
                     background-color: var(--color-up-bg);
                     color: var(--color-up);
@@ -652,7 +653,7 @@ onUnmounted(() => {
                   >04_risk_reward_gatekeeper.py</span
                 >
                 <span
-                  class="px-2 py-0.2 rounded text-[9px] font-bold border"
+                  class="px-2 py-0.5 rounded text-[9px] font-bold border"
                   style="
                     background-color: var(--color-up-bg);
                     color: var(--color-up);

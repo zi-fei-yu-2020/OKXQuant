@@ -64,12 +64,12 @@ async function submit(){if(!canSubmit.value)return;await perform(async()=>{
       </template>
       <form v-if="auth.isSuperadmin" class="space-y-3 border-t pt-3" style="border-color:var(--border-subtle)" @submit.prevent="create">
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <AppField label="候选操作" v-slot="field"><select :id="field.id" v-model="action" class="ui-input w-full"><option v-for="a in (['ADD','REVISE','DEACTIVATE','CLEAR_LEGACY'] as const)" :key="a" :value="a">{{ memoryActionLabel(a) }}</option></select></AppField>
-          <AppField v-if="action==='REVISE'||action==='DEACTIVATE'" label="目标已发布规则" v-slot="field"><select :id="field.id" v-model="target" class="ui-input w-full"><option value="">请选择规则</option><option v-for="rule in enabledRules" :key="rule.id" :value="rule.id">{{ rule.id }} · {{ rule.text.slice(0,30) }}</option></select></AppField>
+          <AppField label="候选操作" v-slot="field"><select :id="field.id" v-model="action" class="w-full"><option v-for="a in (['ADD','REVISE','DEACTIVATE','CLEAR_LEGACY'] as const)" :key="a" :value="a">{{ memoryActionLabel(a) }}</option></select></AppField>
+          <AppField v-if="action==='REVISE'||action==='DEACTIVATE'" label="目标已发布规则" v-slot="field"><select :id="field.id" v-model="target" class="w-full"><option value="">请选择规则</option><option v-for="rule in enabledRules" :key="rule.id" :value="rule.id">{{ rule.id }} · {{ rule.text.slice(0,30) }}</option></select></AppField>
         </div>
-        <AppField v-if="action==='ADD'||action==='REVISE'" label="候选经验（不会立即注入模型）" v-slot="field"><textarea :id="field.id" v-model="text" class="ui-input w-full" rows="3" maxlength="3000" required /></AppField>
+        <AppField v-if="action==='ADD'||action==='REVISE'" label="候选经验（不会立即注入模型）" v-slot="field"><textarea :id="field.id" v-model="text" class="w-full" rows="3" maxlength="3000" required /></AppField>
         <p v-else-if="action==='CLEAR_LEGACY'" class="text-xs" style="color:var(--color-warn)">只创建“移除旧兼容上下文”的候选。真正移除仍需审核和明确发布确认。</p>
-        <AppField label="提议理由与适用边界" v-slot="field"><textarea :id="field.id" v-model="rationale" class="ui-input w-full" rows="2" maxlength="3000" /></AppField>
+        <AppField label="提议理由与适用边界" v-slot="field"><textarea :id="field.id" v-model="rationale" class="w-full" rows="2" maxlength="3000" /></AppField>
         <AppButton type="submit" :loading="busy" :disabled="!publication || ((action==='ADD'||action==='REVISE')&&text.trim().length<10) || ((action==='REVISE'||action==='DEACTIVATE')&&!target)">提交候选，稍后审核</AppButton>
       </form>
     </AppCard>
@@ -109,9 +109,9 @@ async function submit(){if(!canSubmit.value)return;await perform(async()=>{
               <p v-if="!publication?.evidence_trades?.length">没有可核验的当前账户平仓证据，不能发布新经验。</p>
             </div>
           </div>
-          <AppField label="人工审核说明 / 拒绝或回滚原因" v-slot="field"><textarea :id="field.id" v-model="note" rows="3" class="ui-input w-full" maxlength="3000" /></AppField>
+          <AppField label="人工审核说明 / 拒绝或回滚原因" v-slot="field"><textarea :id="field.id" v-model="note" rows="3" class="w-full" maxlength="3000" /></AppField>
         </template>
-        <AppField v-if="requiredPhrase" :label="'输入确认短语：'+requiredPhrase" v-slot="field"><input :id="field.id" v-model="phrase" class="ui-input w-full font-mono" autocomplete="off"></AppField>
+        <AppField v-if="requiredPhrase" :label="'输入确认短语：'+requiredPhrase" v-slot="field"><input :id="field.id" v-model="phrase" class="w-full font-mono" autocomplete="off"></AppField>
       </div>
       <template #footer><AppButton :disabled="busy" @click="dialog=false">取消</AppButton><AppButton variant="primary" :disabled="!canSubmit" :loading="busy" @click="submit">确认执行</AppButton></template>
     </AppDialog>

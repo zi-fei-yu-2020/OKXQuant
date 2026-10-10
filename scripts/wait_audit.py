@@ -287,9 +287,30 @@ def public_status(scope):
                      'error':item.get('error'),'audit':item.get('current_audit'),'previous_check':item.get('previous_check',{}),
                      'updated_at':item.get('at'),'wait_repair':item.get('wait_repair')})
     incomplete=sum(r['status']=='incomplete' for r in rows)
+    failed_cycle=((state.get('diagnostics') or {}).get('last_cycle') or {}).get('status')=='model_cycle_failed'
     streak=state.get('streak',0)
-    return {'status':'incomplete' if incomplete else 'ready' if rows else 'empty','version':VERSION,
+    return {'status':'incomplete' if incomplete or failed_cycle else 'ready' if rows else 'empty','version':VERSION,
+            'model_cycle_failed':failed_cycle,
             'updated_at':state.get('updated_at'),'no_entry_candidate_streak':streak,'legacy_final_wait_streak':streak,
             'diagnostics':copy.deepcopy(state.get('diagnostics')),'incomplete_count':incomplete,
             'alert':streak>=ALERT_ROUNDS,'alert_after_rounds':ALERT_ROUNDS,'since':state.get('since'),
-            'message':'最终WAIT累计包含校验失败；请分别查看无程序草案、模型WAIT与审计异常统计，不触发强制交易' if streak>=ALERT_ROUNDS else '', 'items':rows}
+            'message':'最终WAIT可包含单标的校验降级；整轮推理失败单列并中断连续计数，不触发强制交易' if streak>=ALERT_ROUNDS else '', 'items':rows}
+
+
+def record_failure(scope, *, frame_id, reason, now=None):
+    """Persist failure continuity without producing decisions or deleting prior evidence."""
+    now = time.time() if now is None else now
+    state = _load(scope)
+    same_frame = state.get('frame_id') == frame_id
+    if same_frame and ((state.get('diagnostics') or {}).get('last_cycle') or {}).get('status') == 'model_cycle_failed':
+        return public_status(scope)
+    from scripts.wait_counters import advance_failure
+    state['diagnostics'] = advance_failure(state.get('diagnostics'), now)
+    if same_frame:state['diagnostics']['observed_rounds'] = max(0,state['diagnostics']['observed_rounds']-1)
+    for item in state['items'].values():
+        item.update(status='incomplete', reason=str(reason)[:300], error='model_cycle_failed',
+                    current_audit=None, at=now)
+    state.update(frame_id=frame_id, updated_at=now, streak=0, since=None,
+                 last_failed_cycle={'at':now,'reason':str(reason)[:300]})
+    _atomic(_path(scope), state)
+    return public_status(scope)

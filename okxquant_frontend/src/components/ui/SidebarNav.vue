@@ -137,7 +137,7 @@ watch(
               <span class="truncate">{{ item.label }}</span>
               <span
                 v-if="item.advanced"
-                class="ml-auto text-[10px] px-1 py-0.2 rounded border uppercase font-mono tracking-tight"
+                class="ml-auto text-[10px] px-1 py-0.5 rounded border uppercase font-mono tracking-tight"
                 style="background: var(--bg-badge); border-color: var(--border-subtle); color: var(--color-brand)"
                 title="核心风控拦截门禁"
               >

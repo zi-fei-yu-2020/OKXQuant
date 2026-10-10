@@ -137,7 +137,7 @@ function logout() {
             <span>{{ sub.label }}</span>
             <span
               v-if="sub.advanced"
-              class="text-[10px] px-1 py-0.2 rounded border uppercase font-mono tracking-tight"
+              class="text-[10px] px-1 py-0.5 rounded border uppercase font-mono tracking-tight"
               style="background: var(--bg-badge); border-color: var(--border-subtle); color: var(--color-brand)"
             >
               高级

@@ -19,9 +19,9 @@ export interface AccountSummary {
   initial_capital?: number | null
   baseline_configured?: boolean
   cum_net_pnl?: number | null
-  cum_realized_pnl?: number
+  cum_realized_pnl?: number | null
   cum_roi_pct?: number | null
-  cum_total_fees?: number
+  cum_total_fees?: number | null
 }
 
 export interface PositionItem {
@@ -187,6 +187,7 @@ export interface HorizonStat {
 }
 
 export interface DashboardResponse {
+  statistics_epoch?: { id: string; scope: string; reset_time: string; started_at: number; initial_capital: number } | null
   risk_status?: { status?: string; reason?: string; unresolved_entries?: number | null; daily_drawdown?: number | null; daily_threshold?: number; daily_blocked?: boolean | null; observed_at?: number }
 
   account_source_id?: string

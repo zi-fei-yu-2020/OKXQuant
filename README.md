@@ -49,7 +49,7 @@ npm run build
 
 ## First-run workflow and lightweight operation
 
-1. Run `python scripts/init_env.py` once. It refuses to overwrite an existing `.env`, creates a unique temporary administrator password in that private file, and starts new installations in DEMO, light profile, with automatic entries paused.
+1. Run `python scripts/init_env.py` once. It refuses to overwrite an existing `.env`, creates a unique temporary administrator password in that private file, and starts new installations in DEMO, standard runtime profile, with automatic entries paused. Switch to `light` in the console to reduce optional research load.
 2. Build and start the combined backend with Docker Compose below. Use the setup token from `.env` for the initial `admin` login; change the password after login. Never put credentials into Git, URLs, screenshots or support reports.
 3. In **Account & trading**, connect and verify the intended DEMO account, instrument pool and capital baseline. In **Strategy & risk**, review the actual limits. Model setup is separate from account authorization. AI-assisted decisions require a configured model provider; read-only observation does not. The minute engine retains its separate opt-in/consent contract.
 4. Review the overview readiness indicators. A healthy API is not proof of exchange connectivity, trading permission or protection coverage. Explicitly enable future automatic cycles from the overview only after validation.

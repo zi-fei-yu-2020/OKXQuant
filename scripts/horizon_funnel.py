@@ -51,6 +51,10 @@ def _bucket():
 
 def rebuild(rows, *, scope, now=None, db_path=None):
     now=time.time() if now is None else float(now);starts={"1d":now-86400,"7d":now-7*86400}
+    from scripts.statistics_epoch import epoch, filter_rows
+    window=epoch(scope)
+    if window: starts={key:max(value,window['started_at']) for key,value in starts.items()}
+    rows=filter_rows(rows,scope=scope,keep_active=False)
     result={name:_bucket() for name in starts}
     for row in rows if isinstance(rows,list) else []:
         if not isinstance(row,dict) or row.get("environment_id")!=scope:continue

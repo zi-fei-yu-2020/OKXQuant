@@ -298,6 +298,11 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     ledger_gate=risk.ledger_daily_drawdown(policy)
     if ledger_gate.get('blocked'):
         raise risk.RiskRejected(f"日内亏损熔断：{ledger_gate.get('net_pnl',0):.2f}U / 阈值 {ledger_gate.get('threshold',0):.2%}")
+    # An unreadable/corrupt ledger hides today's realized losses; fail closed.
+    # A missing day anchor is normal before the first observation and is
+    # covered by equity_guard above.
+    if ledger_gate.get('reason')=='ledger_unavailable':
+        raise risk.RiskRejected('日内亏损账本读取失败，安全暂停开仓；持仓保护不受影响')
     usdt=next((d for d in balances[0].get('details',[]) if d.get('ccy')=='USDT'),{})
     available=risk.number(usdt.get('availEq') or usdt.get('availBal'),positive=True)
     algos=read_algo_orders(env,priority='risk',force=True) if any(abs(risk.number(p.get('pos') or 0))>0 for p in positions) else []
@@ -332,6 +337,7 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
         )
     except (execution_liquidity.LiquidityRejected, OSError, KeyError, TypeError, ValueError) as exc:
         raise risk.RiskRejected('Final order-book snapshot rejected: '+str(exc)) from None
+    frozen=None
     if decision.get('candidate_id'):
         from scripts.entry_candidates import validate_live_quote
         try:
@@ -407,6 +413,8 @@ def _prepare(env, *, inst_id, side, entry, stop, take_profit, requested_size, bu
     from scripts.execution_replay import geometry
     plan['entry_geometry']=geometry(frozen if decision.get('candidate_id') else None,plan)
     if minute_engine:
+        if frozen is None:
+            raise risk.RiskRejected('Minute engine entry requires a frozen candidate geometry')
         from scripts.scalp_management import context as exit_context
         plan['entry_context']=exit_context(frozen,record.get('features',{}),scope=env.identity,decision_id=decision_id,stop=plan['stop'])
     elif candidate_id and horizon=='swing':

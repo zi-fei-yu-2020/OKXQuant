@@ -10,6 +10,7 @@ import * as evolution from '../src/utils/evolutionDisplay.ts'
 import * as observations from '../src/utils/observationDisplay.ts'
 import * as support from '../src/utils/instrumentSupport.ts'
 import { monitorConnectionLabel } from '../src/utils/dashboardHealth.ts'
+import * as historyDates from '../src/utils/aiHistoryToday.ts'
 
 const read = path => readFileSync(new URL('../src/' + path, import.meta.url), 'utf8')
 const icon = { setup: () => () => Vue.h('svg', { 'aria-hidden': 'true' }) }
@@ -31,6 +32,7 @@ function component(file, state = {}) {
     if (name.includes('evolutionDisplay')) return evolution
     if (name.includes('observationDisplay')) return observations
     if (name.includes('instrumentSupport')) return support
+    if (name.includes('aiHistoryToday')) return historyDates
     if (name.includes('sessionResponse')) return { getSessionToken: () => '', buildAuthHeaders: () => ({ Accept: 'application/json' }), handleSessionResponse: () => {} }
     if (name.includes('/ui/') || name.includes('DecisionAuditPanel') || name.includes('InstrumentSupportNotice')) return { __esModule: true, default: surface }
     if (name.endsWith('.vue')) return { __esModule: true, default: component(name.split('/').pop(), state) }
@@ -117,7 +119,7 @@ test('telemetry zero remains zero while failed snapshots remain visibly historic
   }
   const html = await render('StrategyTelemetryPanel.vue', {}, { data, error: 'offline' })
   assert.match(html, /0 笔 · 0 胜/); assert.match(html, /0.00 U/)
-  assert.match(html, /账本更新延迟/); assert.match(html, /配置不可用/)
+  assert.match(html, /title="后台同步中，当前为最近一次已结算样本"/); assert.match(html, /配置不可用/)
 })
 test('displayed daily ratio never substitutes for an execution circuit signal', async () => {
   const data = { today_stats: { total_pnl: -90 }, account: { initial_capital: 100 }, execution_profile: { execution: { daily_drawdown_pct: 0.08 } } }
@@ -155,7 +157,7 @@ test('detail dialogs leave closing to the shared accessible top control', () => 
   assert.equal((read('components/ui/AppDialog.vue').match(/aria-label="关闭弹窗"/g) || []).length, 1)
 })
 test('retry controls are conditional and chart navigation is retained', () => {
-  assert.match(read('views/DashboardView.vue'), /v-if="store.error \|\| \(store.data && store.isStale\)"/)
+  assert.match(read('views/DashboardView.vue'), /v-if="monitor.critical"/)
   const chart = read('components/MarketCandles.vue')
   assert.match(chart, /<AppButton v-if="delayed"[^>]+aria-label="重试获取K线"/)
   for (const label of ['放大K线', '缩小K线', 'K线回到最新']) assert.ok(chart.includes(label))
@@ -169,15 +171,15 @@ test('signal prompt cannot claim an unsupported cycle linkage or invent risk ass
   assert.doesNotMatch(html, /100% 审计|目标 R:R ≥ 2.5/)
   assert.match(read('components/FactorDetailModal.vue'), /未核验与本条信号的轮次关联/)
 })
-test('AI history has truthful missing assessments, stable expansion and accessible load-more', async () => {
+test('AI history retains truthful assessments and expansion without a history load-more button', async () => {
   const data = { ai_brain_history: Array.from({ length: 26 }, (_, i) => i === 0
-    ? ({ time: `record-${i}`, status: 'failed', failure_reason: '模型请求超时' })
-    : ({ time: `record-${i}` })) }
+    ? ({ time: `${historyDates.shanghaiDay()} 00:${String(i).padStart(2,'0')}:00`, status: 'failed', failure_reason: '模型请求超时' })
+    : ({ time: `${historyDates.shanghaiDay()} 00:${String(i).padStart(2,'0')}:00` })) }
   const html = await render('AiBrainHistory.vue', {}, { data })
   assert.match(html, /该记录未提供宏观研判/); assert.doesNotMatch(html, /宏观中性震荡/)
   assert.match(html, /推理失败/); assert.match(html, /模型请求超时/)
-  assert.match(html, /加载更多历史记录（剩余 2 条）/)
-  assert.equal((html.match(/aria-expanded="false"/g) || []).length, 24)
+  assert.doesNotMatch(html, /加载更多历史记录/)
+  assert.equal((html.match(/aria-expanded="false"/g) || []).length, 26)
   assert.match(read('components/AiBrainHistory.vue'), /expanded.has\(historyKey\(item\)\)/)
 })
 test('realized PnL is not synthesized from total PnL and empty observations remain unknown', async () => {

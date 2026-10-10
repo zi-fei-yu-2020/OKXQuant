@@ -350,9 +350,18 @@ test('admin configuration pages do not present permanently disabled form control
       }
     }
   }
-  const llm=read('views/admin/LlmPage.vue')
-  assert.match(llm,/v-model="providerForm\.group"/);assert.match(llm,/v-model="providerForm\.type"/)
-  assert.match(llm,/@click="executeRemoteFetch"/);assert.match(llm,/@click="runRemoteModelTest\(rm\)"/)
+  for(const name of readdirSync(new URL('../src/components/llm/',import.meta.url)).filter(name=>name.endsWith('.vue'))){
+    const source=read('components/llm/'+name)
+    for(const tag of ['input','select','textarea']){
+      for(const match of source.matchAll(new RegExp('<'+tag+'\\b[^>]*>','gs'))){
+        assert.doesNotMatch(match[0],/(?<!:)\b(?:disabled|readonly)(?=\s|>|\/)/,name+' has a permanently disabled '+tag)
+      }
+    }
+  }
+  const llm=read('views/admin/LlmPage.vue'),config=read('components/llm/LlmProviderConfig.vue'),fetcher=read('components/llm/LlmFetchModelsDialog.vue')
+  assert.match(llm,/v-model:form="providerForm"/);assert.match(config,/v-model="form\.group"/);assert.match(config,/v-model="form\.type"/)
+  assert.match(llm,/@fetch="executeRemoteFetch"/);assert.match(llm,/@test="runRemoteModelTest"/)
+  assert.match(fetcher,/emit\('fetch'\)/);assert.match(fetcher,/emit\('test', rm\)/)
 })
 
 
@@ -366,4 +375,23 @@ test('council seat selection qualifies duplicate model IDs by provider', () => {
   assert.deepEqual(JSON.parse(s.roleModelValue(role)),['b','shared'])
   s.bindRoleModel(role,{target:{value:''}})
   assert.equal(role.model_id,'');assert.equal(role.provider_id,'')
+})
+
+test('LLM batch import names failed model ids instead of logging them to the console',async()=>{
+  const provider={id:'p',name:'P',models:[]}
+  const s=page('LlmPage',{api:async(path,options)=>{
+    if(options?.method==='POST'&&path.endsWith('/llm/models')&&JSON.parse(options.body).id==='bad')throw new Error('rejected')
+    return path.endsWith('/models')?{providers:[provider]}:{}
+  }})
+  s.selectedProvider.value=provider;s.remoteFetchResult.value={ok:true,models:[{id:'good'},{id:'bad'}]}
+  await s.importAllFilteredRemoteModels()
+  const warning=s.messages.find(m=>m.tone==='warning')
+  assert.ok(warning);assert.match(warning.text,/bad/);assert.doesNotMatch(warning.text,/good/)
+})
+test('LLM page is a thin container over dedicated components',()=>{
+  const llm=read('views/admin/LlmPage.vue')
+  assert.ok(llm.split('\n').length<650,'LlmPage should stay a container')
+  for(const name of ['LlmProviderList','LlmProviderConfig','LlmModelList','LlmFetchModelsDialog','LlmModelDialog'])assert.match(llm,new RegExp('<'+name+'\\b'))
+  const config=read('components/llm/LlmProviderConfig.vue')
+  assert.match(config,/defaults\.includes\(form\.value\.api_path\)/)
 })

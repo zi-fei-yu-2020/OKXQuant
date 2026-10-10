@@ -55,19 +55,30 @@ class Policy:
         if self.per_trade_equity_pct > self.portfolio_stop_pct:
             raise RiskRejected('Single trade budget exceeds portfolio budget')
 
+def policy_path():
+    from pathlib import Path
+    return Path(__file__).resolve().parents[1]/'data'/'risk_policy.json'
+
+def settled_ledger_path():
+    from pathlib import Path
+    return Path(__file__).resolve().parents[1]/'data'/'trading_ledger.json'
+
 def load_policy():
     import json
-    from pathlib import Path
-    path = Path(__file__).resolve().parents[1]/'data'/'risk_policy.json'
+    path = policy_path()
     raw=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
     if not isinstance(raw,dict) or set(raw)-set(Policy.__dataclass_fields__): raise RiskRejected('Invalid risk policy')
     from scripts.execution_profiles import runtime
     preset=runtime()['execution']
     if preset['id']=='small300':
+        # small300 values are ceilings: a stricter operator risk_policy.json
+        # value survives, a looser one is capped. order_plan still sizes from
+        # the actual stop distance and account equity.
+        operator=dict(raw)
         raw.update({key:preset[key] for key in ('per_trade_equity_pct','single_asset_margin_usdt','max_leverage','daily_drawdown_pct','portfolio_stop_pct','direction_stop_pct','group_stop_pct','peak_drawdown_pct','minimum_net_rr')})
-        # small300 remains risk-budgeted: these are ceilings, while order_plan
-        # sizes from the actual stop distance and account equity.
-        raw['per_trade_equity_pct'] = min(float(raw.get('per_trade_equity_pct', .02)), .02)
+        for key in ('per_trade_equity_pct','single_asset_margin_usdt','max_leverage','daily_drawdown_pct','portfolio_stop_pct','direction_stop_pct','group_stop_pct','peak_drawdown_pct'):
+            if key in operator:raw[key]=min(number(operator[key],positive=True),raw[key])
+        if 'minimum_net_rr' in operator:raw['minimum_net_rr']=max(number(operator['minimum_net_rr'],positive=True),raw['minimum_net_rr'])
     return Policy(**raw)
 
 def _scoped_daily_equity_anchor(scope, day, now_ts):
@@ -116,7 +127,7 @@ def ledger_daily_drawdown(policy=None, *, now=None, rows=None, initial_capital=N
             baseline=load_account_baseline(scope=scope)
             if scope and baseline.get('account_scope') and baseline['account_scope']!=scope:
                 return {'blocked':False,'drawdown':None,'net_pnl':None,'reason':'baseline_scope_mismatch'}
-            reset=str(baseline.get('reset_time') or '1970-01-01 00:00:00')
+            reset=str(baseline.get('risk_reset_time',baseline.get('reset_time')) or '1970-01-01 00:00:00')
         else:reset=str(reset_time)
         if initial_capital is not None:
             anchor=number(initial_capital,positive=True)
@@ -128,7 +139,10 @@ def ledger_daily_drawdown(policy=None, *, now=None, rows=None, initial_capital=N
                 return {'blocked':False,'drawdown':None,'net_pnl':None,'threshold':policy.daily_drawdown_pct,
                         'day':day,'reason':'equity_day_anchor_unavailable'}
         if rows is None:
-            rows=_SETTLED_LEDGER_CACHE.read(root/'data'/'trading_ledger.json')
+            ledger_path=settled_ledger_path()
+            # A fresh install has no settled lifecycle yet; that is zero loss,
+            # not an unreadable ledger. Corruption still fails below.
+            rows=_SETTLED_LEDGER_CACHE.read(ledger_path) if ledger_path.exists() else []
         if scope is not None:
             from scripts.dashboard_stats import scoped_rows
             rows=scoped_rows(rows,scope)

@@ -23,7 +23,7 @@ test('all research disclosures are styled as explicit actions',()=>{
 test('initial, transient and prolonged refresh delays use only the status badge',()=>{
  const view=read('views/DashboardView.vue')
  assert.ok(view.includes('data-monitor-connection'))
- assert.ok(view.includes('monitorConnectionLabel'))
+ assert.ok(view.includes('monitorPresentation'))
  assert.ok(read('utils/dashboardHealth.ts').includes("'数据已更新'"))
  for(const text of ['账户数据尚未就绪','connection-notice','后台重连中','showConnectionNotice'])assert.ok(!view.includes(text))
  assert.ok(!read('stores/dashboard.ts').includes('useToast'))

@@ -461,6 +461,8 @@ def is_circuit_breaker_active():
         ledger_gate=ledger_daily_drawdown(load_policy())
         if ledger_gate.get('blocked'):
             return True, f"日内账本亏损熔断: {ledger_gate['net_pnl']:.2f}U / 阈值 {ledger_gate['threshold']:.2%}"
+        if ledger_gate.get('reason')=='ledger_unavailable':
+            return True, '日内亏损账本读取失败，安全暂停开仓'
     except Exception as exc:
         return True, f'日内亏损风控数据读取失败，安全暂停开仓: {type(exc).__name__}'
 
@@ -650,6 +652,7 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
     effective_px = price
     effective_tp = tp_px
     effective_sl = sl_px
+    demo_translation = None
 
     if env.simulated:
         try:
@@ -660,13 +663,16 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
                     divergence = abs(price - demo_last) / demo_last
                     # If live market price diverged from demo sandbox by more than 5% (e.g. ASTER / illiquid demo pair)
                     if divergence > 0.05:
+                        divergence_details = {'signal_price': price, 'demo_last': demo_last, 'divergence': round(divergence, 6), 'translated': bool(allow_demo_translation)}
                         if not allow_demo_translation:
-                            return False, '程序候选与模拟盘报价偏离，禁止平移价格计划，等待重新采集'
+                            strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': None, 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'demo_price_divergence', 'details': divergence_details, 'at': time.time()})
+                            return False, f'程序候选与模拟盘报价偏离 {divergence:.1%}，禁止平移价格计划，等待重新采集'
                         scale = demo_last / price
                         prec = len(str(demo_ticker[0]["last"]).split(".")[1]) if "." in str(demo_ticker[0]["last"]) else 4
                         effective_px = round(price * scale, prec)
                         effective_tp = round(tp_px * scale, prec)
                         effective_sl = round(sl_px * scale, prec)
+                        demo_translation = divergence_details
                         # Re-verify boundary constraints for demo sandbox
                         if pos_side == "long":
                             if effective_sl >= effective_px:
@@ -708,7 +714,13 @@ def submit_protected_limit_order(inst_id: str, side: str, pos_side: str, size: f
             budget=risk_budget_usdt, decision_id=decision_id, decision_at=decision_at, horizon=horizon, execution_mode='maker_first' if maker_first else 'limit')
     except Exception as exc:
         reason = f"Final risk preflight rejected: {type(exc).__name__}: {exc}"
-        strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': None, 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'preflight_rejected', 'details': {'error_type': type(exc).__name__, 'message': str(exc)[:500]}, 'at': time.time()})
+        rejection_details = {'error_type': type(exc).__name__, 'message': str(exc)[:500]}
+        if demo_translation:
+            # Separate demo-sandbox price translation failures from strategy
+            # rejections so DEMO validation statistics are not misread.
+            rejection_details['demo_translation'] = demo_translation
+            reason += f" (模拟盘价格平移 {demo_translation['divergence']:.1%} 后被拒)"
+        strategy_evidence.best_effort(env.identity, 'entry_rejection', {'instrument': inst_id, 'decision_id': decision_id, 'candidate_id': None, 'action': 'BUY_LONG' if pos_side == 'long' else 'SELL_SHORT', 'reason': 'demo_translation_preflight_rejected' if demo_translation else 'preflight_rejected', 'details': rejection_details, 'at': time.time()})
         return False, reason
     plan['entry_execution_mode']='maker_first' if maker_first else 'limit_fallback_only'
     plan['maker_price']=maker_px if maker_first else None

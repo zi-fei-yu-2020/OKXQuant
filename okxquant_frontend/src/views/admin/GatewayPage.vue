@@ -14,6 +14,7 @@ import { useApi } from '../../composables/useApi'
 import { Zap, RefreshCw, RotateCcw, Server, Clock, AlertTriangle } from 'lucide-vue-next'
 
 const { api } = useApi()
+const { prompt } = useDialogs()
 const gw = ref<any>(null)
 const loading = ref(true)
 const loadFailed = ref(false)
@@ -67,8 +68,6 @@ function statusColor(s: string) {
 }
 
 onMounted(load)
-
-const { prompt } = useDialogs()
 </script>
 
 <template>
@@ -86,9 +85,7 @@ const { prompt } = useDialogs()
       </AppCard>
       <!-- Worker & Stats Cards -->
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <AppCard
-          class="rounded-xl border p-4 shadow-xs transition-colors"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="p-4"
         >
           <div
             class="flex items-center space-x-2 text-xs font-sans mb-2"
@@ -106,9 +103,7 @@ const { prompt } = useDialogs()
             PID {{ gw.pid || '--' }} · v{{ gw.version }}
           </div>
         </AppCard>
-        <AppCard
-          class="rounded-xl border p-4 shadow-xs transition-colors"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="p-4"
         >
           <div
             class="flex items-center space-x-2 text-xs font-sans mb-2"
@@ -124,9 +119,7 @@ const { prompt } = useDialogs()
             待处理 {{ gw.stats?.pending ?? 0 }} · 重试 {{ gw.stats?.retry ?? 0 }}
           </div>
         </AppCard>
-        <AppCard
-          class="rounded-xl border p-4 shadow-xs transition-colors"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="p-4"
         >
           <div
             class="flex items-center space-x-2 text-xs font-sans mb-2"
@@ -148,9 +141,7 @@ const { prompt } = useDialogs()
             {{ gw.event_health?.critical_failed ?? 0 }}
           </div>
         </AppCard>
-        <AppCard
-          class="rounded-xl border p-4 shadow-xs transition-colors"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="p-4"
         >
           <div
             class="flex items-center space-x-2 text-xs font-sans mb-2"
@@ -173,7 +164,7 @@ const { prompt } = useDialogs()
       <AppCard v-if="gw.manual_requests?.length" class="p-4 space-y-3" data-manual-review-requests>
         <h2 class="text-sm font-semibold">手动复盘请求</h2>
         <p class="text-xs" style="color:var(--text-muted)">排队与完成状态来自后台任务记录；完成复盘不代表发布运行记忆。</p>
-        <div class="table-scroll-container overflow-x-auto">
+        <div class="table-scroll-container">
           <table class="w-full text-xs text-left"><thead><tr><th class="p-2">请求</th><th class="p-2">状态</th><th class="p-2">申请人</th><th class="p-2">创建 / 完成</th></tr></thead>
           <tbody><tr v-for="request in gw.manual_requests" :key="request.request_id"><td class="p-2 num-tabular">#{{ request.request_id }}</td><td class="p-2">{{ request.status === 'pending' || request.status === 'queued' ? '排队中' : request.status === 'running' ? '运行中' : request.status === 'success' ? '已完成' : request.status === 'failed' ? '失败' : '待核验' }}</td><td class="p-2">{{ request.actor || '—' }}</td><td class="p-2 whitespace-nowrap">{{ request.created_at }} / {{ request.finished_at || '—' }}</td></tr></tbody></table>
         </div>
@@ -181,9 +172,7 @@ const { prompt } = useDialogs()
 
       <!-- Scheduler Jobs -->
       <AppCard
-        v-if="gw.scheduler?.jobs?.length"
-        class="rounded-xl border overflow-hidden shadow-xs"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        v-if="gw.scheduler?.jobs?.length" class="overflow-hidden"
       >
         <div
           class="px-4 py-3 border-b flex items-center justify-between"
@@ -245,9 +234,7 @@ const { prompt } = useDialogs()
       </AppCard>
 
       <!-- Deliveries -->
-      <AppCard
-        class="rounded-xl border overflow-hidden shadow-xs"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="overflow-hidden"
       >
         <div
           class="px-4 py-3 border-b flex items-center justify-between"
@@ -261,7 +248,7 @@ const { prompt } = useDialogs()
               事件投递队列 (最近 50 条)
             </h2>
             <span
-              class="text-xs font-sans px-2 py-0.2 rounded border font-bold"
+              class="text-xs font-sans px-2 py-0.5 rounded border font-bold"
               style="
                 background-color: var(--color-brand-bg);
                 color: var(--color-brand);

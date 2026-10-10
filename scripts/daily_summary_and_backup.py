@@ -73,6 +73,8 @@ def generate_daily_briefing_and_backup():
         except Exception:
             pass
 
+    from scripts.statistics_epoch import filter_rows
+    trades=filter_rows(trades,scope=environment.identity,data_dir=DATA_DIR,keep_active=False)
     stats = today_lifecycle_stats(scoped_rows(trades, environment.identity), date_str, reset_time_str)
     closed_today = stats["settled_rows"]
     win_count, loss_count = stats["win_trades"], stats["loss_trades"]

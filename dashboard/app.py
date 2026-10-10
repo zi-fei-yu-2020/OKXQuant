@@ -148,7 +148,8 @@ def _public_monitoring_snapshot(snapshot):
     from scripts.runtime_features import status as feature_status
     data["runtime_features"]=feature_status()
     data["trades"] = [_public_trade_row(row) for row in (data.get("trades") or [])]
-    data["ai_brain_history"] = [_public_history_row(row) for row in (data.get("ai_brain_history") or [])]
+    from scripts.decision_history import today_records
+    data["ai_brain_history"] = [_public_history_row(row) for row in today_records(data.get("ai_brain_history") or [])]
     data["factors"] = [
         {key: value for key, value in row.items() if key != "ai_last_prompt"}
         if isinstance(row, dict) else row
@@ -320,6 +321,9 @@ def _read_horizon_stats(scope=None):
         with open(os.path.join(DATA_DIR,"horizon_stats.json"),encoding="utf8") as handle:value=json.load(handle)
         if not isinstance(value,dict) or value.get("scope")!=scope:value={}
     except (OSError,ValueError,TypeError):value={}
+    from scripts.statistics_epoch import epoch
+    window=epoch(scope,DATA_DIR)
+    if window and value.get('statistics_epoch_id')!=window['id']:value={}
     try:return {**value,**read_periods(LEDGER_JSON_FILE,scope)}
     except (OSError,ValueError,TypeError):return {"scope":scope,"error":"statistics_unavailable","periods":{}}
 
@@ -1355,6 +1359,8 @@ def _update_cache_cycle():
         try:
             with open(REPORT_JSON_FILE, "r", encoding="utf-8") as f:
                 review_data = json.load(f)
+            from scripts.statistics_epoch import report_in_epoch
+            review_data=report_in_epoch(review_data,environment.identity,DATA_DIR)
         except Exception:
             pass
 
@@ -1370,7 +1376,8 @@ def _update_cache_cycle():
                     # Filter strictly >= reset_time
                     for s in snaps:
                         s_time = str(s.get("time", ""))
-                        if s_time >= reset_time_str:
+                        from scripts.statistics_epoch import owner
+                        if s_time >= reset_time_str and owner(s)==environment.identity:
                             t_eq = float(s.get("total_eq", s.get("equity", initial_capital_val)) or initial_capital_val)
                             pnl_v = round(t_eq - initial_capital_val, 2)
                             roi_v = round((pnl_v / initial_capital_val * 100), 2)
@@ -1726,6 +1733,7 @@ def monitoring_snapshot():
             "initializing": True,
             "data_health": {"status": "OFFLINE", "partial": True, "errors": [], "refreshing": True},
             "account": {}, "positions_summary": {"items": [], "total": 0},
+            "statistics_epoch": __import__('scripts.statistics_epoch',fromlist=['public_epoch']).public_epoch(environment.identity,DATA_DIR),
             "pending_orders": [], "factors": [], "trades": [], "logs": [],
         }
     # Copy only envelopes; never mutate the cached snapshot while serving it.
@@ -1760,6 +1768,9 @@ def monitoring_snapshot():
         return {"timestamp":"","okx_environment":current.mode,"account_source_id":current.identity,
                 "initializing":True,"data_health":{"status":"OFFLINE","partial":True,"refreshing":True,"errors":["account_changed_during_read"]},
                 "account":{},"positions_summary":{"items":[],"total":0},"pending_orders":[],"factors":[],"trades":[],"logs":[],"horizon_stats":{}}
+    from scripts.statistics_epoch import project_snapshot, epoch
+    if epoch(environment.identity,DATA_DIR):
+        return project_snapshot(data,_read_ledger_rows(),environment.identity,DATA_DIR)
     return data
 
 
@@ -1786,7 +1797,8 @@ async def get_trades(limit: int = 30, offset: int = 0, state: str = "all", q: st
         return not query or any(query in str(row.get(key) or "").casefold() for key in ("instId","inst","strategy","exit_reason"))
     rows=[row for row in rows if matches(row)]
     return JSONResponse(public_payload({"items":[_public_trade_row(row) for row in rows[offset:offset+limit]],
-        "total":len(rows),"counts":counts,"limit":limit,"offset":offset,"state":state,"q":q[:128],"account_source_id":scope}),headers={"Cache-Control":"no-store"})
+        "total":len(rows),"counts":counts,"limit":limit,"offset":offset,"state":state,"q":q[:128],"account_source_id":scope,
+        "statistics_epoch":__import__('scripts.statistics_epoch',fromlist=['public_epoch']).public_epoch(scope,DATA_DIR)}),headers={"Cache-Control":"no-store"})
 
 
 @app.get("/api/trades/{trade_id}")
@@ -1815,16 +1827,21 @@ async def get_ai_last_prompt():
 
 
 @app.get("/api/ai/history")
-async def get_ai_history(limit: int = 25, offset: int = 0):
-    limit = min(100, max(1, int(limit)))
+async def get_ai_history(limit: int = 25, offset: int = 0, today_only: bool = False):
+    limit = min(512 if today_only else 100, max(1, int(limit)))
     offset = max(0, int(offset))
     from scripts.okx_runtime import selected_environment
     scope=selected_environment().identity
     rows = _read_ai_history_records(scope)
+    from scripts.decision_history import today_records, current_day
+    history_now=time.time()
+    if today_only:
+        rows = today_records(rows,now=history_now)
     return JSONResponse(public_payload({
         "account_source_id":scope,
         "items": [_public_history_row(row) for row in rows[offset:offset + limit]],
         "total": len(rows), "limit": limit, "offset": offset,
+        "day": current_day(history_now) if today_only else None, "timezone": "Asia/Shanghai",
     }), headers={"Cache-Control": "no-store"})
 
 

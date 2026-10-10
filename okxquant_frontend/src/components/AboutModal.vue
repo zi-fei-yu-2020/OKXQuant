@@ -44,7 +44,7 @@ async function copyToClipboard(text: string, targetName: string) {
         }
       "
       ><div
-        class="dialog-content p-5 sm:p-6 space-y-4 font-mono text-xs animate-scale-up my-auto"
+        class="p-5 sm:p-6 space-y-4 font-mono text-xs my-auto"
         style="
           background-color: var(--bg-card);
           border-color: var(--border-subtle);
@@ -74,7 +74,7 @@ async function copyToClipboard(text: string, targetName: string) {
               >
                 <span>OKXQuant</span>
                 <span
-                  class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold border"
+                  class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border"
                   style="
                     background-color: var(--color-brand-bg);
                     color: var(--color-brand);

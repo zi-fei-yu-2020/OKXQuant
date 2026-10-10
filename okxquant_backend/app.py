@@ -1598,9 +1598,6 @@ def admin_test_interceptors(payload: InterceptorTestRequest, x_okxquant_session:
     from okxquant_backend.interceptor_manager import run_sandbox_test
     return run_sandbox_test(payload.scenario)
 
-    audit_record("llm.model.delete", "success", {"actor": actor["username"], "provider_id": provider_id, "model_id": model_id})
-    return {"deleted": True, "provider_id": provider_id, "model_id": model_id}
-
 
 class ManualReviewRequest(BaseModel):
     confirmation: str = Field(min_length=1, max_length=80)
@@ -1727,7 +1724,7 @@ def admin_instrument_support(environment: str | None = None, x_okxquant_admin_to
 @app.post("/api/v1/admin/instruments")
 def add_admin_instrument(payload: InstrumentAddRequest, x_okxquant_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
     refresh_settings()
-    require_admin_header(x_okxquant_admin_token)
+    require_superadmin()
     inst_id = payload.inst_id.upper()
     current = load_instruments()
     if any(item["instId"] == inst_id for item in current):
@@ -1753,7 +1750,7 @@ def add_admin_instrument(payload: InstrumentAddRequest, x_okxquant_admin_token: 
 @app.delete("/api/v1/admin/instruments/{inst_id}")
 def delete_admin_instrument(inst_id: str, payload: InstrumentDeleteRequest, x_okxquant_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
     refresh_settings()
-    require_admin_header(x_okxquant_admin_token)
+    require_superadmin()
     inst_id = inst_id.upper()
     if payload.confirmation.strip().upper() != f"REMOVE {inst_id}":
         raise HTTPException(status_code=400, detail=f"确认短语必须精确为：REMOVE {inst_id}")
@@ -1803,7 +1800,7 @@ def admin_update_status(x_okxquant_admin_token: str | None = Header(default=None
 @app.post("/api/v1/admin/update")
 def update_application(payload: UpdateRequest, x_okxquant_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
     refresh_settings()
-    require_admin_header(x_okxquant_admin_token)
+    require_superadmin()
     if payload.confirmation.strip().upper() != "UPDATE OKXQUANT":
         raise HTTPException(status_code=400, detail="确认短语必须精确为：UPDATE OKXQuant")
     if os.getenv("OKXQUANT_DEPLOYMENT_MODE", "").strip().lower() == "docker":
@@ -2555,7 +2552,7 @@ def backup_status(x_okxquant_admin_token: str | None = Header(default=None)) -> 
 @app.post("/api/v1/admin/backups/run")
 def run_backup(payload: BackupRequest, x_okxquant_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
     refresh_settings()
-    require_admin_header(x_okxquant_admin_token)
+    require_superadmin()
     if payload.confirmation.strip().upper() != "BACKUP OKXQUANT":
         raise HTTPException(status_code=400, detail="确认短语必须精确为：BACKUP OKXQuant")
     script = SCRIPTS_DIR / "nightly_backup_and_clean.py"
@@ -2820,6 +2817,8 @@ def cache(resource: str, x_okxquant_admin_token: str | None = Header(default=Non
         from scripts.dashboard_stats import scoped_rows
         from scripts.okx_runtime import selected_environment
         payload = scoped_rows(payload, selected_environment().identity)
+        from scripts.statistics_epoch import filter_rows
+        payload = filter_rows(payload,scope=selected_environment().identity,data_dir=DATA_DIR)
     if resource in {'decisions','self-improvement','horizon-stats'}:
         from scripts.okx_runtime import selected_environment
         scope=selected_environment().identity
@@ -2827,11 +2826,17 @@ def cache(resource: str, x_okxquant_admin_token: str | None = Header(default=Non
             from scripts.horizon_stats import rebuild
             from scripts.dashboard_stats import scoped_rows
             cached=payload if isinstance(payload,dict) else {}
+            from scripts.statistics_epoch import epoch
+            window=epoch(scope,DATA_DIR)
+            if window and cached.get('statistics_epoch_id')!=window['id']:cached={}
             payload=rebuild(scoped_rows(read_json('trading_ledger.json',[]),scope),scope=scope)
             for key in ('funnel','allocation'):
                 if isinstance(cached,dict) and cached.get('scope')==scope and key in cached:payload[key]=cached[key]
         else:
             payload=_scoped_cached_payload(payload,scope)
+            if resource=='self-improvement':
+                from scripts.statistics_epoch import report_in_epoch
+                payload=report_in_epoch(payload,scope,DATA_DIR)
     return JSONResponse(payload,headers={'Cache-Control':'no-store'})
 
 
@@ -2841,8 +2846,8 @@ app.include_router(chart_market_router)
 
 @app.get("/api/v1/market/{inst_id}")
 def market(inst_id: str) -> dict[str, Any]:
-    if not inst_id.endswith("-SWAP"):
-        raise HTTPException(status_code=400, detail="only SWAP instrument ids are accepted")
+    if not re.fullmatch(r"[A-Z0-9]{1,24}-USDT-SWAP", inst_id):
+        raise HTTPException(status_code=400, detail="only USDT SWAP instrument ids are accepted")
     try:
         ticker = okx.ticker(inst_id)
         return {"instId": inst_id, "ticker": ticker[0] if ticker else {}, "source": "OKX REST"}

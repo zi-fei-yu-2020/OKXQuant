@@ -52,9 +52,7 @@ onMounted(load)
   <div class="space-y-4 max-w-[2160px] mx-auto">
     <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading" @click="load()">重试</button></div>
     <!-- Toolbar -->
-    <AppCard
-      class="rounded-xl border p-3 flex items-center gap-3 shadow-xs transition-colors"
-      style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+    <AppCard class="p-3 flex items-center gap-3"
     >
       <div
         class="flex items-center space-x-2 flex-1 rounded-lg px-3 py-2 border transition-colors"
@@ -82,9 +80,7 @@ onMounted(load)
     </AppCard>
 
     <!-- Audit Rows -->
-    <AppCard
-      class="rounded-xl border overflow-hidden shadow-xs"
-      style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+    <AppCard class="overflow-hidden"
     >
       <div
         class="px-4 py-3 border-b flex items-center justify-between"
@@ -167,7 +163,7 @@ onMounted(load)
         }
       "
       ><div
-        class="dialog-content p-5 sm:p-6 transition-colors"
+        class="transition-colors"
         style="background-color: var(--bg-card); border-color: var(--border-subtle)"
       >
         <h3 class="text-sm font-bold mb-3 font-sans" style="color: var(--text-main)">

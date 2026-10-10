@@ -92,7 +92,7 @@ def append_ai_history(record: Dict[str, Any]) -> None:
         except (OSError, ValueError, TypeError):
             history_list = []
     history_list.insert(0, record)
-    atomic_write_json(AI_DECISION_HISTORY_FILE, history_list[:50])
+    atomic_write_json(AI_DECISION_HISTORY_FILE, history_list[:512])
 
 
 def single_brain_cycle(func):
@@ -1200,6 +1200,11 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
         else:
             code = getattr(e, 'status_code', None) or getattr(e, 'code', None)
             LAST_INFERENCE_ERROR = ('模型输出契约不合格：' + str(e)) if isinstance(e, trading_prompt.ContractError) else (f'模型接口 HTTP {code}' if code else type(e).__name__)
+        try:
+            failed_environment = locals().get('cycle_environment') or market._selected()
+            wait_audit.record_failure(failed_environment.identity, frame_id=time_str, reason=LAST_INFERENCE_ERROR)
+        except Exception:
+            print('[WAIT Audit] Failed to persist failed-cycle continuity; no decision authorized')
         # Persist AFTER building the full reason; UI, logs and audit see the same failure.
         atomic_write_json(os.path.join(DATA_DIR, 'trading_output_validation.json'),
             {'status':'rejected','contract_version':trading_prompt.VERSION,'reason':LAST_INFERENCE_ERROR,
@@ -1230,8 +1235,8 @@ def execute_batch_ai_brain_cycle(pos_summary: str = "当前总持仓 0/6", activ
             append_ai_history(failure_record)
         except (OSError, ValueError, TypeError):
             print('[AI Brain Batch] Failed to persist inference failure history')
-        if observed_response is None:telemetry.finish('failed',error=e)
-        else:telemetry.finish('failed',observed_response,error=e)
+        if observed_response is None:telemetry.finish('failed',error=e,output_chars=json_report.get('output_chars',0))
+        else:telemetry.finish('failed',observed_response,error=e,output_chars=json_report.get('output_chars',0))
         print(f'[AI Brain Batch] Error in batch inference: {LAST_INFERENCE_ERROR}')
         return None
 

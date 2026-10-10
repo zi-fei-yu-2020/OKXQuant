@@ -53,7 +53,8 @@ CANCEL 仅针对当前确实存在的指定挂单，并给出当前失效证据�
 
 【输出与审计纪律】
 只输出遵守 trading-evidence-v1 的 JSON 对象，包含 contract_version、macro_assessment、position_management、pending_orders_management、decisions。
-输出必须紧凑：不得输出思维过程、Markdown 或复述输入；macro_assessment 不超过 600 字，每个 reason、summary_reason、interpretation、uncertainty 不超过 120 字；每个方向只保留满足契约所需的 2~4 条最强证据。
+输出必须紧凑：不得输出思维过程、Markdown 或复述输入；macro_assessment 不超过 600 字，每个 reason、summary_reason、interpretation、uncertainty 不超过 120 字；开仓支持证据仍须至少2条、满足不同审计组要求；WAIT 每个方向通常给1条关键证据，确有必要再给第2条，避免重复堆砌。
+使用标准 JSON 双引号并转义字符串内引号，不使用注释或尾逗号。每个对象的字段只能出现一次，每个标的只输出一个决策，不重复拷贝模板或重审条件。
 覆盖输入标的；字段引用必须来自输入 facts，且 value 与该引用一致，不能引用其他标的或其他周期的数值冒充当前证据。
 无效候选降级 WAIT；无证据的持仓调整降级 HOLD，无证据撤单降级 KEEP。不要尝试替换输出契约。
 """
@@ -112,6 +113,23 @@ def output_schema():
 PROTECTED_TITLES = {'角色与权责','层级与信任边界','证据与不确定性','候选审查顺序','开仓与价格几何','持仓与挂单管理','输出与审计纪律','三重滤网裁决协议','推演与决策任务'}
 
 class ContractError(ValueError): pass
+
+
+class DuplicateJSONKeyError(ContractError):
+    def __init__(self, path):
+        # Only contract property names and public instrument IDs may enter diagnostics.
+        known = set()
+        def keys(node):
+            if isinstance(node, dict):
+                known.update((node.get('properties') or {}).keys())
+                for value in node.values(): keys(value)
+            elif isinstance(node, list):
+                for value in node: keys(value)
+        keys(output_schema())
+        safe = [str(k) if isinstance(k, int) or k in known or re.fullmatch(r'[A-Z0-9]{2,15}-USDT-SWAP', str(k)) else '_unrecognized_field' for k in path]
+        pointer = '/' + '/'.join(k.replace('~', '~0').replace('/', '~1') for k in safe)
+        self.diagnostics = {'category': 'duplicate_json_key', 'json_path': pointer[:400]}
+        super().__init__('Duplicate JSON key: ' + pointer[:400])
 
 
 class TruncatedResponseError(ContractError):
@@ -406,18 +424,23 @@ def parse_response(content):
     content=content.lstrip('\ufeff')
     match=re.fullmatch(r'\s*```(?:json)?\s*([\s\S]*?)\s*```\s*',content,flags=re.IGNORECASE)
     if match:content=match[1]
-    def pairs(items):
-        result={}
-        for key,value in items:
-            if key in result:raise ContractError('Duplicate JSON key')
-            result[key]=value
-        return result
+    class Pairs(list): pass
+    def unique(value, path=()):
+        if isinstance(value, Pairs):
+            result = {}
+            for key, item in value:
+                if key in result: raise DuplicateJSONKeyError((*path, key))
+                result[key] = unique(item, (*path, key))
+            return result
+        if isinstance(value, list):
+            return [unique(item, (*path, index)) for index, item in enumerate(value)]
+        return value
     def invalid(value):raise ContractError('Non-finite JSON number')
     def finite_float(value):
         result=float(value)
         if not math.isfinite(result):raise ContractError('Non-finite JSON number')
         return result
-    try:obj=json.loads(content,object_pairs_hook=pairs,parse_constant=invalid,parse_float=finite_float)
+    try:obj=unique(json.loads(content,object_pairs_hook=Pairs,parse_constant=invalid,parse_float=finite_float))
     except ContractError:raise
     except json.JSONDecodeError as exc:
         # Only classify failures that are demonstrably at the response tail as
@@ -429,7 +452,10 @@ def parse_response(content):
             "Expecting ':' delimiter",
         }
         error_type=TruncatedResponseError if exc.msg=='Unterminated string starting at' or tail_error else ContractError
-        raise error_type(f'JSON语法错误（第{exc.lineno}行，第{exc.colno}列，位置{exc.pos}）：{exc.msg}') from exc
+        failure=error_type(f'JSON语法错误（第{exc.lineno}行，第{exc.colno}列，位置{exc.pos}）：{exc.msg}')
+        failure.diagnostics={'category':'invalid_json_syntax','json_line':exc.lineno,'json_column':exc.colno,
+                             'json_offset':exc.pos,'near_output_tail':len(stripped)-exc.pos<=16}
+        raise failure from exc
     except (ValueError,RecursionError) as exc:raise ContractError('JSON结构过深或数值不合法') from exc
     if not isinstance(obj,dict):raise ContractError('Response root must be an object')
     return obj

@@ -16,6 +16,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const isRefreshing = ref<boolean>(false)
   const error = ref<string | null>(null)
   const lastUpdated = ref<Date | null>(null)
+  const consecutiveRefreshFailures = ref(0)
   const isConnected = ref<boolean>(true)
   const pollingTimer = ref<any>(null)
   const showAboutModal = ref<boolean>(false)
@@ -147,7 +148,9 @@ export const useDashboardStore = defineStore('dashboard', () => {
 
       const retain = sameScope && observedNumber(previous?.account?.total_eq) !== null &&
         (json.initializing === true || observedNumber(json.account.total_eq) === null)
-      const next = retain ? { ...previous!, initializing: true, is_stale: true,
+      const sameStatistics = previous?.statistics_epoch?.id === json.statistics_epoch?.id
+      const retained = sameStatistics ? previous! : { ...json, risk_status: json.risk_status || previous?.risk_status, positions_summary: previous?.positions_summary || json.positions_summary, pending_orders: previous?.pending_orders || json.pending_orders, account: { ...(previous?.account || json.account), initial_capital: json.statistics_epoch?.initial_capital, cum_net_pnl: null, cum_roi_pct: null, cum_realized_pnl: null, cum_total_fees: null } }
+      const next = retain ? { ...retained, initializing: true, is_stale: true,
         data_health: { ...json.data_health, status: 'STALE' as const, partial: true } } : json
 
       // On same scope, restore verified prompt cache if available
@@ -162,10 +165,12 @@ export const useDashboardStore = defineStore('dashboard', () => {
       data.value = sameScope ? shareSnapshot(previous, next) : next
       if (!retain) lastUpdated.value = new Date()
       isConnected.value = true
+      consecutiveRefreshFailures.value = retain || json.data_health?.status === 'OFFLINE' ? consecutiveRefreshFailures.value + 1 : 0
       error.value = null
     } catch (err: any) {
       if (generation !== refreshGeneration || session !== getSessionToken()) return
       console.error('[DashboardStore] fetch failed:', err)
+      consecutiveRefreshFailures.value += 1
       error.value = err.message || '获取数据失败'
       isConnected.value = false
     } finally {
@@ -267,6 +272,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     isRefreshing,
     error,
     lastUpdated,
+    consecutiveRefreshFailures,
     isConnected,
     account,
     positions,

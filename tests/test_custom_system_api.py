@@ -59,6 +59,16 @@ class CustomSystemApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()["valid"])
 
+    def test_code_update_backup_run_and_instrument_pool_require_superadmin(self):
+        for method, path, body in (
+            ("post", "/api/v1/admin/update", {"confirmation": "UPDATE OKXQUANT"}),
+            ("post", "/api/v1/admin/backups/run", {"confirmation": "BACKUP OKXQUANT"}),
+            ("post", "/api/v1/admin/instruments", {"inst_id": "XRP-USDT-SWAP"}),
+            ("delete", "/api/v1/admin/instruments/XRP-USDT-SWAP", {"confirmation": "REMOVE XRP-USDT-SWAP"}),
+        ):
+            response = self.client.request(method.upper(), path, headers=self.operator, json=body)
+            self.assertEqual(response.status_code, 403, path)
+
     def test_backup_job_lifecycle_and_rbac(self):
         self.assertEqual(self.client.post("/api/v1/admin/backup-jobs", headers=self.operator, json={"name": "denied"}).status_code, 403)
         created = self.client.post("/api/v1/admin/backup-jobs", headers=self.root, json={"name": "午间灾备", "source_id": "nightly-default"})

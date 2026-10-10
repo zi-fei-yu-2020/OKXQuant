@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
 test('connection status text keeps the calibrated semantic contrast', () => {
-  const page = readFileSync(new URL('../src/views/admin/LlmPage.vue', import.meta.url), 'utf8')
+  const page = readFileSync(new URL('../src/components/llm/LlmModelList.vue', import.meta.url), 'utf8')
   const status = page.match(/<span\s+class="([^"]*)"\s*>状态:/)
   assert.ok(status, 'model connection status label exists')
   assert.doesNotMatch(status[1], /opacity-/)
@@ -68,6 +68,10 @@ test('HTML body cannot override the selected theme with fixed dark colors', () =
 })
 
 test('model status and capability colors must not use dark-only pastel literals', () => {
-  const modelPage = readFileSync(new URL('../src/views/admin/LlmPage.vue', import.meta.url), 'utf8')
-  assert.doesNotMatch(modelPage, /#(?:818cf8|f472b6|60a5fa|10b981|f87171|f59e0b)/i)
+  const sources = ['views/admin/LlmPage.vue', 'components/llm/LlmProviderList.vue', 'components/llm/LlmProviderConfig.vue',
+    'components/llm/LlmModelList.vue', 'components/llm/LlmFetchModelsDialog.vue', 'components/llm/LlmModelDialog.vue', 'components/llm/llmDisplay.ts']
+  for (const path of sources) {
+    const source = readFileSync(new URL('../src/' + path, import.meta.url), 'utf8')
+    assert.doesNotMatch(source, /#(?:818cf8|f472b6|60a5fa|10b981|f87171|f59e0b|2563eb)/i, path)
+  }
 })

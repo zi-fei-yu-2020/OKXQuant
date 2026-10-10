@@ -20,3 +20,15 @@ export function monitorConnectionLabel(data: any, error: unknown, isStale: boole
   if (error || !hasAccount || isStale) return '账户数据更新延迟'
   return '数据已更新'
 }
+
+/** Quiet polling is a presentation policy, never a change to backend freshness/risk. */
+export function monitorPresentation(data: any, error: unknown, isStale: boolean, failures = 0) {
+  const detail = monitorConnectionLabel(data, error, isStale)
+  if (data?.risk_status?.daily_blocked === true) return { label: detail, tone: 'warning' as const, detail, critical: true }
+  const value = data?.account?.total_eq
+  const hasAccount = (typeof value === 'number' || typeof value === 'string' && value.trim() !== '') && Number.isFinite(Number(value))
+  const age = Number(data?.data_health?.cache_age_seconds)
+  const critical = !!data && !hasAccount && !data?.initializing || failures >= 4 || Number.isFinite(age) && age > 120
+  return { label: critical ? '监控数据待核对' : '数据状态', tone: critical ? 'warning' as const : 'neutral' as const,
+    detail: data?.initializing && !hasAccount ? '后台正在获取首份账户数据' : detail, critical }
+}

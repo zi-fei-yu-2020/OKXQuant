@@ -61,3 +61,18 @@ test('module editor title and actions can wrap within a narrow panel', () => {
   assert.match(source, /data-prompt-module/)
   for (const name of ['header','title','actions']) assert.match(source, new RegExp(`\\.prompt-module__${name}\\s*\\{[^}]*flex-wrap: wrap`))
 })
+
+test('filled primary/danger buttons use theme tokens with AA contrast for white text', () => {
+  const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
+  const light = css.match(/:root\s*\{([\s\S]*?)\}/)[1]
+  const dark = css.match(/:root\[data-theme=['"]dark['"]\]\s*\{([\s\S]*?)\}/)[1]
+  const channel = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4 }
+  const lum = (hex) => { const [r, g, b] = hex.slice(1).match(/../g).map((x) => channel(parseInt(x, 16))); return 0.2126 * r + 0.7152 * g + 0.0722 * b }
+  for (const block of [light, dark]) for (const name of ['button-primary', 'button-danger']) {
+    const hex = block.match(new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, 'i'))?.[1]
+    assert.ok(hex, name)
+    assert.ok(1.05 / (lum(hex) + 0.05) >= 4.5, `${name} ${hex} white-text contrast`)
+  }
+  assert.match(css, /\.ui-button--primary\s*\{[^}]*background:\s*var\(--button-primary\)/)
+  assert.doesNotMatch(css, /\.ui-button--(?:primary|danger)\s*\{[^}]*background:\s*#/)
+})

@@ -40,7 +40,7 @@ async function loadDecisions() {
     shadow.value = res.scenario_shadow
     audit.value = res.wait_audit
     cycle.value = res.decision_cycle
-    await fetchLogStream('trader')
+    void fetchLogStream('trader')
   } catch (e: any) {
     if (e?.silent) return
     loadFailed.value = true
@@ -107,9 +107,7 @@ onMounted(() => {
       </details>
     </AppCard>
     <!-- 3-Way Log Streams -->
-    <AppCard
-      class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
-      style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+    <AppCard class="p-4 sm:p-5"
     >
       <div
         class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 mb-3 border-b"

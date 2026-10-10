@@ -46,7 +46,7 @@ class DashboardRefreshTests(unittest.TestCase):
         cached={
             **self.snapshot(),
             'ai_last_prompt':'FULL PROMPT' * 1000,
-            'ai_brain_history':[{'time':'x','status':'failed','failure_reason':'request timeout',
+            'ai_brain_history':[{'time':__import__('scripts.decision_history',fromlist=['current_day']).current_day()+' 00:00:00','status':'failed','failure_reason':'request timeout',
                                  'model_failure':{'category':'request_timeout','attempts':1},
                                  'ai_last_prompt':'HISTORIC PROMPT' * 1000,'macro_assessment':'summary',
                                  'council_transcript':{'advisors':{'risk':{'role_name':'risk','content':'FULL TRANSCRIPT' * 1000}}}}],

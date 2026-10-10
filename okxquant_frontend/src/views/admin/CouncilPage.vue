@@ -93,12 +93,17 @@ const roleIcons: Record<string, any> = {
   custom: Sliders,
 }
 
-const roleColors: Record<string, string> = {
-  trader_trend: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
-  trader_momentum: 'text-amber-400 border-amber-500/30 bg-amber-500/10',
-  trader_quant: 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10',
-  cio: 'text-purple-400 border-purple-500/30 bg-purple-500/10',
-  custom: 'text-blue-400 border-blue-500/30 bg-blue-500/10',
+// Semantic tones resolve correctly in both light and dark themes.
+const roleTones: Record<string, string> = {
+  trader_trend: 'up',
+  trader_momentum: 'warn',
+  trader_quant: 'blue',
+  cio: 'purple',
+  custom: 'brand',
+}
+function roleToneStyle(roleId: string | number) {
+  const tone = roleTones[String(roleId)] || roleTones.custom
+  return { color: `var(--color-${tone})`, borderColor: `var(--color-${tone}-border)`, backgroundColor: `var(--color-${tone}-bg)` }
 }
 
 async function loadData() {
@@ -288,7 +293,7 @@ const toast = useToast()
 
     <!-- 1. Top Control Station: Switch, Consensus Mode & Actions -->
     <div
-      class="ui-panel rounded-2xl border p-4 sm:p-5 shadow-xs space-y-4"
+      class="ui-panel border p-4 sm:p-5 shadow-xs space-y-4"
       style="background-color: var(--bg-card); border-color: var(--border-subtle)"
     >
       <!-- Header row -->
@@ -368,8 +373,7 @@ const toast = useToast()
           <button
             @click="saveConfig"
             :disabled="(saving || !auth.isSuperadmin) || actionBusy || !canManage"
-            class="ui-action ui-action--sm"
-            style="background-color: var(--text-main); color: var(--bg-card)"
+            class="ui-button ui-button--primary ui-button--sm"
           >
             <Save class="w-3.5 h-3.5" />
             <span>{{ saving ? '保存中...' : '保存配置' }}</span>
@@ -413,7 +417,7 @@ const toast = useToast()
               mode.name
             }}</span>
             <span
-              class="text-xs px-1.5 py-0.2 rounded font-sans border font-bold"
+              class="text-xs px-1.5 py-0.5 rounded font-sans border font-bold"
               :style="
                 councilConfig.consensus_mode === mode.id
                   ? {
@@ -451,13 +455,7 @@ const toast = useToast()
             type="number"
             min="10"
             max="180"
-            step="5"
-            class="w-16 rounded-lg px-2 py-1 text-sm font-sans outline-none border text-center"
-            style="
-              background-color: var(--bg-input);
-              border-color: var(--border-subtle);
-              color: var(--text-main);
-            "
+            step="5" class="w-16 px-2 py-1 text-center"
             :disabled="(!auth.isSuperadmin) || actionBusy"
           />
           <span class="text-xs font-sans text-[var(--text-muted)]"
@@ -497,7 +495,7 @@ const toast = useToast()
       <div
         v-for="(role, roleId) in councilConfig.roles"
         :key="roleId"
-        class="ui-panel rounded-2xl border p-4 sm:p-5 transition-all shadow-xs"
+        class="ui-panel border p-4 sm:p-5 transition-all shadow-xs"
         :style="{
           backgroundColor: expandedRole === roleId ? 'var(--bg-card-subtle)' : 'var(--bg-card)',
           borderColor:
@@ -511,7 +509,8 @@ const toast = useToast()
           <div class="flex items-center space-x-3 min-w-0 flex-1">
             <span
               class="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm border shrink-0"
-              :class="roleColors[roleId] || roleColors['custom']"
+              :style="roleToneStyle(roleId)"
+              aria-hidden="true"
             >
               <component :is="roleIcons[roleId] || roleIcons['custom']" class="w-4 h-4" />
             </span>
@@ -536,13 +535,13 @@ const toast = useToast()
                 </span>
                 <span
                   v-if="role.is_arbitrator || roleId === 'cio'"
-                  class="text-xs font-sans font-bold px-1.5 py-0.2 rounded border shrink-0 text-purple-400 border-purple-500/30 bg-purple-500/10"
+                  class="text-xs font-sans font-bold px-1.5 py-0.5 rounded border shrink-0 text-purple-400 border-purple-500/30 bg-purple-500/10"
                 >
-                  ⚖️ 终审发单席位
+                  <span aria-hidden="true">⚖️</span> 终审发单席位
                 </span>
                 <span
                   v-else
-                  class="text-xs font-sans px-1.5 py-0.2 rounded border shrink-0"
+                  class="text-xs font-sans px-1.5 py-0.5 rounded border shrink-0"
                   :style="
                     role.enabled !== false
                       ? {
@@ -572,13 +571,7 @@ const toast = useToast()
             <div class="flex items-center space-x-1">
               <span class="text-xs font-sans text-[var(--text-muted)]">模型:</span>
               <select :aria-label="String(roleId) + ' 席位模型'"
-                :value="roleModelValue(role)" @change="bindRoleModel(role, $event)"
-                class="rounded-xl px-2 py-1 text-sm font-sans outline-none border cursor-pointer max-w-[150px]"
-                style="
-                  background-color: var(--bg-input);
-                  border-color: var(--border-subtle);
-                  color: var(--text-main);
-                "
+                :value="roleModelValue(role)" @change="bindRoleModel(role, $event)" class="rounded-xl px-2 py-1 cursor-pointer max-w-[150px]"
                 :disabled="(!auth.isSuperadmin) || actionBusy"
               >
                 <option value="">(继承全局主脑)</option>
@@ -597,13 +590,7 @@ const toast = useToast()
                 type="number"
                 step="0.05"
                 min="0.1"
-                max="1.0"
-                class="w-14 rounded-xl px-1.5 py-1 text-sm font-sans outline-none text-center border"
-                style="
-                  background-color: var(--bg-input);
-                  border-color: var(--border-subtle);
-                  color: var(--text-main);
-                "
+                max="1.0" class="w-14 rounded-xl px-1.5 py-1 text-center"
                 :disabled="(!auth.isSuperadmin) || actionBusy"
               />
             </div>
@@ -643,6 +630,8 @@ const toast = useToast()
               class="ui-icon-button"
               style="color: var(--text-muted)"
               title="展开/收起定制提示词"
+              :aria-expanded="expandedRole === roleId"
+              :aria-label="expandedRole === roleId ? '收起定制提示词' : '展开定制提示词'"
             >
               <ChevronUp v-if="expandedRole === roleId" class="w-4 h-4" />
               <ChevronDown v-else class="w-4 h-4" />
@@ -664,13 +653,7 @@ const toast = useToast()
                 type="number"
                 step="0.05"
                 min="0.0"
-                max="1.0"
-                class="w-16 rounded-lg px-2 py-0.5 text-sm outline-none text-center border"
-                style="
-                  background-color: var(--bg-input);
-                  border-color: var(--border-subtle);
-                  color: var(--text-main);
-                "
+                max="1.0" class="w-16 px-2 py-0.5 text-center"
                 :disabled="(!auth.isSuperadmin) || actionBusy"
               />
               <span class="text-xs text-[var(--text-muted)]">(0.1~0.2 严格理性 / 0.3+ 进取)</span>
@@ -719,13 +702,7 @@ const toast = useToast()
           <!-- Prompt Editor Textarea -->
           <textarea :aria-label="String(roleId) + ' 角色提示词'"
             v-model="role.prompt"
-            rows="6"
-            class="w-full rounded-xl p-3 text-sm font-sans outline-none border leading-relaxed resize-y select-text transition-colors"
-            style="
-              background-color: var(--bg-input);
-              border-color: var(--border-subtle);
-              color: var(--text-main);
-            "
+            rows="6" class="rounded-xl p-3 leading-relaxed resize-y select-text transition-colors"
             :disabled="(!auth.isSuperadmin) || actionBusy"
             placeholder="编写该席位的实战职责、资金/持仓审查规范与作战提案指引..."
           ></textarea>
@@ -736,7 +713,7 @@ const toast = useToast()
     <!-- 3. Live Deliberation Docket & CIO Verdict (Only shown after test run) -->
     <div
       v-if="testResult"
-      class="ui-panel rounded-2xl border p-4 sm:p-5 space-y-4 shadow-lg"
+      class="ui-panel border p-4 sm:p-5 space-y-4 shadow-lg"
       style="background-color: var(--bg-card); border-color: var(--color-brand-border)"
     >
       <div
@@ -866,9 +843,7 @@ const toast = useToast()
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 font-sans text-sm">
             <AppCard
               v-for="(dec, sym) in testResult.brain_output?.decisions"
-              :key="sym"
-              class="p-3 rounded-xl border flex flex-col justify-between space-y-2"
-              style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+              :key="sym" class="p-3 flex flex-col justify-between space-y-2"
             >
               <div class="flex items-center justify-between">
                 <span class="font-black text-sm" style="color: var(--text-main)">{{ sym }}</span>
@@ -899,7 +874,7 @@ const toast = useToast()
               <!-- Price & Risk Metrics -->
               <div
                 v-if="dec.action !== 'WAIT'"
-                class="grid grid-cols-3 gap-1.5 p-2 rounded-lg bg-black/20 text-xs text-center"
+                class="grid grid-cols-3 gap-1.5 p-2 rounded-lg text-xs text-center" style="background: var(--bg-card-subtle)"
               >
                 <div>
                   <div class="text-[var(--text-muted)]">入场限价</div>
@@ -920,7 +895,7 @@ const toast = useToast()
               </div>
               <div
                 v-else
-                class="p-2 rounded-lg bg-black/10 text-xs text-[var(--text-muted)] italic"
+                class="p-2 rounded-lg text-xs text-[var(--text-muted)] italic" style="background: var(--bg-card-subtle)"
               >
                 保持空仓防守，未达顺势回踩或微积分爆发要求。
               </div>

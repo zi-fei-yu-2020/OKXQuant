@@ -155,10 +155,10 @@ const numberText = (value?: number) => Number.isFinite(value) ? value!.toFixed(2
       <details class="audit-footer-disclosure" data-wait-diagnostics>
         <summary>连续统计口径</summary>
         <div v-if="diagnostics" class="audit-diagnostic-counts">
-          <p>无程序草案：{{ diagnostics.streaks.no_program_plans ?? '未知' }} 轮 · 模型全 WAIT：{{ diagnostics.streaks.model_all_wait ?? '未知' }} 轮 · 审计异常：{{ diagnostics.streaks.audit_incomplete ?? '未知' }} 轮</p>
+          <p>连续无程序草案：{{ diagnostics.streaks.no_program_plans ?? '未知' }} 轮 · 连续模型全 WAIT：{{ diagnostics.streaks.model_all_wait ?? '未知' }} 轮 · 连续审计异常：{{ diagnostics.streaks.audit_incomplete ?? '未知' }} 轮</p>
           <p>有草案且审计通过后全 WAIT：{{ diagnostics.streaks.audited_wait_with_plans ?? '未知' }} 轮。分类统计起于 {{ diagnosticStart }}，已记录 {{ diagnostics.observed_rounds }} 轮，不把旧数据推算成新口径。</p>
         </div>
-        <p>历史最终 WAIT 连续 {{ audit?.legacy_final_wait_streak ?? audit?.no_entry_candidate_streak ?? '未知' }} 轮，包含校验失败，不等于全部正常审查通过。分类统计不改变入场条件，也不触发强制交易。</p>
+        <p>历史最终 WAIT 连续 {{ audit?.legacy_final_wait_streak ?? audit?.no_entry_candidate_streak ?? '未知' }} 轮，可包含单标的校验降级，不等于全部正常审查通过。整轮推理失败单列并中断连续计数；分类统计不改变入场条件，也不触发强制交易。</p>
       </details>
       <details class="audit-footer-disclosure" data-audit-explanation>
         <summary>审计说明</summary>

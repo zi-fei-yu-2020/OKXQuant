@@ -37,3 +37,14 @@ def advance(previous, cache, now):
                            'incomplete': incomplete, 'audited_wait': sum(d.get('decision_status') == 'audited_wait' for d in decisions),
                            'repair_corrected': sum((d.get('wait_repair') or {}).get('status') == 'corrected' for d in decisions)}
     return state
+
+
+def advance_failure(previous, now):
+    """An unparsed model cycle is neither an audited WAIT nor evidence of no plans."""
+    state = advance(previous, {}, now)
+    state['streaks'].update(no_program_plans=None, model_all_wait=None, audited_wait_with_plans=None,
+        audit_incomplete=((previous or {}).get('streaks', {}).get('audit_incomplete') or 0)+1)
+    state['failed_rounds_total'] = (previous or {}).get('failed_rounds_total', 0)+1
+    state['last_cycle'].update(status='model_cycle_failed', program_plans=None, model_entry_proposals=None,
+        incomplete=None, audited_wait=0)
+    return state

@@ -93,7 +93,7 @@ def run_guard(*, observe_only=False):
                 key=f'{inst}_{side}'
                 if inst not in items:
                     same=[o for o in orders if o.get('instId')==inst]
-                    protected=not orders_unknown and trader._live_oco_coverage(same,side)>=abs(float(position['pos']))*.999
+                    protected=not orders_unknown and trader._live_oco_coverage(same,side,mark_px=float(position.get('markPx') or 0))>=abs(float(position['pos']))*.999
                     actions.append({'instrument':inst,'status':'metadata_missing','coverage_confirmed':protected})
                     if not observe_only and not protected:
                         closed,detail=trader.close_position_confirmed(inst,side,abs(float(position['pos'])),exit_reason='independent_guard',position=position)
@@ -112,7 +112,7 @@ def run_guard(*, observe_only=False):
                 # rather than inventing a tighter initial stop from a new ATR sample.
                 try:
                     matching=[o for o in orders if o.get('instId')==inst and o.get('posSide') in {side,'net'} and o.get('slTriggerPx') and o.get('tpTriggerPx') and o.get('side')==('sell' if side=='long' else 'buy')]
-                    covered=trader._live_oco_coverage(matching,side)>=abs(float(position['pos']))*.999
+                    covered=trader._live_oco_coverage(matching,side,mark_px=float(position.get('markPx') or 0))>=abs(float(position['pos']))*.999
                 except Exception:
                     matching=[];covered=False
                 if observe_only:

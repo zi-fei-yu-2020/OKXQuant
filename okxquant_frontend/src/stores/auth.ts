@@ -20,6 +20,9 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<AdminUser | null>(null)
   const error = ref<string>('')
   let expiryNotified = false
+  let verifiedToken = ''
+  let verifiedAt = 0
+  const navigationVerificationTtlMs = 15_000
 
   function expireSession(checkedToken: string) {
     if (token.value !== checkedToken || expiryNotified) return
@@ -65,9 +68,13 @@ export const useAuthStore = defineStore('auth', () => {
   async function validateSession(): Promise<boolean> {
     if (!token.value) return false
     const checkedToken = token.value
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 6000)
     try {
       const resp = await fetch('/api/v1/admin/auth/me', {
         headers: { 'X-OKXQuant-Session': checkedToken },
+        signal: controller.signal,
+        cache: 'no-store',
       })
       if (token.value !== checkedToken) return false
       checkResponse(resp, checkedToken)
@@ -79,15 +86,28 @@ export const useAuthStore = defineStore('auth', () => {
         user.value = { id: data.user.id, username: data.user.username, role: data.user.role }
         localStorage.setItem(SESSION_USER_KEY, JSON.stringify(user.value))
       }
+      verifiedToken = checkedToken
+      verifiedAt = Date.now()
       return true
     } catch {
       return false
+    } finally {
+      clearTimeout(timeout)
     }
   }
 
   let restorePromise: Promise<boolean> | null = null
 
   async function restoreSession(): Promise<boolean> {
+    // Only a recent server-verified session can skip the navigation round trip.
+    // Every protected data/mutation API continues to authenticate independently.
+    const saved = localStorage.getItem(SESSION_TOKEN_KEY) || ''
+    if (token.value && saved !== token.value) {
+      verifiedToken = ''; verifiedAt = 0
+      token.value = ''; user.value = null
+    }
+    const age = Date.now() - verifiedAt
+    if (token.value && verifiedToken === token.value && age >= 0 && age < navigationVerificationTtlMs) return true
     if (restorePromise) return restorePromise
     restorePromise = (async () => {
       if (!token.value) {
@@ -118,6 +138,7 @@ export const useAuthStore = defineStore('auth', () => {
         headers: { 'X-OKXQuant-Session': token.value },
       }).catch(() => {})
     }
+    verifiedToken = ''; verifiedAt = 0
     token.value = ''
     user.value = null
     localStorage.removeItem(SESSION_TOKEN_KEY)

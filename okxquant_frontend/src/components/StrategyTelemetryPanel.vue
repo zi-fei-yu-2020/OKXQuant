@@ -94,7 +94,6 @@ const hasStats = computed(() => {
 const statsStatusLabel = computed(() => {
   if (isUnavailable.value) return '统计暂不可用'
   if (store.data?.risk_status?.daily_blocked === true) return '日内熔断期间'
-  if (store.error || store.isStale) return '账本更新延迟'
   if (periodsData.value !== null && !activePeriodData.value) return '周期暂无数据'
   return '已结算样本'
 })
@@ -197,7 +196,7 @@ const floatingPnl = computed(() => {
       <div class="telemetry-card__heading telemetry-card__heading--stats">
         <div class="telemetry-heading__top">
           <span class="telemetry-card__eyebrow">策略统计</span>
-          <AppBadge :tone="store.error || store.isStale ? 'warning' : 'neutral'">
+          <AppBadge :tone="isUnavailable ? 'warning' : 'neutral'" :title="store.error || store.isStale ? '后台同步中，当前为最近一次已结算样本' : '已核验的结算样本'">
             {{ !hasStats ? '暂无统计' : statsStatusLabel }}
           </AppBadge>
         </div>
@@ -280,6 +279,7 @@ const floatingPnl = computed(() => {
         </div>
       </div>
 
+      <p v-if="store.data?.statistics_epoch" class="text-xs px-4 pb-3" style="color:var(--text-muted)" data-statistics-start>统计起点 {{ store.data.statistics_epoch.reset_time }} · 旧样本不计入当前周期</p>
       <!-- Additional Stats Info Row: Unclassified & Floating PnL -->
       <div
         v-if="hasUnknownOrders || floatingPnl !== null"

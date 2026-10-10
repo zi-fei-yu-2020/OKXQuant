@@ -63,9 +63,7 @@ useErrorFeedback(errText)
 
     <template v-else-if="data">
       <!-- Agents -->
-      <AppCard
-        class="rounded-xl border overflow-hidden shadow-xs"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="overflow-hidden"
       >
         <div
           class="px-4 py-3 border-b flex items-center justify-between"
@@ -139,9 +137,7 @@ useErrorFeedback(errText)
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <!-- Model Telemetry -->
-        <AppCard
-          class="rounded-xl border overflow-hidden shadow-xs p-4"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="overflow-hidden p-4"
         >
           <div class="flex items-center space-x-2 mb-3">
             <Cpu class="w-4 h-4 text-purple-400" />
@@ -283,9 +279,7 @@ useErrorFeedback(errText)
         </AppCard>
 
         <!-- Secret Store -->
-        <AppCard
-          class="rounded-xl border p-4 shadow-xs transition-colors"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="p-4"
         >
           <div class="flex items-center space-x-2 mb-3">
             <KeyRound class="w-4 h-4 text-amber-500" />

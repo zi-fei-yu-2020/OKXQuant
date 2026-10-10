@@ -44,17 +44,19 @@ let activeController: AbortController | null = null
 let fetchGeneration = 0
 let disposed = false
 let searchDebounceTimer: ReturnType<typeof setTimeout> | undefined
+let quietTimer: ReturnType<typeof setInterval> | undefined
 
 
 
 async function fetchTradeDetail(trade: any) {
   const scope = store.data?.account_source_id
+  const statisticsId = store.data?.statistics_epoch?.id
   try {
     const session = getSessionToken()
     const resp = await fetch(`/api/trades/${encodeURIComponent(trade.id)}`, {
       headers: buildAuthHeaders(session),
     })
-    if (disposed || scope !== store.data?.account_source_id) return
+    if (disposed || session !== getSessionToken() || scope !== store.data?.account_source_id || statisticsId !== store.data?.statistics_epoch?.id) return
     if (resp.status === 401 || resp.status === 403) {
       handleSessionResponse(resp.status, session)
       return
@@ -70,11 +72,17 @@ async function fetchTradeDetail(trade: any) {
   } catch {}
 }
 
-async function fetchPage(newOffset = 0) {
-  if (disposed) return
+async function fetchPage(newOffset = 0, options: { silent?: boolean; redirect?: boolean; preserveHeight?: boolean } = {}) {
+  const { silent = false, redirect = false, preserveHeight = true } = options
+  if (disposed || silent && !redirect && (activeController || loadingTrades.value || tradesError.value || serverTrades.value === null)) return
+  const scope = store.data?.account_source_id
+  const statisticsId = store.data?.statistics_epoch?.id
+  const session = getSessionToken()
   const targetOffset = Math.max(0, newOffset)
-  requestedOffset.value = targetOffset
-  frameMinHeight.value = Math.max(frameMinHeight.value, Math.ceil(ledgerFrame.value?.getBoundingClientRect().height ?? 0))
+  if (!silent) {
+    requestedOffset.value = targetOffset
+    if (preserveHeight) frameMinHeight.value = Math.max(frameMinHeight.value, Math.ceil(ledgerFrame.value?.getBoundingClientRect().height ?? 0))
+  }
   const gen = ++fetchGeneration
 
   if (activeController) {
@@ -83,8 +91,9 @@ async function fetchPage(newOffset = 0) {
   const controller = new AbortController()
   activeController = controller
 
-  loadingTrades.value = true
-  tradesError.value = null
+  if (!silent) { loadingTrades.value = true; tradesError.value = null }
+  let timedOut = false
+  const timeout = setTimeout(() => { timedOut = true; controller.abort() }, 12000)
 
   try {
     const params = new URLSearchParams()
@@ -95,12 +104,12 @@ async function fetchPage(newOffset = 0) {
       params.set('q', keyword.value.trim())
     }
 
-    const session = getSessionToken()
     const resp = await fetch(`/api/trades?${params.toString()}`, {
       signal: controller.signal,
       headers: buildAuthHeaders(session),
+      cache: 'no-store',
     })
-    if (disposed || gen !== fetchGeneration) return
+    if (disposed || gen !== fetchGeneration || session !== getSessionToken() || scope !== store.data?.account_source_id || statisticsId !== store.data?.statistics_epoch?.id) return
 
     if (resp.status === 401 || resp.status === 403) {
       handleSessionResponse(resp.status, session)
@@ -111,29 +120,33 @@ async function fetchPage(newOffset = 0) {
     }
 
     const json = await resp.json()
-    if (disposed || gen !== fetchGeneration) return
+    if (disposed || gen !== fetchGeneration || session !== getSessionToken() || scope !== store.data?.account_source_id || statisticsId !== store.data?.statistics_epoch?.id) return
     if (!Array.isArray(json?.items) || !Number.isSafeInteger(json?.total) || json.total < json.items.length
       || json.items.some((item: unknown) => !item || typeof item !== 'object' || Array.isArray(item))) {
       throw new Error('交易记录返回格式无效，请重试')
     }
+    if (json.account_source_id && json.account_source_id !== scope) return
+    if ((json.statistics_epoch?.id || undefined) !== statisticsId) return
     const lastOffset = json.total > 0 ? Math.floor((json.total - 1) / pageSize) * pageSize : 0
     if (json.total > 0 && targetOffset > lastOffset) {
-      await fetchPage(lastOffset)
+      await fetchPage(lastOffset, { silent, redirect: true, preserveHeight })
       return
     }
     serverTrades.value = json.items
     serverTotal.value = json.total
     offset.value = json.total === 0 ? 0 : targetOffset
     if (json?.counts && typeof json.counts === 'object') serverCounts.value = json.counts
-    pageRevision.value++
+    if (!silent) pageRevision.value++
+    else requestedOffset.value = offset.value
     await nextTick()
-    if (disposed || gen !== fetchGeneration) return
+    if (disposed || gen !== fetchGeneration || session !== getSessionToken() || scope !== store.data?.account_source_id || statisticsId !== store.data?.statistics_epoch?.id) return
     const scroller = ledgerFrame.value?.querySelector<HTMLElement>('.table-scroll-container')
-    if (scroller) scroller.scrollTop = 0
+    if (scroller && !silent) scroller.scrollTop = 0
   } catch (e: any) {
-    if (controller.signal.aborted || gen !== fetchGeneration) return
-    tradesError.value = e.message || '加载成交记录失败'
+    if (disposed || gen !== fetchGeneration || session !== getSessionToken() || scope !== store.data?.account_source_id || statisticsId !== store.data?.statistics_epoch?.id || controller.signal.aborted && !timedOut) return
+    if (!silent) tradesError.value = timedOut ? '请求超时，已保留上次记录，请重试' : e.message || '加载成交记录失败'
   } finally {
+    clearTimeout(timeout)
     if (gen === fetchGeneration) {
       loadingTrades.value = false
       if (activeController === controller) activeController = null
@@ -159,7 +172,7 @@ watch(keyword, () => {
 })
 
 watch(
-  () => store.data?.account_source_id,
+  () => JSON.stringify([store.data?.account_source_id, store.data?.statistics_epoch?.id]),
   (newScope, oldScope) => {
     if (newScope !== oldScope) {
       offset.value = 0
@@ -170,18 +183,27 @@ watch(
       frameMinHeight.value = 0
       feeDialogOpen.value = false
       feeTrade.value = null
-      void fetchPage(0)
+      void fetchPage(0, { preserveHeight: false })
     }
   },
 )
 
+function refreshQuietly() {
+  if (typeof document === 'undefined' || document.visibilityState === 'visible') void fetchPage(offset.value, { silent: true })
+}
+watch(() => store.data?.ledger_sync?.last_success, (current, prior) => { if (current !== prior) refreshQuietly() })
+
 onMounted(() => {
   if (typeof window !== 'undefined') {
     void fetchPage(0)
+    document.addEventListener('visibilitychange', refreshQuietly)
+    quietTimer = setInterval(refreshQuietly, 30000)
   }
 })
 
 onUnmounted(() => {
+  if (quietTimer) clearInterval(quietTimer)
+  if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', refreshQuietly)
   disposed = true
   ++fetchGeneration
   clearTimeout(searchDebounceTimer)
@@ -259,9 +281,7 @@ function horizonLabel(v: unknown, t?: any): string {
 <template>
   <div class="trade-ledger space-y-3.5 min-w-0 max-w-full">
     <!-- Header -->
-    <AppCard
-      class="rounded-xl border p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 shadow-xs transition-colors"
-      style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+    <AppCard class="p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3"
     >
       <div class="flex items-center space-x-3 min-w-0">
         <div
@@ -292,9 +312,7 @@ function horizonLabel(v: unknown, t?: any): string {
     </AppCard>
 
     <!-- Filter bar -->
-    <AppCard
-      class="rounded-xl border p-2.5 sm:p-3 flex flex-wrap items-center justify-between gap-3 shadow-xs transition-colors"
-      style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+    <AppCard class="p-2.5 sm:p-3 flex flex-wrap items-center justify-between gap-3"
     >
       <div
         class="flex rounded-lg border p-0.5 font-mono text-xs"
@@ -354,7 +372,7 @@ function horizonLabel(v: unknown, t?: any): string {
       </div>
 
       <div
-        class="flex items-center space-x-1.5 flex-1 min-w-[180px] max-w-[320px] rounded-lg border px-3 py-1.5"
+        class="flex items-center space-x-1.5 flex-1 min-w-0 sm:max-w-[320px] rounded-lg border px-3 py-1.5"
         style="background-color: var(--bg-input); border-color: var(--border-subtle)"
       >
         <Search class="w-3.5 h-3.5 shrink-0" style="color: var(--text-faint)" />
@@ -368,9 +386,7 @@ function horizonLabel(v: unknown, t?: any): string {
     </AppCard>
 
     <!-- Trades Table with Fixed Max-Height (No infinite page stretching) -->
-    <AppCard
-      class="rounded-xl border shadow-xs transition-colors overflow-hidden flex flex-col"
-      style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+    <AppCard class="overflow-hidden flex flex-col"
     >
       <div ref="ledgerFrame" class="trade-ledger__frame" :class="{ 'is-loading': loadingTrades }"
         :style="frameMinHeight ? { minHeight: frameMinHeight + 'px' } : undefined">

@@ -40,9 +40,7 @@ useErrorFeedback(errText)
     <LoadingState v-if="loading" />
 
     <template v-else-if="data">
-      <AppCard
-        class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="p-4 sm:p-5"
       >
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center space-x-2">
@@ -127,9 +125,7 @@ useErrorFeedback(errText)
         </div>
       </AppCard>
 
-      <AppCard
-        class="rounded-xl border p-4 flex items-start gap-3 shadow-xs"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="p-4 flex items-start gap-3"
       >
         <ShieldAlert class="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
         <div>

@@ -40,7 +40,10 @@ class LightweightProducerTests(unittest.TestCase):
         self.assertEqual(factors["status"], "disabled")
 
     def test_scheduler_disables_only_scheduled_research_and_review_jobs(self):
-        with patch.dict(os.environ, {"OKXQUANT_RUNTIME_PROFILE": "light"}), \
+        # Bootstrap env applies only when no operator choice has been saved.
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(runtime_features, "CONFIG_PATH", Path(directory) / "runtime_features.json"), \
+             patch.dict(os.environ, {"OKXQUANT_RUNTIME_PROFILE": "light"}), \
              patch("scripts.okx_runtime._load_dotenv", return_value={"OKXQUANT_AUTOTRADE_ENABLED": "1"}), \
              patch.object(scheduler, "backup_job_specs", return_value=()):
             jobs = scheduler.current_jobs()

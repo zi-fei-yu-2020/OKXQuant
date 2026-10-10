@@ -53,9 +53,7 @@ function importanceCn(imp: string) {
 <template>
   <div class="space-y-3.5">
     <!-- Header Banner -->
-    <AppCard
-      class="rounded-xl border p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 shadow-xs transition-colors"
-      style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+    <AppCard class="p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3"
     >
       <div class="flex items-center space-x-3">
         <div
@@ -115,16 +113,14 @@ function importanceCn(imp: string) {
     >
       <AppCard
         v-for="[ccy, s] in coinsSentiment"
-        :key="ccy"
-        class="rounded-xl border p-3 shadow-xs transition-colors"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        :key="ccy" class="p-3"
       >
         <div class="flex items-center justify-between mb-1.5">
           <span class="text-xs font-black font-mono" style="color: var(--text-main)">{{
             ccy
           }}</span>
           <span
-            class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold border"
+            class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border"
             :style="labelClass(s.label)"
           >
             {{ labelCn(s.label) }}
@@ -145,7 +141,7 @@ function importanceCn(imp: string) {
           <span style="color: var(--text-faint)"
             >提及 {{ s.mentions == null ? '--' : s.mentions.toLocaleString() }}</span
           >
-          <span v-if="s.long_short_ratio" class="font-bold text-blue-400"
+          <span v-if="s.long_short_ratio" class="font-bold" style="color: var(--color-blue)"
             >比率 {{ s.long_short_ratio }}</span
           >
         </div>
@@ -170,9 +166,7 @@ function importanceCn(imp: string) {
     <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-3">
       <AppCard
         v-for="item in newsItems"
-        :key="item.id"
-        class="rounded-xl border p-4 transition-all shadow-xs"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        :key="item.id" class="p-4"
       >
         <div class="flex items-start justify-between gap-2 mb-2">
           <div class="flex items-start space-x-1.5 min-w-0">

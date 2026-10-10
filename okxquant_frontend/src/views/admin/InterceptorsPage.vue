@@ -33,6 +33,7 @@ import {
 } from 'lucide-vue-next'
 
 const { api } = useApi()
+const { confirm } = useDialogs()
 const auth = useAuthStore()
 
 const plugins = ref<any[]>([])
@@ -247,8 +248,6 @@ const submitCreate = action(async () => {
 })
 
 onMounted(loadPlugins)
-
-const { confirm } = useDialogs()
 </script>
 
 <template>
@@ -294,8 +293,7 @@ const { confirm } = useDialogs()
         <button :disabled="actionBusy"
           v-if="auth.isSuperadmin"
           @click="openCreateModal"
-          class="ui-action ui-action--sm"
-          style="background-color: var(--text-main); color: var(--bg-card)"
+          class="ui-button ui-button--primary ui-button--sm"
         >
           <Plus class="w-3.5 h-3.5" />
           <span>新建拦截插件</span>
@@ -381,7 +379,7 @@ const { confirm } = useDialogs()
               </span>
               <span
                 v-if="p.version"
-                class="px-1.5 py-0.2 rounded text-xs font-bold border"
+                class="px-1.5 py-0.5 rounded text-xs font-bold border"
                 style="
                   background-color: var(--color-brand-bg);
                   color: var(--color-brand);
@@ -478,7 +476,7 @@ const { confirm } = useDialogs()
         }
       "
       ><div
-        class="dialog-content p-4 sm:p-6 flex flex-col space-y-3 sm:space-y-4 transition-colors"
+        class="flex flex-col space-y-3 sm:space-y-4 transition-colors"
         style="background-color: var(--bg-card); border-color: var(--border-subtle)"
       >
         <!-- Modal Header -->
@@ -554,13 +552,7 @@ const { confirm } = useDialogs()
         <div class="flex-1 min-h-[220px] sm:min-h-[380px] h-[50dvh] flex flex-col">
           <textarea :disabled="actionBusy"
             v-model="editingCode"
-            aria-label="风控插件 Python 源码"
-            class="flex-1 w-full border rounded-xl p-3 sm:p-4 font-sans text-xs sm:text-sm leading-relaxed outline-none resize-none select-text transition-colors"
-            style="
-              background-color: var(--bg-input);
-              border-color: var(--border-subtle);
-              color: var(--text-main);
-            "
+            aria-label="风控插件 Python 源码" class="flex-1 rounded-xl p-3 sm:p-4 text-xs sm:text-sm leading-relaxed resize-none select-text transition-colors"
             spellcheck="false"
           ></textarea>
         </div>
@@ -593,8 +585,7 @@ const { confirm } = useDialogs()
             <button
               @click="saveCode"
               :disabled="(savingCode) || actionBusy || !canManage"
-              class="ui-action ui-action--sm sm:px-5 sm:py-2"
-              style="background-color: var(--text-main); color: var(--bg-card)"
+              class="ui-button ui-button--primary ui-button--sm"
             >
               <Save class="w-4 h-4" />
               <span>{{ savingCode ? '正在保存...' : '保存代码并热加载' }}</span>
@@ -618,7 +609,7 @@ const { confirm } = useDialogs()
         }
       "
       ><div
-        class="dialog-content p-4 sm:p-6 flex flex-col space-y-3 sm:space-y-4 transition-colors"
+        class="flex flex-col space-y-3 sm:space-y-4 transition-colors"
         style="background-color: var(--bg-card); border-color: var(--border-subtle)"
       >
         <div
@@ -676,13 +667,7 @@ const { confirm } = useDialogs()
               ><input :disabled="actionBusy"
                 :id="fieldId"
                 v-model="newFilename"
-                type="text"
-                class="w-full border rounded-xl px-3 py-2 text-sm outline-none transition-colors font-sans"
-                style="
-                  background-color: var(--bg-input);
-                  border-color: var(--border-subtle);
-                  color: var(--text-main);
-                "
+                type="text" class="rounded-xl transition-colors"
                 placeholder="如: my_volatility_filter.py" /></template
           ></AppField>
         </div>
@@ -696,13 +681,7 @@ const { confirm } = useDialogs()
             ><template #default="{ id: fieldId }">
               <textarea :disabled="actionBusy"
                 :id="fieldId"
-                v-model="newCode"
-                class="flex-1 w-full border rounded-xl p-3 sm:p-3.5 font-sans text-xs sm:text-sm leading-relaxed outline-none resize-y transition-colors min-h-[160px]"
-                style="
-                  background-color: var(--bg-input);
-                  border-color: var(--border-subtle);
-                  color: var(--text-main);
-                "
+                v-model="newCode" class="flex-1 rounded-xl p-3 sm:p-3.5 text-xs sm:text-sm leading-relaxed resize-y transition-colors min-h-[160px]"
                 spellcheck="false"
               ></textarea></template
           ></AppField>
@@ -725,8 +704,7 @@ const { confirm } = useDialogs()
           </button>
           <button :disabled="actionBusy || !canManage"
             @click="submitCreate"
-            class="ui-action ui-action--sm sm:px-5 sm:py-2"
-            style="background-color: var(--text-main); color: var(--bg-card)"
+            class="ui-button ui-button--primary ui-button--sm"
           >
             创建并加入管线
           </button>
@@ -748,7 +726,7 @@ const { confirm } = useDialogs()
         }
       "
       ><div
-        class="dialog-content p-4 sm:p-6 space-y-3 sm:space-y-4 transition-colors"
+        class="space-y-3 sm:space-y-4 transition-colors"
         style="background-color: var(--bg-card); border-color: var(--border-subtle)"
       >
         <div

@@ -127,3 +127,34 @@ test('a page removed by concurrent reconciliation returns to a valid page withou
   assert.equal(h.state.trades.value[0].id,'reconciled')
  }finally{h.cleanup()}
 })
+
+test('background ledger refresh preserves scroll, displayed page and animation revision',async()=>{
+ const h=harness();try{
+  let task=h.state.fetchPage(30);h.requests[0].resolve(ok([row('old')]));await task
+  const revision=h.state.pageRevision.value;const scroller={scrollTop:320}
+  h.state.ledgerFrame.value={getBoundingClientRect:()=>({height:580}),querySelector:()=>scroller}
+  task=h.state.fetchPage(30,{silent:true})
+  assert.equal(h.state.loadingTrades.value,false);assert.equal(h.state.trades.value[0].id,'old')
+  h.requests[1].resolve(ok([row('new')]));await task
+  assert.equal(h.state.offset.value,30);assert.equal(scroller.scrollTop,320);assert.equal(h.state.pageRevision.value,revision)
+  assert.equal(h.state.trades.value[0].id,'new')
+ }finally{h.cleanup()}
+})
+test('a background update never steals a manual request or its retry target',async()=>{
+ const h=harness();try{
+  let task=h.state.fetchPage(0);h.requests[0].resolve(ok([row('old')]));await task
+  task=h.state.fetchPage(30);await h.state.fetchPage(0,{silent:true});assert.equal(h.requests.length,2)
+  h.requests[1].reject(Error('manual failure'));await task
+  await h.state.fetchPage(0,{silent:true});assert.equal(h.requests.length,2);assert.equal(h.state.requestedOffset.value,30)
+ }finally{h.cleanup()}
+})
+test('statistics epoch change clears pre-reset pages and fee details for the same account',async()=>{
+ const h=harness();try{
+  let task=h.state.fetchPage(30);h.requests[0].resolve(ok([row('old')]));await task
+  h.state.feeTrade.value=row('old');h.state.feeDialogOpen.value=true
+  h.store.data.statistics_epoch={id:'new-period'};await Vue.nextTick()
+  assert.equal(h.state.offset.value,0);assert.equal(h.state.feeDialogOpen.value,false);assert.equal(h.state.trades.value.length,0)
+  h.requests[1].resolve({status:200,ok:true,json:async()=>({items:[],total:0,counts:{all:0,active:0,closed:0},account_source_id:'scope-a',statistics_epoch:{id:'new-period'}})})
+  await new Promise(resolve=>setTimeout(resolve,0));assert.equal(h.state.serverTotal.value,0)
+ }finally{h.cleanup()}
+})

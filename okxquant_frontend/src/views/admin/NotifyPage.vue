@@ -3,6 +3,7 @@ import { useApiAction } from '../../composables/useApiAction'
 const { action, actionBusy, canManage } = useApiAction(() => loading.value || loadFailed.value)
 
 import AppField from '../../components/ui/AppField.vue'
+import AppSwitch from '../../components/ui/AppSwitch.vue'
 import AppCard from '../../components/ui/AppCard.vue'
 import LoadingState from '../../components/ui/LoadingState.vue'
 
@@ -58,7 +59,6 @@ async function loadConfig(silent = false, channel?: string) {
   } catch (e: any) {
     if (e?.silent) return
     loadFailed.value = true
-    console.error(e)
     showNotificationBanner('error', '加载通知配置失败: ' + (e.message || String(e)))
   } finally {
     if (!silent) loading.value = false
@@ -354,25 +354,22 @@ const toast = useToast()
 
     <template v-else-if="config">
       <!-- QQ Channel -->
-      <AppCard
-        class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="p-4 sm:p-5"
       >
-        <div class="flex items-center justify-between mb-4">
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div class="flex items-center space-x-2">
             <span
               class="inline-block w-2 h-2 rounded-full"
-              :class="config.qq.enabled ? 'bg-emerald-500' : 'bg-zinc-500'"
+              :style="{ background: config.qq.enabled ? 'var(--color-up)' : 'var(--border-strong)' }"
             ></span>
             <h2 class="text-sm font-bold font-sans" style="color: var(--text-main)">
               QQ 官方应用 Bot
             </h2>
           </div>
-          <div class="flex items-center space-x-3">
+          <div class="flex flex-wrap items-center gap-2 sm:gap-3">
             <button :disabled="actionBusy || !canManage"
               @click="startQqBind"
-              class="ui-action ui-action--sm"
-              style="background-color: var(--text-main); color: var(--bg-card)"
+              class="ui-button ui-button--primary ui-button--sm"
             >
               扫码绑定
             </button>
@@ -386,30 +383,13 @@ const toast = useToast()
               "
             >
               <Zap class="w-3 h-3" />
-              <span>⚡ 自动获取 OpenID</span>
+              <span>自动获取 OpenID</span>
             </button>
             <div class="flex items-center space-x-2">
-              <button :disabled="actionBusy"
-                type="button"
-                @click="toggleChannel('qq', !config.qq.enabled)"
-                class="relative inline-flex items-center cursor-pointer focus:outline-none"
-                :title="config.qq.enabled ? '点击关闭 QQ 通知' : '点击开启 QQ 通知'"
-              >
-                <div
-                  class="w-10 h-5 rounded-full transition-colors relative"
-                  :style="{
-                    backgroundColor: config.qq.enabled ? '#10B981' : 'var(--border-medium)',
-                  }"
-                >
-                  <div
-                    class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform shadow-xs"
-                    :class="config.qq.enabled ? 'translate-x-5' : 'translate-x-0'"
-                  ></div>
-                </div>
-              </button>
+              <AppSwitch :model-value="!!config.qq.enabled" label="QQ 通知" :disabled="actionBusy" @update:model-value="toggleChannel('qq', $event)" />
               <span
-                class="text-sm font-sans font-bold select-none cursor-pointer"
-                @click="toggleChannel('qq', !config.qq.enabled)"
+                class="text-sm font-sans font-bold select-none whitespace-nowrap"
+                aria-hidden="true"
                 :style="{ color: config.qq.enabled ? 'var(--color-up)' : 'var(--text-muted)' }"
               >
                 {{ config.qq.enabled ? '已开启' : '已关闭' }}
@@ -427,13 +407,7 @@ const toast = useToast()
               ><template #default="{ id: fieldId }"
                 ><input :disabled="actionBusy"
                   :id="fieldId"
-                  v-model="config.qq.app_id"
-                  class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
-                  style="
-                    background-color: var(--bg-input);
-                    border-color: var(--border-subtle);
-                    color: var(--text-main);
-                  " /></template
+                  v-model="config.qq.app_id" /></template
             ></AppField>
           </div>
           <div>
@@ -447,13 +421,7 @@ const toast = useToast()
                   :id="fieldId"
                   v-model="config.qq._secret"
                   type="password"
-                  placeholder="留空保持现有"
-                  class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
-                  style="
-                    background-color: var(--bg-input);
-                    border-color: var(--border-subtle);
-                    color: var(--text-main);
-                  " /></template
+                  placeholder="留空保持现有" /></template
             ></AppField>
           </div>
           <div class="sm:col-span-2">
@@ -465,17 +433,11 @@ const toast = useToast()
               ><template #default="{ id: fieldId }"
                 ><input :disabled="actionBusy"
                   :id="fieldId"
-                  v-model="config.qq.openid"
-                  class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
-                  style="
-                    background-color: var(--bg-input);
-                    border-color: var(--border-subtle);
-                    color: var(--text-main);
-                  " /></template
+                  v-model="config.qq.openid" /></template
             ></AppField>
           </div>
         </div>
-        <div class="flex space-x-2 mt-3">
+        <div class="flex flex-wrap gap-2 mt-3">
           <button :disabled="actionBusy"
             @click="diagnose('qq')"
             class="ui-action ui-action--sm border"
@@ -509,44 +471,25 @@ const toast = useToast()
       </AppCard>
 
       <!-- Telegram -->
-      <AppCard
-        class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="p-4 sm:p-5"
       >
-        <div class="flex items-center justify-between mb-4">
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div class="flex items-center space-x-2">
             <span
               class="inline-block w-2 h-2 rounded-full"
-              :class="config.telegram.enabled ? 'bg-emerald-500' : 'bg-zinc-500'"
+              :style="{ background: config.telegram.enabled ? 'var(--color-up)' : 'var(--border-strong)' }"
             ></span>
             <h2 class="text-sm font-bold font-sans" style="color: var(--text-main)">
               Telegram Bot
             </h2>
           </div>
           <div class="flex items-center space-x-2">
-            <button :disabled="actionBusy"
-              type="button"
-              @click="toggleChannel('telegram', !config.telegram.enabled)"
-              class="relative inline-flex items-center cursor-pointer focus:outline-none"
-              :title="config.telegram.enabled ? '点击关闭 Telegram 通知' : '点击开启 Telegram 通知'"
-            >
-              <div
-                class="w-10 h-5 rounded-full transition-colors relative"
-                :style="{
-                  backgroundColor: config.telegram.enabled ? '#10B981' : 'var(--border-medium)',
-                }"
+            <AppSwitch :model-value="!!config.telegram.enabled" label="Telegram 通知" :disabled="actionBusy" @update:model-value="toggleChannel('telegram', $event)" />
+              <span
+                class="text-sm font-sans font-bold select-none whitespace-nowrap"
+                aria-hidden="true"
+                :style="{ color: config.telegram.enabled ? 'var(--color-up)' : 'var(--text-muted)' }"
               >
-                <div
-                  class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform shadow-xs"
-                  :class="config.telegram.enabled ? 'translate-x-5' : 'translate-x-0'"
-                ></div>
-              </div>
-            </button>
-            <span
-              class="text-sm font-sans font-bold select-none cursor-pointer"
-              @click="toggleChannel('telegram', !config.telegram.enabled)"
-              :style="{ color: config.telegram.enabled ? 'var(--color-up)' : 'var(--text-muted)' }"
-            >
               {{ config.telegram.enabled ? '已开启' : '已关闭' }}
             </span>
           </div>
@@ -563,13 +506,7 @@ const toast = useToast()
                   :id="fieldId"
                   v-model="config.telegram._token"
                   type="password"
-                  placeholder="留空保持现有"
-                  class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
-                  style="
-                    background-color: var(--bg-input);
-                    border-color: var(--border-subtle);
-                    color: var(--text-main);
-                  " /></template
+                  placeholder="留空保持现有" /></template
             ></AppField>
           </div>
           <div>
@@ -581,13 +518,7 @@ const toast = useToast()
               ><template #default="{ id: fieldId }"
                 ><input :disabled="actionBusy"
                   :id="fieldId"
-                  v-model="config.telegram.chat_id"
-                  class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
-                  style="
-                    background-color: var(--bg-input);
-                    border-color: var(--border-subtle);
-                    color: var(--text-main);
-                  " /></template
+                  v-model="config.telegram.chat_id" /></template
             ></AppField>
           </div>
           <div class="sm:col-span-2">
@@ -600,17 +531,11 @@ const toast = useToast()
                 ><input :disabled="actionBusy"
                   :id="fieldId"
                   v-model="config.telegram.api_base"
-                  placeholder="https://api.telegram.org"
-                  class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
-                  style="
-                    background-color: var(--bg-input);
-                    border-color: var(--border-subtle);
-                    color: var(--text-main);
-                  " /></template
+                  placeholder="https://api.telegram.org" /></template
             ></AppField>
           </div>
         </div>
-        <div class="flex space-x-2 mt-3">
+        <div class="flex flex-wrap gap-2 mt-3">
           <button :disabled="actionBusy"
             @click="diagnose('telegram')"
             class="ui-action ui-action--sm border"
@@ -645,40 +570,21 @@ const toast = useToast()
 
       <!-- WeChat + Webhook -->
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <AppCard
-          class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="p-4 sm:p-5"
         >
-          <div class="flex items-center justify-between mb-4">
+          <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
             <div class="flex items-center space-x-2">
               <span
                 class="inline-block w-2 h-2 rounded-full"
-                :class="config.wechat.enabled ? 'bg-emerald-500' : 'bg-zinc-500'"
+                :style="{ background: config.wechat.enabled ? 'var(--color-up)' : 'var(--border-strong)' }"
               ></span>
               <h2 class="text-sm font-bold font-sans" style="color: var(--text-main)">企业微信</h2>
             </div>
             <div class="flex items-center space-x-2">
-              <button :disabled="actionBusy"
-                type="button"
-                @click="toggleChannel('wechat', !config.wechat.enabled)"
-                class="relative inline-flex items-center cursor-pointer focus:outline-none"
-                :title="config.wechat.enabled ? '点击关闭企业微信通知' : '点击开启企业微信通知'"
-              >
-                <div
-                  class="w-10 h-5 rounded-full transition-colors relative"
-                  :style="{
-                    backgroundColor: config.wechat.enabled ? '#10B981' : 'var(--border-medium)',
-                  }"
-                >
-                  <div
-                    class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform shadow-xs"
-                    :class="config.wechat.enabled ? 'translate-x-5' : 'translate-x-0'"
-                  ></div>
-                </div>
-              </button>
+              <AppSwitch :model-value="!!config.wechat.enabled" label="企业微信 通知" :disabled="actionBusy" @update:model-value="toggleChannel('wechat', $event)" />
               <span
-                class="text-sm font-sans font-bold select-none cursor-pointer"
-                @click="toggleChannel('wechat', !config.wechat.enabled)"
+                class="text-sm font-sans font-bold select-none whitespace-nowrap"
+                aria-hidden="true"
                 :style="{ color: config.wechat.enabled ? 'var(--color-up)' : 'var(--text-muted)' }"
               >
                 {{ config.wechat.enabled ? '已开启' : '已关闭' }}
@@ -693,13 +599,7 @@ const toast = useToast()
             ><template #default="{ id: fieldId }"
               ><input :disabled="actionBusy"
                 :id="fieldId"
-                v-model="config.wechat.webhook"
-                class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border mb-3"
-                style="
-                  background-color: var(--bg-input);
-                  border-color: var(--border-subtle);
-                  color: var(--text-main);
-                " /></template
+                v-model="config.wechat.webhook" class="mb-3" /></template
           ></AppField>
           <button :disabled="actionBusy"
             @click="diagnose('wechat')"
@@ -731,42 +631,23 @@ const toast = useToast()
             {{ testResults.wechat.status }} · {{ testResults.wechat.detail }}
           </div>
         </AppCard>
-        <AppCard
-          class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="p-4 sm:p-5"
         >
-          <div class="flex items-center justify-between mb-4">
+          <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
             <div class="flex items-center space-x-2">
               <span
                 class="inline-block w-2 h-2 rounded-full"
-                :class="config.webhook.enabled ? 'bg-emerald-500' : 'bg-zinc-500'"
+                :style="{ background: config.webhook.enabled ? 'var(--color-up)' : 'var(--border-strong)' }"
               ></span>
               <h2 class="text-sm font-bold font-sans" style="color: var(--text-main)">
                 通用 Webhook
               </h2>
             </div>
             <div class="flex items-center space-x-2">
-              <button :disabled="actionBusy"
-                type="button"
-                @click="toggleChannel('webhook', !config.webhook.enabled)"
-                class="relative inline-flex items-center cursor-pointer focus:outline-none"
-                :title="config.webhook.enabled ? '点击关闭通用 Webhook' : '点击开启通用 Webhook'"
-              >
-                <div
-                  class="w-10 h-5 rounded-full transition-colors relative"
-                  :style="{
-                    backgroundColor: config.webhook.enabled ? '#10B981' : 'var(--border-medium)',
-                  }"
-                >
-                  <div
-                    class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform shadow-xs"
-                    :class="config.webhook.enabled ? 'translate-x-5' : 'translate-x-0'"
-                  ></div>
-                </div>
-              </button>
+              <AppSwitch :model-value="!!config.webhook.enabled" label="Webhook 通知" :disabled="actionBusy" @update:model-value="toggleChannel('webhook', $event)" />
               <span
-                class="text-sm font-sans font-bold select-none cursor-pointer"
-                @click="toggleChannel('webhook', !config.webhook.enabled)"
+                class="text-sm font-sans font-bold select-none whitespace-nowrap"
+                aria-hidden="true"
                 :style="{ color: config.webhook.enabled ? 'var(--color-up)' : 'var(--text-muted)' }"
               >
                 {{ config.webhook.enabled ? '已开启' : '已关闭' }}
@@ -781,13 +662,7 @@ const toast = useToast()
             ><template #default="{ id: fieldId }"
               ><input :disabled="actionBusy"
                 :id="fieldId"
-                v-model="config.webhook.url"
-                class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border mb-3"
-                style="
-                  background-color: var(--bg-input);
-                  border-color: var(--border-subtle);
-                  color: var(--text-main);
-                " /></template
+                v-model="config.webhook.url" class="mb-3" /></template
           ></AppField>
           <button :disabled="actionBusy"
             @click="diagnose('webhook')"
@@ -822,13 +697,11 @@ const toast = useToast()
       </div>
 
       <!-- Schedule + Notification Categories + Save -->
-      <AppCard
-        class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors space-y-4"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="p-4 sm:p-5 space-y-4"
       >
         <div>
           <h2 class="text-sm font-bold font-sans mb-1" style="color: var(--text-main)">
-            📡 全闭环通知类别与事件流 (Notification Categories)
+            <span aria-hidden="true">📡</span> 全闭环通知类别与事件流 (Notification Categories)
           </h2>
           <p class="text-sm font-sans" style="color: var(--text-muted)">
             系统底层事件已全面升级，针对不同关键节点自动化推送结构化卡片文案：
@@ -920,19 +793,12 @@ const toast = useToast()
               ><input :disabled="actionBusy"
                 :id="fieldId"
                 v-model="config._briefingTimes"
-                placeholder="08:00, 20:00"
-                class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border mb-4"
-                style="
-                  background-color: var(--bg-input);
-                  border-color: var(--border-subtle);
-                  color: var(--text-main);
-                " /></template
+                placeholder="08:00, 20:00" class="mb-4" /></template
           ></AppField>
-          <div class="flex items-center space-x-3">
+          <div class="flex flex-wrap items-center gap-2 sm:gap-3">
             <button :disabled="actionBusy || !canManage"
               @click="saveAll"
-              class="ui-action"
-              style="background-color: var(--text-main); color: var(--bg-card)"
+              class="ui-button ui-button--primary"
             >
               保存全部通知通道
             </button>
@@ -966,7 +832,7 @@ const toast = useToast()
         }
       "
       ><div
-        class="dialog-content p-6 text-center transition-colors"
+        class="text-center transition-colors"
         style="background-color: var(--bg-card); border-color: var(--border-subtle)"
       >
         <h3 class="text-sm font-bold mb-3 font-sans" style="color: var(--text-main)">
@@ -1023,7 +889,7 @@ const toast = useToast()
         }
       "
       ><div
-        class="dialog-content p-5 sm:p-6 text-center transition-colors"
+        class="text-center transition-colors"
         style="background-color: var(--bg-card); border-color: var(--border-subtle)"
       >
         <h3 class="text-sm font-bold mb-2 font-sans" style="color: var(--text-main)">

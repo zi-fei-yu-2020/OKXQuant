@@ -69,9 +69,7 @@ function getActionLabel(action?: string, status?: string) {
     <ScenarioShadowPanel :shadow="store.data?.scenario_shadow" />
     <StrategyTelemetryPanel />
     <!-- Macro Summary Telemetry Strip -->
-    <AppCard
-      class="rounded-xl border p-3 sm:p-3.5 flex items-start space-x-2.5 transition-colors shadow-xs"
-      style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+    <AppCard class="p-3 sm:p-3.5 flex items-start space-x-2.5"
     >
       <div
         class="w-6 h-6 rounded-md flex items-center justify-center border shrink-0 mt-0.5"
@@ -143,9 +141,7 @@ function getActionLabel(action?: string, status?: string) {
         tabindex="0"
         :aria-label="`查看 ${item.name} 的市场信号`"
         @keydown.enter="openDetail(item)"
-        @keydown.space.prevent="openDetail(item)"
-        class="rounded-xl border p-3.5 transition-all duration-150 flex flex-col justify-between cursor-pointer group shadow-xs"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        @keydown.space.prevent="openDetail(item)" class="p-3.5 duration-150 flex flex-col justify-between cursor-pointer group"
         :class="'hover:border-[var(--border-medium)] hover:bg-[var(--bg-card-hover)]'"
       >
         <!-- Top: Header Info -->
@@ -162,7 +158,7 @@ function getActionLabel(action?: string, status?: string) {
                 {{ item.name }}
               </span>
               <span
-                class="text-[9px] font-mono px-1 py-0.2 rounded border"
+                class="text-[9px] font-mono px-1 py-0.5 rounded border"
                 style="
                   background-color: var(--bg-badge);
                   border-color: var(--border-subtle);

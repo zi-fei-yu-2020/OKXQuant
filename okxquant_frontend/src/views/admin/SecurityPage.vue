@@ -18,9 +18,10 @@ import { useDialogs } from '../../composables/useDialogs'
 import { ref, onMounted } from 'vue'
 import { useApi } from '../../composables/useApi'
 import { useAuthStore } from '../../stores/auth'
-import { Wallet, Save, KeyRound, RefreshCw, Layers, Trash2 } from 'lucide-vue-next'
+import { Wallet, Save, KeyRound, RefreshCw, Layers, Trash2, Lock } from 'lucide-vue-next'
 
 const { api } = useApi()
+const { prompt } = useDialogs()
 const auth = useAuthStore()
 const config = ref<any>(null)
 const loading = ref(true)
@@ -148,7 +149,7 @@ const addInstrument = action(async () => {
     if (e?.silent) return
     bannerMsg.value = { text: `添加失败：${e.message}`, type: 'err' }
   }
-}, false)
+})
 
 const removeInstrument = action(async (item: any) => {
   if (item.protected) {
@@ -177,7 +178,7 @@ const removeInstrument = action(async (item: any) => {
     if (e?.silent) return
     bannerMsg.value = { text: `删除失败：${e.message}`, type: 'err' }
   }
-}, false)
+})
 
 async function loadPositions() {
   snapshotState.value = '正在从 OKX 读取当前持仓与挂单…'
@@ -241,8 +242,6 @@ const confirmClose = action(async () => {
 })
 
 onMounted(loadAll)
-
-const { prompt } = useDialogs()
 </script>
 
 <template>
@@ -255,9 +254,7 @@ const { prompt } = useDialogs()
 
     <template v-else-if="config">
       <!-- 2. initial capital -->
-      <AppCard
-        class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="p-4 sm:p-5"
       >
         <div
           class="flex items-center space-x-2 mb-4 pb-3 border-b"
@@ -299,12 +296,8 @@ const { prompt } = useDialogs()
                   v-model="newCapital"
                   type="number"
                   step="0.01"
-                  class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border num-tabular"
-                  style="
-                    background-color: var(--bg-input);
-                    border-color: var(--border-subtle);
-                    color: var(--text-main);
-                  " /></template
+                  min="0.01"
+                  required class="num-tabular" /></template
             ></AppField>
           </div>
           <div>
@@ -317,20 +310,14 @@ const { prompt } = useDialogs()
                 ><input :disabled="actionBusy"
                   :id="fieldId"
                   v-model="capitalConfirm"
-                  placeholder="输入 UPDATE CAPITAL"
-                  class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
-                  style="
-                    background-color: var(--bg-input);
-                    border-color: var(--border-subtle);
-                    color: var(--text-main);
-                  " /></template
+                  placeholder="输入 UPDATE CAPITAL" /></template
             ></AppField>
           </div>
           <div class="flex items-end">
             <button
               @click="saveCapital"
               :disabled="(savingCapital) || actionBusy || !canManage"
-              class="ui-action w-full bg-emerald-700 hover:bg-emerald-800 text-white"
+              class="ui-button ui-button--primary w-full"
             >
               <Save class="w-3.5 h-3.5" /><span>{{
                 savingCapital ? '更新中...' : '更新基准本金'
@@ -341,9 +328,7 @@ const { prompt } = useDialogs()
       </AppCard>
 
       <!-- 3. instruments -->
-      <AppCard
-        class="rounded-xl border overflow-hidden shadow-xs"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="overflow-hidden"
       >
         <div
           class="px-4 py-3 border-b flex flex-wrap gap-3 items-center justify-between"
@@ -362,19 +347,12 @@ const { prompt } = useDialogs()
             <input :disabled="actionBusy"
               aria-label="新增交易标的"
               v-model="newInstId"
-              placeholder="例如: XRP-USDT-SWAP"
-              class="w-44 rounded-lg px-2.5 py-1.5 text-sm font-sans outline-none border transition-colors"
-              style="
-                background-color: var(--bg-input);
-                border-color: var(--border-subtle);
-                color: var(--text-main);
-              "
+              placeholder="例如: XRP-USDT-SWAP" class="w-44 px-2.5 py-1.5 transition-colors"
               @keyup.enter="addInstrument"
             />
             <button :disabled="actionBusy"
               @click="addInstrument"
-              class="ui-action ui-action--sm"
-              style="background-color: var(--text-main); color: var(--bg-card)"
+              class="ui-button ui-button--primary ui-button--sm"
             >
               添加标的
             </button>
@@ -389,7 +367,7 @@ const { prompt } = useDialogs()
           </div>
           <AppButton :disabled="actionBusy" :loading="supportLoading" title="刷新支持状态；60 秒内的合约目录结果可复用" @click="refreshInstrumentSupport">重新核验</AppButton>
         </div>
-        <div class="overflow-x-auto">
+        <div class="table-scroll-container">
           <table class="w-full text-left text-sm font-sans whitespace-nowrap">
             <thead>
               <tr
@@ -426,17 +404,17 @@ const { prompt } = useDialogs()
                 <td class="py-2.5 px-3">
                   <span
                     v-if="item.protected"
-                    class="px-1.5 py-0.2 rounded text-xs font-bold border"
+                    class="px-1.5 py-0.5 rounded text-xs font-bold border"
                     style="
                       background-color: var(--color-warn-bg);
                       border-color: var(--color-warn-border);
                       color: var(--color-warn);
                     "
-                    >🔒 保底必选</span
+                    ><Lock class="inline w-3 h-3 -mt-0.5" aria-hidden="true" /> 保底必选</span
                   >
                   <span
                     v-else-if="item.has_tracker"
-                    class="px-1.5 py-0.2 rounded text-xs font-bold border"
+                    class="px-1.5 py-0.5 rounded text-xs font-bold border"
                     style="
                       background-color: var(--color-brand-bg);
                       border-color: var(--color-brand-border);
@@ -469,9 +447,7 @@ const { prompt } = useDialogs()
       </AppCard>
 
       <!-- 4. positions & emergency close -->
-      <AppCard
-        class="rounded-xl border overflow-hidden shadow-xs"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="overflow-hidden"
       >
         <div
           class="px-4 py-3 border-b flex items-center justify-between"
@@ -511,7 +487,7 @@ const { prompt } = useDialogs()
           {{ snapshot.orders?.length ?? 0 }} ·
           {{ new Date(snapshot.captured_at_ms).toLocaleString() }}
         </div>
-        <div class="overflow-x-auto mt-2">
+        <div class="table-scroll-container mt-2">
           <table
             v-if="snapshot?.positions?.length"
             class="w-full text-left text-sm font-sans whitespace-nowrap"
@@ -542,7 +518,7 @@ const { prompt } = useDialogs()
                 <td class="py-2.5 px-4">
                   <strong style="color: var(--text-main)">{{ p.instId }}</strong>
                   <span
-                    class="ml-1.5 px-1.5 py-0.2 rounded text-xs font-bold border"
+                    class="ml-1.5 px-1.5 py-0.5 rounded text-xs font-bold border"
                     :style="
                       p.posSide === 'long'
                         ? {
@@ -619,7 +595,7 @@ const { prompt } = useDialogs()
         }
       "
       ><div
-        class="dialog-content p-5 sm:p-6 transition-colors"
+        class="transition-colors"
         style="background-color: var(--bg-card); border-color: var(--border-subtle)"
       >
         <h3 class="text-sm font-bold text-rose-500 mb-2 font-sans">快速安全平仓</h3>
@@ -639,13 +615,7 @@ const { prompt } = useDialogs()
             ><input :disabled="actionBusy"
               :id="fieldId"
               v-model="closePassword"
-              type="password"
-              class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border mb-3"
-              style="
-                background-color: var(--bg-input);
-                border-color: var(--border-subtle);
-                color: var(--text-main);
-              " /></template
+              type="password" class="mb-3" /></template
         ></AppField>
         <AppField class="w-full min-w-0"
           ><template #label
@@ -656,13 +626,7 @@ const { prompt } = useDialogs()
             ><input :disabled="actionBusy"
               :id="fieldId"
               v-model="closePhraseInput"
-              :placeholder="closeModal.pos.close_confirmation"
-              class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border mb-4"
-              style="
-                background-color: var(--bg-input);
-                border-color: var(--border-subtle);
-                color: var(--text-main);
-              " /></template
+              :placeholder="closeModal.pos.close_confirmation" class="mb-4" /></template
         ></AppField>
         <div class="flex justify-end gap-2">
           <button :disabled="actionBusy"

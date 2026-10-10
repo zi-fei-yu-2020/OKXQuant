@@ -132,7 +132,8 @@ def load_closed_trades(scope=None):
     if not os.path.exists(LEDGER_JSON_FILE):
         return []
     with open(LEDGER_JSON_FILE, "r", encoding="utf-8") as f:
-        rows, excluded = review_rows(json.load(f), scope, TARGET_INSTRUMENTS, reset_time_str)
+        from scripts.statistics_epoch import filter_rows
+        rows, excluded = review_rows(filter_rows(json.load(f),scope=scope,data_dir=DATA_DIR,keep_active=False), scope, TARGET_INSTRUMENTS, reset_time_str)
     if excluded:
         log_msg("Review excluded non-evidence rows: " + json.dumps(excluded, sort_keys=True))
     return enrich(rows, scope, DATA_DIR)

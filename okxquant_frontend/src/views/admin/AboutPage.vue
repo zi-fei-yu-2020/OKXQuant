@@ -66,9 +66,7 @@ onMounted(() => {
     <template v-else-if="about">
       <!-- About Cards -->
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <AppCard
-          class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="p-4 sm:p-5"
         >
           <div
             class="flex items-center justify-between pb-3 mb-3 border-b"
@@ -110,9 +108,7 @@ onMounted(() => {
           </a>
         </AppCard>
 
-        <AppCard
-          class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="p-4 sm:p-5"
         >
           <div
             class="flex items-center justify-between pb-3 mb-3 border-b"
@@ -142,9 +138,7 @@ onMounted(() => {
       </div>
 
       <!-- Update -->
-      <AppCard
-        class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="p-4 sm:p-5"
       >
         <div
           class="flex items-center justify-between pb-3 mb-3 border-b"
@@ -161,7 +155,7 @@ onMounted(() => {
             >GIT</span
           >
         </div>
-        <div class="flex space-x-2">
+        <div class="flex flex-wrap gap-2">
           <button
             @click="checkUpdate"
             :disabled="updateChecking"

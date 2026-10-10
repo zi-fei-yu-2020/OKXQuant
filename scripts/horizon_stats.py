@@ -61,7 +61,8 @@ def strategy_periods(rows, *, scope, now=None):
     if now_dt is None: raise ValueError("now must be a valid datetime/timestamp")
     as_of=now_dt.isoformat(timespec="seconds")
     midnight=now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-    ledger=_canonical_rows(rows, scope)
+    from scripts.statistics_epoch import filter_rows
+    ledger=_canonical_rows(filter_rows(rows,scope=scope,keep_active=False), scope)
 
     def summarize(start, end, is_today):
         groups={h:{"closed":0,"wins":0,"losses":0,"breakeven":0,"net_pnl":0.0,
@@ -142,6 +143,8 @@ def strategy_periods(rows, *, scope, now=None):
 
 
 def rebuild(rows, *, scope=None):
+    from scripts.statistics_epoch import filter_rows
+    rows=filter_rows(rows,scope=scope,keep_active=False)
     from scripts.trade_quality import finite,loss_class
     result={"scalp":{},"swing":{},"unknown":{},"by_strategy":{},"by_version":{},"by_loss_class":{},"pending_settlements":0}
     buckets=[]
@@ -195,6 +198,9 @@ def rebuild(rows, *, scope=None):
 
 def write(rows, *, scope=None):
     payload=rebuild(rows, scope=scope)
+    from scripts.statistics_epoch import epoch
+    window=epoch(scope) if scope is not None else None
+    if window:payload['statistics_epoch_id']=window['id']
     if scope is not None:
         from scripts.horizon_funnel import rebuild as rebuild_funnel
         from scripts.horizon_allocation import public_status

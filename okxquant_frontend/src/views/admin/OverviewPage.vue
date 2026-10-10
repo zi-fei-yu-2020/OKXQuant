@@ -9,6 +9,7 @@ import AppDialog from '../../components/ui/AppDialog.vue'
 import AppField from '../../components/ui/AppField.vue'
 import LoadingState from '../../components/ui/LoadingState.vue'
 import EmptyState from '../../components/ui/EmptyState.vue'
+import { APP_VERSION } from '../../config/branding'
 
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
@@ -346,13 +347,11 @@ const quickNav = [
     </AppCard>
 
     <!-- Top Executive Header Strip -->
-    <AppCard
-      class="rounded-xl border p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-xs transition-colors"
-      style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+    <AppCard class="p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-3"
     >
       <div>
         <div class="flex items-center space-x-2">
-          <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span class="w-2 h-2 rounded-full animate-pulse motion-reduce:animate-none" style="background: var(--color-up)" aria-hidden="true"></span>
           <h2
             class="text-sm sm:text-base font-black font-sans tracking-wide"
             style="color: var(--text-main)"
@@ -360,14 +359,14 @@ const quickNav = [
             OKXQuant 控制中心
           </h2>
           <span
-            class="px-2 py-0.2 rounded text-xs font-sans font-bold border"
+            class="px-2 py-0.5 rounded text-xs font-sans font-bold border"
             style="
               background-color: var(--color-brand-bg);
               color: var(--color-brand);
               border-color: var(--color-brand-border);
             "
           >
-            v0.1.0
+            {{ APP_VERSION }}
           </span>
         </div>
         <p class="text-sm font-sans mt-1" style="color: var(--text-muted)">
@@ -395,9 +394,7 @@ const quickNav = [
       <!-- 4 High-Density Metric Bento Cards -->
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <!-- 1. 服务状态 -->
-        <AppCard
-          class="rounded-xl border p-4 shadow-xs transition-colors"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="p-4"
         >
           <div class="flex items-center justify-between mb-2">
             <span class="text-xs font-sans" style="color: var(--text-muted)">后台服务进程</span>
@@ -424,9 +421,7 @@ const quickNav = [
         </AppCard>
 
         <!-- 2. 运行时间 -->
-        <AppCard
-          class="rounded-xl border p-4 shadow-xs transition-colors"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="p-4"
         >
           <div class="flex items-center justify-between mb-2">
             <span class="text-xs font-sans" style="color: var(--text-muted)">引擎持续运行</span>
@@ -453,9 +448,7 @@ const quickNav = [
         </AppCard>
 
         <!-- 3. LLM 核心主脑 -->
-        <AppCard
-          class="rounded-xl border p-4 shadow-xs transition-colors cursor-pointer group"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="p-4 cursor-pointer group"
           @click="router.push('/admin/llm')"
         >
           <div class="flex items-center justify-between mb-2">
@@ -487,9 +480,7 @@ const quickNav = [
         </AppCard>
 
         <!-- 4. 交易所环境与授权 -->
-        <AppCard
-          class="rounded-xl border p-4 shadow-xs transition-colors cursor-pointer group"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="p-4 cursor-pointer group"
           @click="router.push(auth.isSuperadmin ? '/admin/accounts' : '/admin/security')"
         >
           <div class="flex items-center justify-between mb-2">
@@ -528,9 +519,7 @@ const quickNav = [
       </div>
 
       <!-- New Install Readiness Matrix UX (Truthful Status) -->
-      <AppCard
-        class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="p-4 sm:p-5"
       >
         <div class="flex items-center justify-between pb-3 mb-3 border-b" style="border-color: var(--border-subtle)">
           <div class="flex items-center space-x-2">
@@ -551,7 +540,7 @@ const quickNav = [
             <div class="flex items-center gap-1.5">
               <span
                 class="size-2 rounded-full shrink-0"
-                :class="connection.configured ? 'bg-amber-400' : 'bg-gray-400'"
+                :style="{ background: connection.configured ? 'var(--color-warn)' : 'var(--border-strong)' }"
               ></span>
               <strong style="color: var(--text-main)">
                 {{ connection.configured ? '静态 Key 已配置（待核验连通）' : '尚未配置凭证' }}
@@ -566,14 +555,14 @@ const quickNav = [
           <div class="p-3 rounded-lg border flex flex-col justify-between gap-2" style="background: var(--bg-card-subtle); border-color: var(--border-subtle)">
             <div class="flex items-center justify-between">
               <span class="text-[var(--text-faint)] font-medium">2. 交易账户</span>
-              <span class="text-[10px] px-1 py-0.2 rounded border font-mono" style="background: var(--bg-badge); border-color: var(--border-subtle); color: var(--text-muted)">
+              <span class="text-[10px] px-1 py-0.5 rounded border font-mono" style="background: var(--bg-badge); border-color: var(--border-subtle); color: var(--text-muted)">
                 {{ connection.mode === 'demo' ? '模拟盘 (DEMO)' : connection.mode === 'live' ? '实盘 (LIVE)' : '未选择环境' }}
               </span>
             </div>
             <div class="flex items-center gap-1.5">
               <span
                 class="size-2 rounded-full shrink-0"
-                :class="isAccountVerified ? 'bg-emerald-400' : 'bg-amber-400'"
+                :style="{ background: isAccountVerified ? 'var(--color-up)' : 'var(--color-warn)' }"
               ></span>
               <strong style="color: var(--text-main)">
                 {{ isAccountVerified ? '账户连接已验证' : connection.configured ? '账户状态待核验' : '未配置账户' }}
@@ -618,7 +607,7 @@ const quickNav = [
             <div class="flex items-center gap-1.5">
               <span
                 class="size-2 rounded-full shrink-0"
-                :class="runtime.runtime_controls?.automatic_trader ? 'bg-emerald-400' : 'bg-gray-400'"
+                :style="{ background: runtime.runtime_controls?.automatic_trader ? 'var(--color-up)' : 'var(--border-strong)' }"
               ></span>
               <strong style="color: var(--text-main)">
                 {{ runtime.runtime_controls?.automatic_trader ? '自动调度已启用' : '自动调度已暂停' }}
@@ -633,9 +622,7 @@ const quickNav = [
 
       <!-- Light Profile / Runtime Features Card -->
       <AppCard
-        v-if="runtimeFeatures"
-        class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        v-if="runtimeFeatures" class="p-4 sm:p-5"
       >
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 mb-3 border-b" style="border-color: var(--border-subtle)">
           <div class="flex items-center space-x-2">
@@ -742,7 +729,7 @@ const quickNav = [
             </div>
           </div>
           <ArrowRight
-            class="w-4 h-4 text-gray-500 group-hover:translate-x-1 transition-transform shrink-0"
+            class="w-4 h-4 text-[var(--text-faint)] group-hover:translate-x-1 transition-transform shrink-0"
           />
         </div>
       </div>
@@ -750,9 +737,7 @@ const quickNav = [
       <!-- Main Operational Analytics Section -->
       <div class="overview-panels grid gap-4">
         <!-- Left: AI Decisions Table -->
-        <AppCard
-          class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors flex flex-col justify-between"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="p-4 sm:p-5 flex flex-col justify-between"
         >
           <div>
             <div
@@ -784,7 +769,7 @@ const quickNav = [
               暂无最新决策记录或大脑正在冷启动...
             </div>
 
-            <div v-else class="overflow-x-auto">
+            <div v-else class="table-scroll-container">
               <table class="w-full text-left font-sans text-xs">
                 <thead>
                   <tr class="border-b" style="border-color: var(--border-subtle); color: var(--text-muted)">
@@ -852,9 +837,7 @@ const quickNav = [
         </AppCard>
 
         <!-- Right: Data Health Table -->
-        <AppCard
-          class="data-health min-w-0 rounded-xl border p-4 sm:p-5 shadow-xs transition-colors flex flex-col justify-between"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="data-health min-w-0 p-4 sm:p-5 flex flex-col justify-between"
         >
           <div>
             <div
@@ -954,9 +937,7 @@ const quickNav = [
       </div>
 
       <!-- Security & Config Cards -->
-      <AppCard
-        class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="p-4 sm:p-5"
       >
         <div
           class="flex items-center justify-between pb-3 mb-3 border-b"
@@ -1036,7 +1017,7 @@ const quickNav = [
             id="controls-confirmation-input"
             v-model="controlsConfirmationInput"
             type="text"
-            class="ui-input w-full font-mono text-sm"
+            class="w-full font-mono text-sm"
             :placeholder="expectedConfirmation"
             :disabled="controlsSubmitting"
             autocomplete="off"

@@ -212,7 +212,7 @@ onUnmounted(() => {
     <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
       <div class="flex flex-wrap items-center gap-3 min-w-0">
         <label class="sr-only" for="market-chart-instrument">K线标的</label>
-        <select id="market-chart-instrument" v-model="instrument" class="ui-input market-chart__select" aria-label="K线标的">
+        <select id="market-chart-instrument" v-model="instrument" class="market-chart__select" aria-label="K线标的">
           <option v-for="id in instruments" :key="id" :value="id">{{ id.replace('-USDT-SWAP', '') }} / USDT 永续</option>
         </select>
         <div class="min-w-0"><div class="text-base font-semibold num-tabular" data-chart-price>{{ formatPrice(last?.close) }}</div><div class="text-[11px]" style="color:var(--text-muted)">本根剩余 {{ countdown }} · {{ last ? last.confirmed ? '已收盘' : '未收盘' : '--' }}</div></div>

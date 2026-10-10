@@ -73,7 +73,8 @@ def build_lifecycle_ledger(*, notify=True):
     LAST_RECONCILIATION_METRICS.clear();LAST_RECONCILIATION_METRICS.update(metrics)
     env=selected_environment()
     from okxquant_backend.account_baseline import load_account_baseline
-    reset_time=load_account_baseline(scope=env.identity, path=INITIAL_STATE_FILE)['reset_time']
+    baseline=load_account_baseline(scope=env.identity, path=INITIAL_STATE_FILE)
+    reset_time=baseline.get('canonical_history_start',baseline['reset_time'])
 
     existing_closed_ids = set()
     existing_closed_rows = []

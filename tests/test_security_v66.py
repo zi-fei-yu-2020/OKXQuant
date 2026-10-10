@@ -16,6 +16,16 @@ class SecurityFixesTestCase(unittest.TestCase):
         resp = self.client.get("/api/v1/cache/sentiment")
         self.assertEqual(resp.status_code, 401)
 
+    def test_public_ticker_rejects_non_usdt_swap_ids_before_upstream(self):
+        from unittest.mock import patch
+        from okxquant_backend import app as backend
+        with patch.object(backend.okx, "ticker") as ticker:
+            for inst_id in ("BTC-USD-SWAP", "btc-USDT-SWAP", "X" * 30 + "-USDT-SWAP", "BTC-USDT-SWAP-SWAP"):
+                self.assertEqual(self.client.get("/api/v1/market/" + inst_id).status_code, 400, inst_id)
+            ticker.assert_not_called()
+            ticker.return_value = [{"last": "1"}]
+            self.assertEqual(self.client.get("/api/v1/market/BTC-USDT-SWAP").status_code, 200)
+
     def test_mask_url_masks_webhook_tokens(self):
         raw = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=693a91f6-7xxx-4bc4-97a0-0b2e53e15fa6"
         masked = mask_url(raw)

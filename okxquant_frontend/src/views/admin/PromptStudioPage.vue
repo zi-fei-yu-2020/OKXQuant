@@ -512,8 +512,8 @@ const { confirm, prompt } = useDialogs()
     <div v-if="loadFailed" role="alert" class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color:var(--color-down-border);color:var(--text-main)"><span>页面加载失败，请重试。</span><button class="ui-button ui-button--secondary ui-button--sm" :disabled="loading || actionBusy" @click="loadLib(hasDraft)">重试</button></div>
     <AppDialog :busy="actionBusy" v-model:open="createVisible" title="新建策略" size="sm">
       <div class="space-y-4">
-        <AppField label="策略名称" v-slot="field"><input :disabled="actionBusy" :id="field.id" v-model="newProfileName" maxlength="60" class="ui-input w-full" /></AppField>
-        <AppField label="执行模式" v-slot="field"><select :disabled="actionBusy" :id="field.id" v-model="newExecutionProfile" class="ui-input w-full"><option value="standard">标准风控</option><option value="small300">300U 风险预算</option></select></AppField>
+        <AppField label="策略名称" v-slot="field"><input :disabled="actionBusy" :id="field.id" v-model="newProfileName" maxlength="60" class="w-full" /></AppField>
+        <AppField label="执行模式" v-slot="field"><select :disabled="actionBusy" :id="field.id" v-model="newExecutionProfile" class="w-full"><option value="standard">标准风控</option><option value="small300">300U 风险预算</option></select></AppField>
         <p class="text-sm" style="color:var(--text-muted)">基于稳健模板新建，明确绑定执行模式，不改写模板规则。新建后不会自动激活。</p>
       </div>
       <template #footer><button :disabled="actionBusy || !canManage" class="ui-button ui-button--primary" @click="createProfile">新建策略</button></template>
@@ -526,7 +526,7 @@ const { confirm, prompt } = useDialogs()
           编排交易提示词模块，右侧预览本地拼接结果；实时变量在下一次新决策时填入。
         </p>
       </div>
-      <div class="flex items-center space-x-1.5 shrink-0">
+      <div class="flex flex-wrap items-center gap-1.5 shrink-0 [&>button]:whitespace-nowrap">
         <button :disabled="actionBusy"
           @click="showVarRibbon = !showVarRibbon"
           class="ui-action ui-action--sm border"
@@ -594,9 +594,7 @@ const { confirm, prompt } = useDialogs()
 
     <!-- Collapsible Quick Variable Inserter Ribbon -->
     <AppCard
-      v-if="showVarRibbon"
-      class="rounded-xl border p-3 flex flex-wrap items-center gap-2 shadow-xs transition-colors"
-      style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      v-if="showVarRibbon" class="p-3 flex flex-wrap items-center gap-2"
     >
       <div
         class="flex items-center space-x-1.5 text-xs font-bold mr-1"
@@ -659,9 +657,7 @@ const { confirm, prompt } = useDialogs()
       class="grid grid-cols-1 xl:grid-cols-[240px_minmax(0,1fr)_400px] gap-3.5 items-start"
     >
       <!-- Left: Profile List -->
-      <AppCard
-        class="rounded-xl border p-3 space-y-2 h-fit shadow-xs transition-colors"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="p-3 space-y-2 h-fit"
       >
         <div
           class="flex items-center justify-between px-1 pb-2 border-b"
@@ -673,8 +669,7 @@ const { confirm, prompt } = useDialogs()
           <button :disabled="actionBusy"
             v-if="auth.isSuperadmin"
             @click="createVisible = true"
-            class="ui-action ui-action--sm"
-            style="background-color: var(--text-main); color: var(--bg-card)"
+            class="ui-button ui-button--primary ui-button--sm"
           >
             <Plus class="w-3 h-3" />
             <span>新建方案</span>
@@ -701,7 +696,7 @@ const { confirm, prompt } = useDialogs()
               }}</span>
               <span
                 v-if="p.id === lib.active_profile_id"
-                class="text-xs font-bold px-1.5 py-0.2 rounded border"
+                class="text-xs font-bold px-1.5 py-0.5 rounded border"
                 style="
                   background-color: var(--color-up-bg);
                   color: var(--color-up);
@@ -719,13 +714,11 @@ const { confirm, prompt } = useDialogs()
       </AppCard>
 
       <!-- Center: Modules Editor (100% Unlocked) -->
-      <AppCard
-        class="rounded-xl border p-4 min-w-0 shadow-xs space-y-3 transition-colors flex flex-col"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="p-4 min-w-0 space-y-3 flex flex-col"
       >
         <section class="rounded-lg border p-3 text-sm space-y-2" style="border-color:var(--color-brand-border);background:var(--color-brand-bg)" data-execution-binding>
           <AppField label="执行模式（与提示词独立）" v-slot="field">
-            <select :id="field.id" v-model="selectedExecution" class="ui-input w-full" :disabled="(!auth.isSuperadmin || selectedProfileId === 'small300') || actionBusy">
+            <select :id="field.id" v-model="selectedExecution" class="w-full" :disabled="(!auth.isSuperadmin || selectedProfileId === 'small300') || actionBusy">
               <option value="standard">标准风控</option><option value="small300">300U 风险预算</option>
             </select>
           </AppField>
@@ -773,7 +766,7 @@ const { confirm, prompt } = useDialogs()
                 activeEditingIdx === idx ? 'var(--color-brand-border)' : 'var(--border-subtle)',
               opacity: m.enabled ? '1' : '0.5',
             }"
-            :class="activeEditingIdx === idx ? 'ring-1 ring-blue-500/30' : ''"
+            :class="activeEditingIdx === idx ? 'ring-1 ring-[var(--color-brand-border)]' : ''"
           >
             <div class="prompt-module__header mb-2" data-module-header>
               <!-- Title & Ordering -->
@@ -849,13 +842,7 @@ const { confirm, prompt } = useDialogs()
             <textarea :disabled="actionBusy" aria-label="模块提示词内容"
               v-model="m.content"
               @focus="activeEditingIdx = idx"
-              rows="5"
-              class="w-full rounded-lg px-3 py-2 text-sm outline-none border resize-y leading-relaxed transition-colors select-text font-sans"
-              style="
-                background-color: var(--bg-input);
-                border-color: var(--border-subtle);
-                color: var(--text-main);
-              "
+              rows="5" class="resize-y leading-relaxed transition-colors select-text"
               placeholder="编写该模块的提示词或插入 {{variable}} 数据插槽..."
               @input="dirty = true"
             ></textarea>
@@ -885,25 +872,19 @@ const { confirm, prompt } = useDialogs()
             <button
               @click="saveProfile"
               :disabled="(!dirty || !auth.isSuperadmin) || actionBusy || !canManage"
-              class="ui-action btn-primary-text"
-              :class="
-                dirty
-                  ? 'cursor-pointer hover:bg-blue-600 active:scale-95'
-                  : 'opacity-40 cursor-not-allowed'
-              "
-              style="background-color: #2563eb; color: #ffffff !important"
+              class="ui-button ui-button--primary"
             >
-              <Save class="w-4 h-4" style="color: #ffffff" />
-              <span style="color: #ffffff">保存当前方案{{ dirty ? ' *' : '' }}</span>
+              <Save class="w-4 h-4" aria-hidden="true" />
+              <span>保存当前方案{{ dirty ? ' *' : '' }}</span>
             </button>
             <button :disabled="actionBusy || !canManage"
               v-if="selectedProfileId !== lib.active_profile_id && auth.isSuperadmin"
               @click="activateProfile"
-              class="ui-action btn-primary-text hover:bg-emerald-600"
-              style="background-color: #067647; color: #ffffff !important"
+              class="ui-button ui-button--secondary"
+              :style="{ color: 'var(--color-up)', borderColor: 'var(--color-up-border)', backgroundColor: 'var(--color-up-bg)' }"
             >
-              <CheckCircle2 class="w-4 h-4" style="color: #ffffff" />
-              <span style="color: #ffffff">设为当前策略</span>
+              <CheckCircle2 class="w-4 h-4" aria-hidden="true" />
+              <span>设为当前策略</span>
             </button>
           </div>
 
@@ -951,9 +932,7 @@ const { confirm, prompt } = useDialogs()
       </AppCard>
 
       <!-- Right: Compiled Live Preview with Dual-Mode Toggle -->
-      <AppCard
-        class="rounded-xl border p-4 h-fit shadow-xs space-y-3 transition-colors"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="p-4 h-fit space-y-3"
       >
         <div
           class="flex items-center justify-between pb-2 border-b"
@@ -1049,7 +1028,7 @@ const { confirm, prompt } = useDialogs()
         }
       "
       ><div
-        class="dialog-content p-5 sm:p-6 space-y-4 transition-colors"
+        class="space-y-4 transition-colors"
         style="background-color: var(--bg-card); border-color: var(--border-subtle)"
       >
         <div
@@ -1115,10 +1094,9 @@ const { confirm, prompt } = useDialogs()
                   insertVarIntoActiveModule(v.key)
                   variableGuideVisible = false
                  }"
-                class="ui-action ui-action--sm btn-primary-text hover:bg-blue-600"
-                style="background-color: #2563eb; color: #ffffff !important"
+                class="ui-button ui-button--primary ui-button--sm"
               >
-                <span style="color: #ffffff">插入到当前模块</span>
+                <span>插入到当前模块</span>
               </button>
             </div>
             <p class="text-xs font-sans" style="color: var(--text-muted)">{{ v.description }}</p>
@@ -1154,7 +1132,7 @@ const { confirm, prompt } = useDialogs()
         }
       "
       ><div
-        class="dialog-content p-5 sm:p-6 space-y-4 transition-colors"
+        class="space-y-4 transition-colors"
         style="background-color: var(--bg-card); border-color: var(--border-subtle)"
       >
         <div
@@ -1218,13 +1196,7 @@ const { confirm, prompt } = useDialogs()
           <AppField class="w-full min-w-0"><template #label><span class="block text-sm font-bold mb-1.5" style="color: var(--text-main)"
             >方式二：或直接粘贴策略 JSON 文本</span></template><template #default="{ id: fieldId }"><textarea :disabled="actionBusy" :id="fieldId"
             v-model="importRawJson"
-            rows="6"
-            class="w-full border rounded-xl px-3 py-2 text-sm outline-none resize-y font-sans transition-colors"
-            style="
-              background-color: var(--bg-input);
-              border-color: var(--border-subtle);
-              color: var(--text-main);
-            "
+            rows="6" class="rounded-xl resize-y transition-colors"
             placeholder='{"format": "okxquant-prompt-profile", "version": 3, "profile": { ... }}'
           ></textarea></template></AppField>
         </div>
@@ -1233,13 +1205,7 @@ const { confirm, prompt } = useDialogs()
           <AppField class="w-full min-w-0"><template #label><span class="block text-sm font-bold mb-1.5" style="color: var(--text-main)"
             >自定义导入方案名称（可选）</span></template><template #default="{ id: fieldId }"><input :disabled="actionBusy" :id="fieldId"
             v-model="importNameOverride"
-            type="text"
-            class="w-full border rounded-xl px-3 py-2 text-sm outline-none transition-colors"
-            style="
-              background-color: var(--bg-input);
-              border-color: var(--border-subtle);
-              color: var(--text-main);
-            "
+            type="text" class="rounded-xl transition-colors"
             placeholder="留空则自动采用策略包内部的原始名称"
           /></template></AppField>
         </div>
@@ -1251,8 +1217,7 @@ const { confirm, prompt } = useDialogs()
 
           <button :disabled="actionBusy || !canManage"
             @click="submitImport"
-            class="ui-action"
-            style="background-color: var(--text-main); color: var(--bg-card)"
+            class="ui-button ui-button--primary"
           >
             确认导入并载入方案
           </button>
@@ -1274,7 +1239,7 @@ const { confirm, prompt } = useDialogs()
         }
       "
       ><div
-        class="dialog-content p-5 sm:p-6 transition-colors"
+        class="transition-colors"
         style="background-color: var(--bg-card); border-color: var(--border-subtle)"
       >
         <div

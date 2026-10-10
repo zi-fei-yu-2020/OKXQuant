@@ -16,7 +16,8 @@ _ROWS=VersionedJsonProjection(_checked_rows)
 
 def read_ledger(path):
     """Shared exact-generation source cache for lists, details and statistics."""
-    return _ROWS.read(path)
+    from scripts.statistics_epoch import filter_rows
+    return filter_rows(_ROWS.read(path), data_dir=Path(path).parent)
 _LOCK=threading.Lock()
 _KEY=None
 _VALUE=None
@@ -29,9 +30,11 @@ def read_periods(path, scope, *, now=None):
     day=datetime.fromtimestamp(now,timezone(timedelta(hours=8))).date().isoformat()
     with _LOCK:
         try:
-            before=_signature(path.stat());key=(str(path),before,scope,day,int(now)//60)
+            from scripts.statistics_epoch import epoch, filter_rows
+            window=epoch(scope,path.parent)
+            before=_signature(path.stat());key=(str(path),before,scope,day,int(now)//60,(window or {}).get('id'))
             if _KEY==key:return _VALUE
-            rows=_ROWS.read(path)
+            rows=filter_rows(_ROWS.read(path),scope=scope,data_dir=path.parent,keep_active=False)
             if _signature(path.stat())!=before:raise OSError("Ledger changed during statistics read")
             value=strategy_periods(rows,scope=scope,now=now)
             _KEY=key;_VALUE=value

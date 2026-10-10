@@ -300,7 +300,7 @@ class SchedulerSafetyTests(SchedulerFixture):
         self.assertFalse(self.scheduler.due(trader, self.now.replace(second=1), {}))
 
     def test_long_maintenance_does_not_queue_trader_or_guards(self):
-        recorders = {name: RecordingExecutor() for name in ['executor','trader_executor','guard_executor','ledger_executor','scalp_executor']}
+        recorders = {name: RecordingExecutor() for name in ['executor','trader_executor','guard_executor','ledger_executor']}
         jobs = tuple(job for job in sched.JOBS if job.name in {'trader','position_guard','self_improvement','demo_scalp'})
         with ExitStack() as stack:
             for name, executor in recorders.items():
@@ -309,13 +309,13 @@ class SchedulerSafetyTests(SchedulerFixture):
             stack.enter_context(patch.object(sched, 'load_schedule', return_value={}))
             self.scheduler.tick(self.now)
             # The review job is deliberately deferred at a trader boundary.
-            # Trader/guard stay immediate; retired minute entries never queue.
+            # Trader/guard stay immediate; retired minute entries have no executor.
             self.assertEqual(len(recorders['executor'].calls), 0)
             self.assertEqual(len(recorders['trader_executor'].calls), 1)
             self.assertEqual(len(recorders['guard_executor'].calls), 1)
-            self.assertEqual(len(recorders['scalp_executor'].calls), 0)
+            self.assertFalse(hasattr(self.scheduler, 'scalp_executor'))
             self.scheduler.tick(self.now.replace(second=5))
-            self.assertEqual(len(recorders['scalp_executor'].calls), 0)
+            self.assertEqual(len(recorders['trader_executor'].calls), 1)
 
     def test_obsolete_queued_spec_does_not_spawn(self):
         spec = sched.JobSpec('backup:example', 'nightly_backup_and_clean.py', schedule_key='backup_job:example', default_times=('20:00',))

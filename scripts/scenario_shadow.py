@@ -43,6 +43,10 @@ def apply_frames(scope, frames, *, path=None, spec=None):
         db.execute('BEGIN IMMEDIATE')
         row = db.execute('SELECT payload FROM states WHERE scope=?', (scope,)).fetchone()
         state = json.loads(row[0]) if row else engine.initial_state(scope, spec)
+        from scripts.statistics_epoch import epoch
+        window=epoch(scope,Path(path).parent)
+        if window and state.get('statistics_epoch_id')!=window['id']:
+            state=engine.initial_state(scope,spec);state['statistics_epoch_id']=window['id']
         for frame in frames:
             before = {e['event_id'] for e in state['events']}
             state = engine.advance(state, frame, spec)
@@ -66,7 +70,12 @@ def public_status(scope, *, path=None, now=None):
             if row is None:
                 return {'enabled': False, 'mode': 'shadow_only', 'order_authorized': False}
             state = json.loads(row[0])
+            from scripts.statistics_epoch import epoch
+            window=epoch(scope,path.parent)
+            if window and state.get('statistics_epoch_id')!=window['id']:
+                return {'enabled':True,'mode':'shadow_only','status':'not_started','order_authorized':False,'frames':{},'candidates':[],'recent_events':[],'statistics_epoch_id':window['id']}
             events = [json.loads(r[0]) for r in db.execute('SELECT payload FROM events WHERE scope=? ORDER BY at DESC,id DESC LIMIT 15', (scope,))]
+        if window:events=[e for e in events if e.get('at_ms',0)>=window['started_at']*1000]
         last = max(state['last_at'].values(), default=0)
         valid = max(state['last_valid_at'].values(), default=0)
         candidates = list(state['candidates'].values())

@@ -71,9 +71,7 @@ const allProtected = computed(
 </script>
 
 <template>
-  <AppCard
-    class="rounded-xl border transition-all shadow-xs overflow-hidden"
-    style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+  <AppCard class="overflow-hidden"
   >
     <!-- Tactical Desk Header Ribbon -->
     <div
@@ -103,7 +101,7 @@ const allProtected = computed(
           <Activity class="w-3.5 h-3.5" />
           <span>当前账户持仓</span>
           <span
-            class="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold"
+            class="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold"
             :style="
               activeTab === 'positions'
                 ? { backgroundColor: 'var(--text-main)', color: 'var(--bg-card)' }
@@ -132,7 +130,7 @@ const allProtected = computed(
           <Clock class="w-3.5 h-3.5" />
           <span>在途限价挂单</span>
           <span
-            class="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold"
+            class="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold"
             :style="
               activeTab === 'orders'
                 ? { backgroundColor: 'var(--text-main)', color: 'var(--bg-card)' }
@@ -234,7 +232,7 @@ const allProtected = computed(
                     {{ pos.name }}
                   </span>
                   <span
-                    class="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold border"
+                    class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border"
                     style="
                       background-color: var(--bg-badge);
                       color: var(--text-main);
@@ -421,7 +419,7 @@ const allProtected = computed(
               </td>
               <td class="py-2.5 px-3.5 text-right font-bold" style="color: var(--text-main)">
                 <span class="inline-flex items-center space-x-1">
-                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <span class="w-1.5 h-1.5 rounded-full animate-pulse motion-reduce:animate-none" style="background: var(--color-up)" aria-hidden="true"></span>
                   <span>挂单中</span>
                 </span>
               </td>

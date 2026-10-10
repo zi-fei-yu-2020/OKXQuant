@@ -108,7 +108,7 @@ def current_jobs() -> tuple[JobSpec, ...]:
     # Read the writable configuration each tick so a pause does not need a restart.
     from scripts.okx_runtime import _load_dotenv
     automatic = _load_dotenv().get("OKXQUANT_AUTOTRADE_ENABLED", "1") == "1"
-    jobs = tuple(job for job in JOBS if automatic or job.name not in {"trader", "demo_scalp"})
+    jobs = tuple(job for job in JOBS if automatic or job.name != "trader")
     from scripts.runtime_features import status as runtime_status
     features = runtime_status()["features"]
     disabled_jobs = set()
@@ -159,7 +159,6 @@ class GatewayScheduler:
         # Long maintenance jobs must not delay the unchanged entry time window.
         self.backup_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="okxquant-backup")
         self.trader_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="okxquant-trader")
-        self.scalp_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="okxquant-demo-scalp")
         self.running: dict[str, Future[None]] = {}
         self.pending_completions = {}
         self.completion_lock = threading.Lock()
@@ -400,7 +399,7 @@ class GatewayScheduler:
                 if spec.name == "self_improvement" and not self._self_improvement_window_open(now, spec):
                     continue
                 executor = {"position_guard": self.guard_executor, "ledger_sync": self.ledger_executor,
-                            "trader": self.trader_executor, "demo_scalp": self.scalp_executor}.get(spec.name, self.executor)
+                            "trader": self.trader_executor}.get(spec.name, self.executor)
                 if spec.schedule_key.startswith("backup_job:"):
                     executor = self.backup_executor
                 self.running[spec.name] = executor.submit(self._execute, spec, now)
@@ -446,7 +445,7 @@ class GatewayScheduler:
 
     def shutdown(self) -> None:
         executors = (self.guard_executor, self.ledger_executor, self.trader_executor,
-                     self.scalp_executor, self.backup_executor, self.executor)
+                     self.backup_executor, self.executor)
         # Cancel every queue before waiting on any long-running job. Keep the
         # worker flock until every active child has returned.
         for executor in executors:

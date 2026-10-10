@@ -126,14 +126,16 @@ def observe(scope,packages,candidates,result,*,path=None,now=None):
 
 def public_status(scope,*,path=None):
     path=Path(path or DB_PATH)
+    from scripts.statistics_epoch import epoch
+    window=epoch(scope,path.parent);since=window['started_at'] if window else 0
     if not path.exists():return {'status':'not_started','order_authorized':False,'version':VERSION}
     try:
         with closing(sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True,timeout=.1)) as db:
-            states=dict(db.execute('SELECT status,count(*) FROM cases WHERE scope=? GROUP BY status',(scope,)))
-            outcomes=dict(db.execute("SELECT first_touch,count(*) FROM cases WHERE scope=? AND status='complete' GROUP BY first_touch",(scope,)))
-            latest=db.execute('SELECT payload FROM frames WHERE scope=? ORDER BY at DESC LIMIT 1',(scope,)).fetchone()
-            total=db.execute('SELECT count(*) FROM frames WHERE scope=?',(scope,)).fetchone()[0]
-            recent=db.execute('SELECT payload FROM frames WHERE scope=? ORDER BY at DESC LIMIT 200',(scope,)).fetchall()
+            states=dict(db.execute('SELECT status,count(*) FROM cases WHERE scope=? AND created>=? GROUP BY status',(scope,since)))
+            outcomes=dict(db.execute("SELECT first_touch,count(*) FROM cases WHERE scope=? AND created>=? AND status='complete' GROUP BY first_touch",(scope,since)))
+            latest=db.execute('SELECT payload FROM frames WHERE scope=? AND at>=? ORDER BY at DESC LIMIT 1',(scope,since)).fetchone()
+            total=db.execute('SELECT count(*) FROM frames WHERE scope=? AND at>=?',(scope,since)).fetchone()[0]
+            recent=db.execute('SELECT payload FROM frames WHERE scope=? AND at>=? ORDER BY at DESC LIMIT 200',(scope,since)).fetchall()
             comparison={}
             for (raw,) in recent:
                 frame=json.loads(raw);selected=frame.get('eligible_selection') or {};ranking=frame.get('ranking') or {}

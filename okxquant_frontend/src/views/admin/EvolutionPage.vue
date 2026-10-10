@@ -207,9 +207,7 @@ const toast = useToast()
     <!-- Banner -->
 
     <!-- Navigation Tabs -->
-    <AppCard
-      class="flex flex-wrap items-center justify-between gap-3 p-1.5 rounded-xl border"
-      style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+    <AppCard class="flex flex-wrap items-center justify-between gap-3 p-1.5"
     >
       <div class="flex flex-wrap gap-1">
         <button :disabled="actionBusy"
@@ -275,9 +273,7 @@ const toast = useToast()
 
     <!-- TAB 2 & 3: Template Pipelines (Evolution System / User) -->
     <div v-else class="space-y-4">
-      <AppCard
-        class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors space-y-4"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="p-4 sm:p-5 space-y-4"
       >
         <div
           class="flex items-center justify-between pb-3 border-b"
@@ -303,8 +299,7 @@ const toast = useToast()
             v-if="auth.isSuperadmin"
             @click="savePipelineModules"
             :disabled="(busy !== '') || actionBusy || !canManage"
-            class="ui-action"
-            style="background-color: var(--text-main); color: var(--bg-card)"
+            class="ui-button ui-button--primary"
           >
             <Save class="w-3.5 h-3.5" />
             <span>{{ busy === 'save' ? '保存中...' : '保存模版' }}</span>
@@ -328,7 +323,7 @@ const toast = useToast()
                   v-model="mod.enabled"
                   @change="dirty = true"
                   type="checkbox"
-                  class="accent-blue-500 w-3.5 h-3.5"
+                  class="w-3.5 h-3.5"
                   :disabled="(!auth.isSuperadmin) || actionBusy"
                 />
                 <span
@@ -342,13 +337,7 @@ const toast = useToast()
               v-model="mod.content"
               @input="dirty = true"
               :disabled="(!auth.isSuperadmin || mod.locked) || actionBusy"
-              rows="6"
-              class="w-full rounded-lg p-3 text-sm font-sans leading-relaxed outline-none border transition-colors resize-y"
-              style="
-                background-color: var(--bg-input);
-                border-color: var(--border-subtle);
-                color: var(--text-main);
-              "
+              rows="6" class="p-3 leading-relaxed transition-colors resize-y"
             ></textarea>
           </div>
         </div>

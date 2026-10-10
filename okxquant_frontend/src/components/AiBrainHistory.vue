@@ -1,154 +1,88 @@
 <script setup lang="ts">
 import AppCard from './ui/AppCard.vue'
-
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useDashboardStore } from '../stores/dashboard'
 import { Brain, ChevronDown, Users } from 'lucide-vue-next'
 import { getSessionToken, buildAuthHeaders, handleSessionResponse } from '../utils/sessionResponse'
+import { todayHistory, shanghaiDay, historyTime } from '../utils/aiHistoryToday'
 
 const store = useDashboardStore()
-const visibleCount = ref(24)
 const expanded = ref<Set<string>>(new Set())
 const loadingDetails = ref<Set<string>>(new Set())
 const historyKey = (item: any) => item?.history_id || JSON.stringify(item)
-
-
-
 const serverHistory = ref<any[] | null>(null)
-const serverTotal = ref<number | null>(null)
 const loadingHistory = ref(false)
+const clock = ref(Date.now())
 let fetchEpoch = 0
+let contextEpoch = 0
 let activeController: AbortController | null = null
-
-const allHistory = computed(() => {
-  if (serverHistory.value !== null) {
-    return serverHistory.value
-  }
-  return store.data?.ai_brain_history || []
-})
-
-const history = computed(() => allHistory.value.slice(0, visibleCount.value))
+let poll: ReturnType<typeof setInterval> | null = null
+const detailControllers = new Set<AbortController>()
+const history = computed(() => todayHistory(serverHistory.value ?? store.data?.ai_brain_history ?? [], clock.value))
 
 async function toggle(item: any) {
   const key = historyKey(item)
   const next = new Set(expanded.value)
-  if (next.has(key)) {
-    next.delete(key)
-    expanded.value = next
-    return
-  }
-  next.add(key)
-  expanded.value = next
+  if (next.has(key)) { next.delete(key); expanded.value = next; return }
+  next.add(key); expanded.value = next
   if (!item?.history_id || item?.details_loaded || loadingDetails.value.has(key)) return
+  const scope = store.data?.account_source_id
+  const day = shanghaiDay(); const session = getSessionToken(); const epoch = contextEpoch
+  const controller = new AbortController(); detailControllers.add(controller)
   loadingDetails.value = new Set(loadingDetails.value).add(key)
   try {
-    const session = getSessionToken()
-    const resp = await fetch(`/api/ai/history/${encodeURIComponent(item.history_id)}`, {
-      cache: 'no-store',
-      headers: buildAuthHeaders(session),
-    })
-    if (resp.status === 401 || resp.status === 403) {
-      handleSessionResponse(resp.status, session)
-      return
-    }
-    if (resp.ok) Object.assign(item, await resp.json(), { details_loaded: true })
-  } finally {
-    const pending = new Set(loadingDetails.value)
-    pending.delete(key)
-    loadingDetails.value = pending
+    const resp = await fetch('/api/ai/history/' + encodeURIComponent(item.history_id), { cache: 'no-store', headers: buildAuthHeaders(session), signal: controller.signal })
+    if (session !== getSessionToken() || epoch !== contextEpoch || scope !== store.data?.account_source_id || day !== shanghaiDay()) return
+    if (resp.status === 401 || resp.status === 403) { handleSessionResponse(resp.status, session); return }
+    if (!resp.ok) return
+    const details = await resp.json()
+    const owner = details.account_scope || details.environment_id || details.account_source_id
+    if (session !== getSessionToken() || epoch !== contextEpoch || scope !== store.data?.account_source_id || owner !== scope || day !== shanghaiDay()) return
+    Object.assign(item, details, { history_id: key, details_loaded: true })
+  } catch { /* Preserve the collapsed/last-good record on transient failure. */ }
+  finally {
+    detailControllers.delete(controller)
+    if (epoch === contextEpoch) { const next = new Set(loadingDetails.value); next.delete(key); loadingDetails.value = next }
   }
 }
-
-async function fetchServerHistory(offset = 0) {
-  if (activeController) {
-    activeController.abort()
-  }
-  const controller = new AbortController()
-  activeController = controller
-  const epoch = ++fetchEpoch
-
+async function fetchServerHistory() {
+  activeController?.abort()
+  const controller = new AbortController(); activeController = controller
+  const scope = store.data?.account_source_id; const session = getSessionToken(); const epoch = ++fetchEpoch
+  const timeout = setTimeout(() => controller.abort(), 12000)
   loadingHistory.value = true
   try {
-    const session = getSessionToken()
-    const resp = await fetch(`/api/ai/history?limit=25&offset=${offset}`, {
-      signal: controller.signal,
-      headers: buildAuthHeaders(session),
-    })
-    if (resp.status === 401 || resp.status === 403) {
-      handleSessionResponse(resp.status, session)
-      return
-    }
+    const resp = await fetch('/api/ai/history?today_only=true&limit=512', { signal: controller.signal, headers: buildAuthHeaders(session), cache: 'no-store' })
+    if (session !== getSessionToken() || epoch !== fetchEpoch) return
+    if (resp.status === 401 || resp.status === 403) { handleSessionResponse(resp.status, session); return }
     if (!resp.ok) return
     const json = await resp.json()
-    if (epoch !== fetchEpoch) return
-
-    if (Array.isArray(json?.items)) {
-      const currentList = offset === 0 ? [] : (serverHistory.value || [...allHistory.value])
-      const merged = [...currentList]
-      const knownIds = new Set(merged.map((x: any) => historyKey(x)))
-      for (const it of json.items) {
-        if (!knownIds.has(historyKey(it))) {
-          merged.push(it)
-          knownIds.add(historyKey(it))
-        }
-      }
-      serverHistory.value = merged
-      if (typeof json?.total === 'number') serverTotal.value = json.total
-    }
-  } catch {
-    // Aborted or offline
-  } finally {
-    if (epoch === fetchEpoch) {
-      loadingHistory.value = false
-      if (activeController === controller) activeController = null
-    }
-  }
+    if (epoch !== fetchEpoch || session !== getSessionToken() || !scope || scope !== store.data?.account_source_id || json.account_source_id !== scope) return
+    clock.value = Date.now()
+    const prior = new Map((serverHistory.value || []).map(row => [historyKey(row), row]))
+    if (Array.isArray(json.items)) serverHistory.value = todayHistory(json.items, clock.value).map(row => { const existing = prior.get(historyKey(row)); return existing ? Object.assign(existing, row) : row })
+  } catch { /* Background refresh retains today's last-good list. */ }
+  finally { clearTimeout(timeout); if (epoch === fetchEpoch) { loadingHistory.value = false; activeController = null } }
 }
-
-async function handleLoadMore() {
-  visibleCount.value += 24
-  const currentLen = allHistory.value.length
-  if (serverTotal.value !== null && currentLen >= serverTotal.value) return
-  if (currentLen > 0) {
-    await fetchServerHistory(currentLen)
-  }
+function resetScope() {
+  contextEpoch += 1
+  fetchEpoch += 1; activeController?.abort(); activeController = null
+  detailControllers.forEach(c => c.abort()); detailControllers.clear()
+  serverHistory.value = null; expanded.value = new Set(); loadingDetails.value = new Set(); clock.value = Date.now()
+  if (typeof window !== 'undefined') void fetchServerHistory()
 }
-
-// Watch account scope changes
-watch(
-  () => store.data?.account_source_id,
-  (newScope, oldScope) => {
-    if (newScope !== oldScope) {
-      if (activeController) {
-        activeController.abort()
-        activeController = null
-      }
-      serverHistory.value = null
-      visibleCount.value = 24
-      if (typeof window !== 'undefined') {
-        void fetchServerHistory(0)
-      }
-    }
-  },
-)
-
-onMounted(() => {
-  if (typeof window !== 'undefined') {
-    void fetchServerHistory(0)
-  }
-})
-
-onUnmounted(() => {
-  if (activeController) {
-    activeController.abort()
-    activeController = null
-  }
-})</script>
+function refreshVisible() {
+  const before = shanghaiDay(clock.value); clock.value = Date.now()
+  if (before !== shanghaiDay(clock.value)) { contextEpoch += 1; detailControllers.forEach(c => c.abort()); detailControllers.clear(); loadingDetails.value = new Set(); serverHistory.value = null; expanded.value = new Set() }
+  if (document.visibilityState === 'visible') void fetchServerHistory()
+}
+watch(() => store.data?.account_source_id, (current, previous) => { if (current !== previous) resetScope() })
+onMounted(() => { void fetchServerHistory(); poll = setInterval(refreshVisible, 30000); document.addEventListener('visibilitychange', refreshVisible) })
+onUnmounted(() => { contextEpoch += 1; fetchEpoch += 1; activeController?.abort(); detailControllers.forEach(c => c.abort()); if (poll) clearInterval(poll); document.removeEventListener('visibilitychange', refreshVisible) })
+</script>
 
 <template>
-  <AppCard
-    class="rounded-xl border p-4 sm:p-5 transition-all shadow-xs space-y-4"
-    style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+  <AppCard class="p-4 sm:p-5 space-y-4"
   >
     <!-- Header -->
     <div
@@ -173,7 +107,7 @@ onUnmounted(() => {
           AI 宏观多周期推演基调与决策审计
         </h2>
         <p class="text-xs font-mono mt-0.5" style="color: var(--text-muted)">
-          按记录时间回溯宏观研判、多模型辩论与持仓管理建议；不代表当前执行状态
+          仅展示北京时间当天的决策记录，后台静默更新；历史记录不代表当前执行状态
         </p>
       </div>
     </div>
@@ -209,7 +143,7 @@ onUnmounted(() => {
               class="font-mono font-bold text-xs shrink-0 num-tabular"
               style="color: var(--text-main)"
             >
-              {{ item.time }}
+              {{ historyTime(item) }}
             </span>
             <span
               v-if="item.status === 'failed'"
@@ -227,7 +161,7 @@ onUnmounted(() => {
                 color: var(--text-main);
               "
             >
-              🏛️ 委员会决策
+              <span aria-hidden="true">🏛️</span> 委员会决策
             </span>
             <span class="text-xs font-sans truncate" style="color: var(--text-muted)">
               {{ item.failure_reason || item.macro_assessment || '该记录未提供宏观研判' }}
@@ -288,9 +222,7 @@ onUnmounted(() => {
 
           <!-- Multi-Agent Council Transcript -->
           <AppCard
-            v-if="item.council_transcript"
-            class="p-3.5 rounded-xl border space-y-2.5 font-mono"
-            style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+            v-if="item.council_transcript" class="p-3.5 space-y-2.5 font-mono"
           >
             <div
               class="flex items-center justify-between border-b pb-2"
@@ -336,7 +268,7 @@ onUnmounted(() => {
               class="mt-1 pt-2 border-t text-xs font-bold flex items-center justify-between"
               style="border-color: var(--border-subtle); color: var(--color-up)"
             >
-              <span>⚖️ 首席仲裁官裁决收口: 采纳专家参谋核心论点，生成统一发单指令</span>
+              <span><span aria-hidden="true">⚖️</span> 首席仲裁官裁决收口: 采纳专家参谋核心论点，生成统一发单指令</span>
               <span class="text-[10px] font-normal" style="color: var(--text-faint)">
                 终审模型: {{ item.council_transcript.arbitrator?.model_used }}
               </span>
@@ -345,9 +277,7 @@ onUnmounted(() => {
 
           <!-- In-flight Position Management Instructions -->
           <AppCard
-            v-if="item.position_management?.length"
-            class="p-3 rounded-xl border space-y-1.5 font-mono text-xs"
-            style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+            v-if="item.position_management?.length" class="p-3 space-y-1.5 font-mono text-xs"
           >
             <span class="text-[10px] font-bold block uppercase" style="color: var(--text-faint)"
               >在途持仓管理指令</span
@@ -381,6 +311,5 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
-    <button v-if="history.length < allHistory.length" class="ui-button ui-button--secondary ui-button--sm" :disabled="loadingHistory" @click="handleLoadMore()">加载更多历史记录（剩余 {{ allHistory.length - history.length }} 条）</button>
   </AppCard>
 </template>

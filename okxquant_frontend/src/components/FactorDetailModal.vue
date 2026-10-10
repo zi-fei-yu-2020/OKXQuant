@@ -40,7 +40,7 @@ async function copyPrompt() {
       }
     "
     ><div
-      class="dialog-content flex flex-col overflow-hidden animate-slide-in"
+      class="flex flex-col overflow-hidden animate-slide-in"
       style="background-color: var(--bg-card); border-color: var(--border-subtle)"
     >
       <!-- Drawer Header -->
@@ -65,7 +65,7 @@ async function copyPrompt() {
                 {{ instrument?.name }} 深度认知推演全景
               </h3>
               <span
-                class="text-[10px] font-mono px-1.5 py-0.2 rounded border"
+                class="text-[10px] font-mono px-1.5 py-0.5 rounded border"
                 style="
                   background-color: var(--bg-badge);
                   border-color: var(--border-subtle);

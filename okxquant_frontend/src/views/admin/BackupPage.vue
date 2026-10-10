@@ -302,9 +302,7 @@ const toast = useToast()
 
     <template v-else-if="simple">
       <!-- Simple Config -->
-      <AppCard
-        class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors space-y-4"
-        style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+      <AppCard class="p-4 sm:p-5 space-y-4"
       >
         <div class="flex items-center justify-between mb-2">
           <div class="flex items-center space-x-2">
@@ -315,7 +313,7 @@ const toast = useToast()
             <input
               v-model="enabled"
               type="checkbox"
-              class="accent-blue-500 w-4 h-4"
+              class="w-4 h-4"
               :disabled="(!auth.isSuperadmin) || actionBusy"
             />
             <span :class="enabled ? 'text-emerald-500 font-bold' : 'text-[var(--text-muted)]'">{{
@@ -364,13 +362,7 @@ const toast = useToast()
                 ><select
                   :id="fieldId"
                   v-model="destination"
-                  :disabled="(!auth.isSuperadmin) || actionBusy"
-                  class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border cursor-pointer"
-                  style="
-                    background-color: var(--bg-input);
-                    border-color: var(--border-subtle);
-                    color: var(--text-main);
-                  "
+                  :disabled="(!auth.isSuperadmin) || actionBusy" class="cursor-pointer"
                 >
                   <option value="local">本地滚动归档</option>
                   <option value="s3">S3 兼容存储</option>
@@ -392,13 +384,7 @@ const toast = useToast()
                   :id="fieldId"
                   v-model="scheduleTime"
                   type="time"
-                  :disabled="(!auth.isSuperadmin) || actionBusy"
-                  class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
-                  style="
-                    background-color: var(--bg-input);
-                    border-color: var(--border-subtle);
-                    color: var(--text-main);
-                  " /></template
+                  :disabled="(!auth.isSuperadmin) || actionBusy" /></template
             ></AppField>
           </div>
           <div>
@@ -414,13 +400,7 @@ const toast = useToast()
                   type="number"
                   min="1"
                   max="365"
-                  :disabled="(!auth.isSuperadmin) || actionBusy"
-                  class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border num-tabular"
-                  style="
-                    background-color: var(--bg-input);
-                    border-color: var(--border-subtle);
-                    color: var(--text-main);
-                  " /></template
+                  :disabled="(!auth.isSuperadmin) || actionBusy" class="num-tabular" /></template
             ></AppField>
           </div>
         </div>
@@ -446,13 +426,7 @@ const toast = useToast()
                     :id="fieldId"
                     v-model="endpoint"
                     :disabled="(!auth.isSuperadmin) || actionBusy"
-                    placeholder="https://s3.us-west-004.backblazeb2.com"
-                    class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
-                    style="
-                      background-color: var(--bg-input);
-                      border-color: var(--border-subtle);
-                      color: var(--text-main);
-                    " /></template
+                    placeholder="https://s3.us-west-004.backblazeb2.com" /></template
               ></AppField>
             </div>
             <div v-if="needsBucket">
@@ -465,13 +439,7 @@ const toast = useToast()
                   ><input
                     :id="fieldId"
                     v-model="bucket"
-                    :disabled="(!auth.isSuperadmin) || actionBusy"
-                    class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
-                    style="
-                      background-color: var(--bg-input);
-                      border-color: var(--border-subtle);
-                      color: var(--text-main);
-                    " /></template
+                    :disabled="(!auth.isSuperadmin) || actionBusy" /></template
               ></AppField>
             </div>
             <div v-for="f in credentialFields" :key="f">
@@ -486,13 +454,7 @@ const toast = useToast()
                     v-model="credentials[f]"
                     type="password"
                     :disabled="(!auth.isSuperadmin) || actionBusy"
-                    :placeholder="simple.configured ? '留空保持现有值' : ''"
-                    class="w-full rounded-lg px-3 py-2 text-sm font-sans outline-none border"
-                    style="
-                      background-color: var(--bg-input);
-                      border-color: var(--border-subtle);
-                      color: var(--text-main);
-                    " /></template
+                    :placeholder="simple.configured ? '留空保持现有值' : ''" /></template
               ></AppField>
             </div>
           </div>
@@ -517,8 +479,7 @@ const toast = useToast()
             <button
               @click="save"
               :disabled="(busy !== '') || actionBusy || !canManage"
-              class="ui-action"
-              style="background-color: var(--text-main); color: var(--bg-card)"
+              class="ui-button ui-button--primary"
             >
               <Save class="w-3.5 h-3.5" /><span>{{
                 busy === 'save' ? '保存中...' : '保存灾备'
@@ -578,9 +539,7 @@ const toast = useToast()
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <!-- Latest -->
-        <AppCard
-          class="rounded-xl border p-4 sm:p-5 shadow-xs transition-colors"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="p-4 sm:p-5"
         >
           <h2 class="text-sm font-bold font-sans uppercase mb-3" style="color: var(--text-main)">
             最近一次灾备
@@ -617,9 +576,7 @@ const toast = useToast()
         </AppCard>
 
         <!-- Local archives -->
-        <AppCard
-          class="rounded-xl border overflow-hidden shadow-xs"
-          style="background-color: var(--bg-card); border-color: var(--border-subtle)"
+        <AppCard class="overflow-hidden"
         >
           <div
             class="px-4 py-3 border-b flex items-center justify-between"

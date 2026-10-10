@@ -67,6 +67,18 @@ class ExecutionPresetTests(unittest.TestCase):
         prompt_library.activate_profile('stable')
         self.assertEqual(execution_profiles.runtime()['signature'],before['signature'])
         self.assertEqual(risk_policy.load_policy().single_asset_margin_usdt,600)
+    def test_small300_preset_caps_but_never_loosens_stricter_operator_policy(self):
+        prompt_library.activate_profile('small300')
+        path=self.root/'risk_policy.json'
+        path.write_text(json.dumps({'per_trade_equity_pct':.01,'max_leverage':3,'minimum_net_rr':3,
+                                    'daily_drawdown_pct':.5,'single_asset_margin_usdt':9999}),encoding='utf-8')
+        with patch.object(risk_policy,'policy_path',return_value=path):
+            policy=risk_policy.load_policy()
+        self.assertEqual(policy.per_trade_equity_pct,.01)
+        self.assertEqual(policy.max_leverage,3)
+        self.assertEqual(policy.minimum_net_rr,3)
+        self.assertEqual(policy.daily_drawdown_pct,.03)
+        self.assertEqual(policy.single_asset_margin_usdt,150)
     def test_copy_export_import_preserves_small_account_execution_binding(self):
         copied=prompt_library.create_profile('copy','',source_id='small300')
         exported=prompt_library.export_profile(copied['id'])

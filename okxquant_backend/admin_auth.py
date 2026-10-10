@@ -155,7 +155,7 @@ class AdminAuthStore:
                     failures = int(row["failed_attempts"]) + 1
                     locked_until = now_epoch + 15 * 60 if failures >= 5 else 0
                     connection.execute("UPDATE admin_users SET failed_attempts=?,locked_until=?,updated_at=? WHERE id=?", (failures, locked_until, _now_text(), row["id"]))
-                    failure_message = "账号或密码错误，账号已锁定 15 分钟" if locked_until else f"账号或密码错误，还可尝试 {5 - failures} 次"
+                    failure_message = "账号或密码错误，账号已锁定 15 分钟" if locked_until else f"账号或密码错误，还可尝试 {max(0, 5 - failures)} 次"
                 else:
                     failure_message = "账号或密码错误"
             if failure_message:
